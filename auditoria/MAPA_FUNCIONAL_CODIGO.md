@@ -31,14 +31,11 @@ Este archivo tiene aproximadamente 9.260 líneas y contiene navegación, vistas,
 
 ```text
 Abrir ERP.bat
-  └─ abrir_futon_espai.py
-      └─ GestorWoo/src/futonhub/ui/erp/
-          ├─ login.py
-          ├─ launching.py
-          ├─ hub.py
-          ├─ prototype.py
-          └─ auxiliares UI
-              ↓
+  └─ GestorWoo/gestorwoo.py erp-prototype
+      └─ gestorwoo.cli
+          └─ futonhub.ui.erp.prototype
+              └─ GestorWoo/src/futonhub/ui/erp/prototype.py
+                  ↓
 GestorWoo/src/futonhub/cloud/services/
   ├─ inventory.py
   ├─ price_proposals.py
@@ -472,4 +469,3 @@ Un módulo solo se considera extraído cuando:
 - no cambia esquema ni datos;
 - actualiza esta auditoría;
 - documenta archivos antiguos que quedaron sin uso.
-
