@@ -145,3 +145,39 @@ Limitaciones:
 - No consulta Supabase real.
 - No escribe en Supabase real.
 - No toca WooCommerce.
+
+## Commit: rollback Woo de regular_price y sale_price
+
+Comportamiento protegido:
+
+- Rollback de producto Woo restaura `regular_price` y `sale_price` desde `woo_before`.
+- Rollback de variacion Woo usa `parent_woo_id` y restaura ambos campos.
+- Tras escribir, el rollback relee WooCommerce.
+- Si la relectura no confirma `regular_price` y `sale_price`, el rollback falla.
+- El espejo Supabase se actualiza con los campos verificados.
+- La propuesta queda marcada como `rolled_back` cuando el rollback Woo fue verificado.
+
+Archivos tocados:
+
+- `GestorWoo/tests/test_characterization_woocommerce_rollback.py`
+- `auditoria/CODEX_CARACTERIZACION_TESTS.md`
+
+Comando ejecutado:
+
+```powershell
+python -m unittest GestorWoo.tests.test_characterization_woocommerce_rollback -v
+```
+
+Resultado:
+
+```text
+Ran 3 tests in 0.696s
+OK
+```
+
+Limitaciones:
+
+- Usa un cliente Woo fake.
+- Usa un cliente Supabase fake que solo registra updates.
+- No escribe en WooCommerce real.
+- No escribe en Supabase real.
