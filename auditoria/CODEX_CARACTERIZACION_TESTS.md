@@ -109,3 +109,39 @@ Limitaciones:
 - No instancia `WooCommerceClient`.
 - No llama a `apply_manual_woo_link`.
 - No escribe en WooCommerce ni Supabase.
+
+## Commit: persistencia de log y snapshot
+
+Comportamiento protegido:
+
+- La publicacion Woo exige confirmacion real de `operation_snapshots`.
+- Si el snapshot no aparece tras el primer intento, se reintenta.
+- Si el snapshot sigue sin aparecer, se lanza `CloudAuditError` y la operacion queda bloqueada.
+- La publicacion Woo exige confirmacion real de `audit_logs`.
+- Si el audit log no aparece tras el primer intento, se reintenta.
+- Si el audit log sigue sin aparecer, se lanza `CloudAuditError` y no se puede declarar la operacion como cerrada.
+
+Archivos tocados:
+
+- `GestorWoo/tests/test_characterization_blackbox_persistence.py`
+- `auditoria/CODEX_CARACTERIZACION_TESTS.md`
+
+Comando ejecutado:
+
+```powershell
+python -m unittest GestorWoo.tests.test_characterization_blackbox_persistence -v
+```
+
+Resultado:
+
+```text
+Ran 4 tests in 0.004s
+OK
+```
+
+Limitaciones:
+
+- Usa mocks sobre `write_snapshot`, `write_audit_event` y `_blackbox_record_exists`.
+- No consulta Supabase real.
+- No escribe en Supabase real.
+- No toca WooCommerce.
