@@ -36,6 +36,8 @@ class NavItem:
     group: str
 
 
+# Candidatas a trasladarse a sus modulos de dominio cuando Inventario,
+# Precios, Pedidos, WooCommerce, Informes y Seguridad sean extraidos.
 @dataclass(frozen=True)
 class InventoryItem:
     code: str
