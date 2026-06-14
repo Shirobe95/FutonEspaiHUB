@@ -181,3 +181,40 @@ Limitaciones:
 - Usa un cliente Supabase fake que solo registra updates.
 - No escribe en WooCommerce real.
 - No escribe en Supabase real.
+
+## Commit: componentes de packs
+
+Comportamiento protegido:
+
+- `fetch_inventory_pack_components` usa `v_inventory_component_search` como ruta principal.
+- La ruta principal deduplica filas repetidas por `relation_id` y codigo de componente.
+- Si falla la vista, se usa fallback a `inventory_item_components`.
+- El fallback de tabla puede resolver nombres mediante `_fill_component_names_from_inventory`.
+- Si no hay relaciones, se usa fallback por `woo_sku` compuesto con conteo estable.
+- La UI prioriza `hub_pack_components_text`/`hub_pack_components_multiline` cacheados.
+- La UI tambien puede mostrar componentes desde `woo_sku` compuesto si no hay texto cacheado.
+
+Archivos tocados:
+
+- `GestorWoo/tests/test_characterization_pack_components.py`
+- `auditoria/CODEX_CARACTERIZACION_TESTS.md`
+
+Comando ejecutado:
+
+```powershell
+python -m unittest GestorWoo.tests.test_characterization_pack_components -v
+```
+
+Resultado:
+
+```text
+Ran 5 tests in 0.001s
+OK
+```
+
+Limitaciones:
+
+- Usa cliente Supabase fake.
+- No consulta Supabase real.
+- No instancia Tkinter.
+- No escribe en WooCommerce ni Supabase.
