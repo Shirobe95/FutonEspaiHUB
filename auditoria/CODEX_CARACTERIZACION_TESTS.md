@@ -218,3 +218,24 @@ Limitaciones:
 - No consulta Supabase real.
 - No instancia Tkinter.
 - No escribe en WooCommerce ni Supabase.
+
+## Verificacion global de la fase
+
+Comando ejecutado:
+
+```powershell
+python -m unittest discover -s GestorWoo\tests -v
+```
+
+Resultado:
+
+```text
+Ran 40 tests in 0.079s
+OK
+```
+
+Resumen:
+
+- Tests existentes iniciales: 11.
+- Tests de caracterizacion anadidos: 29.
+- Total actual: 40.
