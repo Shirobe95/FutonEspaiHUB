@@ -1,0 +1,598 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>FutonHUB - Propuestas Guardadas v1.2</title>
+<style>
+:root{
+  --bg:#f8fafc;--card:#fff;--line:#e2e8f0;--soft:#f1f5f9;--text:#0f172a;--muted:#64748b;
+  --indigo:#4f46e5;--indigo-bg:#eef2ff;--green:#059669;--green-bg:#ecfdf5;--blue:#2563eb;--blue-bg:#eff6ff;
+  --amber:#d97706;--amber-bg:#fffbeb;--orange:#ea580c;--orange-bg:#fff7ed;--rose:#e11d48;--rose-bg:#fff1f2;
+  --shadow:0 10px 25px rgba(15,23,42,.055);--radius:24px;
+}
+*{box-sizing:border-box}
+body{
+  margin:0;
+  font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  background:var(--bg);
+  color:var(--text);
+}
+.workspace{
+  min-height:100vh;
+  padding:28px;
+  max-width:1500px;
+  margin:0 auto;
+}
+.page-head{
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  gap:16px;
+  margin-bottom:20px;
+}
+h1{
+  margin:0;
+  font-size:32px;
+  line-height:1.15;
+  letter-spacing:-.04em;
+}
+h2{
+  font-size:18px;
+  margin:0;
+  font-weight:820;
+  letter-spacing:-.02em;
+}
+p{
+  margin:0;
+  color:var(--muted);
+  line-height:1.45;
+}
+.btn{
+  height:46px;
+  border:1px solid var(--line);
+  background:white;
+  color:#334155;
+  padding:0 16px;
+  border-radius:17px;
+  font-weight:750;
+  cursor:pointer;
+  box-shadow:0 6px 16px rgba(15,23,42,.035);
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  gap:8px;
+  white-space:nowrap;
+}
+.btn.primary{
+  background:var(--indigo);
+  border-color:var(--indigo);
+  color:white;
+}
+.btn.danger{
+  background:var(--rose);
+  border-color:var(--rose);
+  color:white;
+}
+.btn-row{
+  display:flex;
+  gap:10px;
+  flex-wrap:wrap;
+}
+.search-row{
+  display:grid;
+  grid-template-columns:1fr;
+  margin-bottom:20px;
+}
+.search-box{
+  height:50px;
+  display:flex;
+  align-items:center;
+  gap:12px;
+  border:1px solid var(--line);
+  border-radius:18px;
+  background:white;
+  padding:0 16px;
+  box-shadow:0 6px 16px rgba(15,23,42,.035);
+  color:#94a3b8;
+}
+.search-box input{
+  width:100%;
+  border:none;
+  outline:none;
+  background:transparent;
+  font-size:14px;
+  color:#334155;
+}
+.layout{
+  display:grid;
+  grid-template-columns:minmax(620px,1.25fr) minmax(390px,.75fr);
+  gap:20px;
+  align-items:stretch;
+}
+.card{
+  background:white;
+  border:1px solid var(--line);
+  border-radius:var(--radius);
+  box-shadow:var(--shadow);
+  overflow:hidden;
+}
+.saved-list-card,
+.proposal-detail-card{
+  height:700px;
+  display:flex;
+  flex-direction:column;
+}
+.card-head{
+  padding:18px 20px;
+  border-bottom:1px solid var(--soft);
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:14px;
+}
+.scroll{
+  overflow:auto;
+  min-height:0;
+  flex:1;
+}
+.status{
+  display:inline-flex;
+  border:1px solid;
+  border-radius:999px;
+  padding:5px 10px;
+  font-size:12px;
+  font-weight:800;
+  white-space:nowrap;
+}
+.ok{background:var(--green-bg);color:var(--green);border-color:#bbf7d0}
+.info{background:var(--blue-bg);color:var(--blue);border-color:#bfdbfe}
+.warning{background:var(--amber-bg);color:var(--amber);border-color:#fde68a}
+.error{background:var(--orange-bg);color:var(--orange);border-color:#fed7aa}
+.critical{background:var(--rose-bg);color:var(--rose);border-color:#fecdd3}
+
+/* Lista alineada */
+.proposal-list{
+  padding:14px;
+  display:grid;
+  gap:10px;
+}
+.list-header{
+  display:grid;
+  grid-template-columns:minmax(220px,1.35fr) 74px 74px 74px 90px 116px;
+  gap:10px;
+  padding:0 14px 4px;
+  color:var(--muted);
+  font-size:11px;
+  text-transform:uppercase;
+  letter-spacing:.08em;
+  font-weight:850;
+}
+.list-header span:not(:first-child){
+  text-align:center;
+}
+.proposal-card{
+  border:1px solid var(--soft);
+  background:#f8fafc;
+  border-radius:20px;
+  padding:12px 14px;
+  cursor:pointer;
+  display:grid;
+  grid-template-columns:minmax(220px,1.35fr) 74px 74px 74px 90px 116px;
+  align-items:center;
+  gap:10px;
+}
+.proposal-card.selected{
+  border-color:#c7d2fe;
+  background:var(--indigo-bg);
+}
+.proposal-name{
+  min-width:0;
+}
+.proposal-name strong{
+  display:block;
+  color:#1e293b;
+  font-size:15px;
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+}
+.proposal-name span{
+  display:block;
+  margin-top:4px;
+  font-size:12px;
+  color:var(--muted);
+}
+.metric-cell{
+  height:42px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  border:1px solid rgba(226,232,240,.9);
+  background:white;
+  border-radius:14px;
+  color:#1e293b;
+  font-weight:850;
+  font-size:13px;
+  white-space:nowrap;
+}
+.metric-cell.up{
+  background:var(--green-bg);
+  color:var(--green);
+  border-color:#bbf7d0;
+}
+.metric-cell.down{
+  background:var(--rose-bg);
+  color:var(--rose);
+  border-color:#fecdd3;
+}
+.status-cell{
+  display:flex;
+  justify-content:flex-end;
+}
+
+/* Detalles compacto */
+.detail-scroll{
+  overflow:auto;
+  min-height:0;
+  flex:1;
+  padding:18px;
+}
+.detail-header{
+  display:flex;
+  justify-content:space-between;
+  align-items:flex-start;
+  gap:12px;
+  margin-bottom:14px;
+}
+.detail-title{
+  display:grid;
+  gap:5px;
+}
+.summary-row{
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:10px;
+  margin-bottom:14px;
+}
+.summary{
+  border:1px solid var(--soft);
+  background:#f8fafc;
+  border-radius:16px;
+  padding:10px 11px;
+}
+.summary .k{
+  font-size:10px;
+  text-transform:uppercase;
+  letter-spacing:.08em;
+  font-weight:800;
+  color:var(--muted);
+}
+.summary .v{
+  font-size:18px;
+  font-weight:850;
+  color:#1e293b;
+  margin-top:5px;
+}
+.item-list{
+  display:grid;
+  gap:9px;
+}
+.price-item{
+  border:1px solid var(--soft);
+  background:#f8fafc;
+  border-radius:18px;
+  padding:12px;
+  display:grid;
+  grid-template-columns:minmax(0,1fr) auto;
+  gap:10px;
+  align-items:center;
+}
+.item-main{
+  display:grid;
+  gap:5px;
+  min-width:0;
+}
+.item-top{
+  display:flex;
+  align-items:center;
+  gap:8px;
+  min-width:0;
+}
+.item-id{
+  font-size:11px;
+  font-weight:850;
+  color:var(--muted);
+  white-space:nowrap;
+}
+.item-name{
+  color:#1e293b;
+  font-weight:820;
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+}
+.item-prices{
+  display:flex;
+  align-items:center;
+  gap:7px;
+  flex-wrap:wrap;
+  font-size:13px;
+  color:#475569;
+}
+.price-pill{
+  border:1px solid var(--line);
+  background:white;
+  border-radius:999px;
+  padding:4px 8px;
+  font-weight:800;
+  color:#1e293b;
+}
+.arrow{
+  color:#94a3b8;
+  font-weight:900;
+}
+.change-indicator{
+  min-width:86px;
+  height:38px;
+  border-radius:15px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  font-weight:900;
+  font-size:13px;
+  border:1px solid;
+}
+.change-up{
+  background:var(--green-bg);
+  color:var(--green);
+  border-color:#bbf7d0;
+}
+.change-down{
+  background:var(--rose-bg);
+  color:var(--rose);
+  border-color:#fecdd3;
+}
+.change-flat{
+  background:var(--blue-bg);
+  color:var(--blue);
+  border-color:#bfdbfe;
+}
+.detail-actions-fixed{
+  border-top:1px solid var(--soft);
+  background:white;
+  padding:16px 20px;
+  display:grid;
+  gap:12px;
+  box-shadow:0 -10px 22px rgba(15,23,42,.035);
+}
+.bottom-two{
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:12px;
+}
+@media(max-width:1320px){
+  .layout{grid-template-columns:1fr}
+  .saved-list-card,.proposal-detail-card{height:auto;max-height:none}
+  .proposal-detail-card{min-height:700px}
+}
+@media(max-width:900px){
+  .list-header{display:none}
+  .proposal-card{
+    grid-template-columns:1fr;
+    align-items:stretch;
+  }
+  .status-cell{
+    justify-content:flex-start;
+  }
+  .metric-cell{
+    justify-content:flex-start;
+    padding:0 12px;
+  }
+  .metric-cell::before{
+    color:var(--muted);
+    font-size:10px;
+    text-transform:uppercase;
+    letter-spacing:.08em;
+    margin-right:8px;
+  }
+  .metric-items::before{content:"Items";}
+  .metric-up::before{content:"Suben";}
+  .metric-down::before{content:"Bajan";}
+  .metric-change::before{content:"Cambio";}
+}
+@media(max-width:760px){
+  .workspace{padding:16px}
+  .page-head{align-items:flex-start;flex-direction:column}
+  h1{font-size:28px}
+  .summary-row,.bottom-two{grid-template-columns:1fr}
+  .price-item{grid-template-columns:1fr}
+  .change-indicator{width:100%}
+  .btn{width:100%}
+  .detail-header{flex-direction:column}
+}
+</style>
+</head>
+<body>
+<main class="workspace">
+<section class="page-head">
+<h1>Propuestas guardadas</h1>
+<div class="btn-row">
+<button class="btn">Nueva propuesta</button>
+<button class="btn primary">Exportar</button>
+</div>
+</section>
+
+<section class="search-row">
+<div class="search-box">
+<span>⌕</span>
+<input placeholder="Buscar propuesta por nombre, fecha, estado o producto..." />
+</div>
+</section>
+
+<section class="layout">
+<aside class="card saved-list-card">
+<div class="card-head">
+<h2>Propuestas</h2>
+<span class="status info">12 guardadas</span>
+</div>
+
+<div class="scroll">
+<div class="proposal-list">
+<div class="list-header">
+<span>Propuesta</span>
+<span>Items</span>
+<span>Suben</span>
+<span>Bajan</span>
+<span>Cambio</span>
+<span>Estado</span>
+</div>
+
+<article class="proposal-card selected">
+<div class="proposal-name">
+<strong>Subida general junio</strong>
+<span>28/05/2026</span>
+</div>
+<div class="metric-cell metric-items">23</div>
+<div class="metric-cell metric-up up">19</div>
+<div class="metric-cell metric-down down">1</div>
+<div class="metric-cell metric-change up">+6,8%</div>
+<div class="status-cell"><span class="status warning">En revisión</span></div>
+</article>
+
+<article class="proposal-card">
+<div class="proposal-name">
+<strong>Revisión tatamis Heimei</strong>
+<span>27/05/2026</span>
+</div>
+<div class="metric-cell metric-items">8</div>
+<div class="metric-cell metric-up up">8</div>
+<div class="metric-cell metric-down">0</div>
+<div class="metric-cell metric-change up">+4,1%</div>
+<div class="status-cell"><span class="status ok">Lista</span></div>
+</article>
+
+<article class="proposal-card">
+<div class="proposal-name">
+<strong>Corrección productos críticos</strong>
+<span>26/05/2026</span>
+</div>
+<div class="metric-cell metric-items">3</div>
+<div class="metric-cell metric-up">0</div>
+<div class="metric-cell metric-down">0</div>
+<div class="metric-cell metric-change">Bloq.</div>
+<div class="status-cell"><span class="status critical">Critical</span></div>
+</article>
+
+<article class="proposal-card">
+<div class="proposal-name">
+<strong>Complementos temporada</strong>
+<span>24/05/2026</span>
+</div>
+<div class="metric-cell metric-items">11</div>
+<div class="metric-cell metric-up up">7</div>
+<div class="metric-cell metric-down">0</div>
+<div class="metric-cell metric-change up">+2,3%</div>
+<div class="status-cell"><span class="status info">Borrador</span></div>
+</article>
+
+<article class="proposal-card">
+<div class="proposal-name">
+<strong>Ajuste outlet</strong>
+<span>22/05/2026</span>
+</div>
+<div class="metric-cell metric-items">6</div>
+<div class="metric-cell metric-up">0</div>
+<div class="metric-cell metric-down down">6</div>
+<div class="metric-cell metric-change down">-8,5%</div>
+<div class="status-cell"><span class="status error">Error</span></div>
+</article>
+</div>
+</div>
+</aside>
+
+<section class="card proposal-detail-card">
+<div class="card-head">
+<h2>Detalles de propuesta</h2>
+<span class="status warning">En revisión</span>
+</div>
+
+<div class="detail-scroll">
+<div class="detail-header">
+<div class="detail-title">
+<h2>Subida general junio</h2>
+<p>28/05/2026</p>
+</div>
+<span class="status warning">Pendiente</span>
+</div>
+
+<div class="summary-row">
+<div class="summary"><div class="k">Items</div><div class="v">23</div></div>
+<div class="summary"><div class="k">Suben</div><div class="v">19</div></div>
+<div class="summary"><div class="k">Bajan</div><div class="v">1</div></div>
+<div class="summary"><div class="k">Igual</div><div class="v">3</div></div>
+</div>
+
+<div class="item-list">
+<article class="price-item">
+<div class="item-main">
+<div class="item-top"><span class="item-id">FUT-ALG-140</span><span class="item-name">Futón algodón 140x200</span></div>
+<div class="item-prices"><span class="price-pill">249,00 €</span><span class="arrow">→</span><span class="price-pill">269,00 €</span></div>
+</div>
+<div class="change-indicator change-up">↑ +8,03%</div>
+</article>
+
+<article class="price-item">
+<div class="item-main">
+<div class="item-top"><span class="item-id">TAT-160</span><span class="item-name">Tatami 160x200</span></div>
+<div class="item-prices"><span class="price-pill">315,00 €</span><span class="arrow">→</span><span class="price-pill">329,00 €</span></div>
+</div>
+<div class="change-indicator change-up">↑ +4,44%</div>
+</article>
+
+<article class="price-item">
+<div class="item-main">
+<div class="item-top"><span class="item-id">FUNDA-90</span><span class="item-name">Funda futón 90 cm</span></div>
+<div class="item-prices"><span class="price-pill">48,00 €</span><span class="arrow">→</span><span class="price-pill">51,00 €</span></div>
+</div>
+<div class="change-indicator change-up">↑ +6,25%</div>
+</article>
+
+<article class="price-item">
+<div class="item-main">
+<div class="item-top"><span class="item-id">OUTLET-023</span><span class="item-name">Base outlet exposición</span></div>
+<div class="item-prices"><span class="price-pill">220,00 €</span><span class="arrow">→</span><span class="price-pill">199,00 €</span></div>
+</div>
+<div class="change-indicator change-down">↓ -9,55%</div>
+</article>
+
+<article class="price-item">
+<div class="item-main">
+<div class="item-top"><span class="item-id">MES-001</span><span class="item-name">Mesita madera natural</span></div>
+<div class="item-prices"><span class="price-pill">89,00 €</span><span class="arrow">→</span><span class="price-pill">89,00 €</span></div>
+</div>
+<div class="change-indicator change-flat">→ 0,00%</div>
+</article>
+
+<article class="price-item">
+<div class="item-main">
+<div class="item-top"><span class="item-id">COLCH-LAT-150</span><span class="item-name">Colchón látex 150x200</span></div>
+<div class="item-prices"><span class="price-pill">429,00 €</span><span class="arrow">→</span><span class="price-pill">449,00 €</span></div>
+</div>
+<div class="change-indicator change-up">↑ +4,66%</div>
+</article>
+</div>
+</div>
+
+<footer class="detail-actions-fixed">
+<button class="btn primary">Modificar</button>
+<div class="bottom-two">
+<button class="btn">Aceptar propuesta</button>
+<button class="btn danger">Rechazar propuesta</button>
+</div>
+</footer>
+</section>
+</section>
+</main>
+</body>
+</html>

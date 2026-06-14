@@ -1,0 +1,574 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>FutonHUB - Modificar Propuestas v1</title>
+<style>
+:root{
+  --bg:#f8fafc;--card:#fff;--line:#e2e8f0;--soft:#f1f5f9;--text:#0f172a;--muted:#64748b;
+  --indigo:#4f46e5;--indigo-bg:#eef2ff;--green:#059669;--green-bg:#ecfdf5;--blue:#2563eb;--blue-bg:#eff6ff;
+  --amber:#d97706;--amber-bg:#fffbeb;--rose:#e11d48;--rose-bg:#fff1f2;--shadow:0 10px 25px rgba(15,23,42,.055);
+  --radius:24px;
+}
+*{box-sizing:border-box}
+body{
+  margin:0;
+  font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  background:var(--bg);
+  color:var(--text);
+}
+.workspace{
+  min-height:100vh;
+  max-width:1520px;
+  margin:0 auto;
+  padding:28px;
+}
+.page-head{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:16px;
+  margin-bottom:20px;
+}
+h1{
+  margin:0;
+  font-size:32px;
+  line-height:1.15;
+  letter-spacing:-.04em;
+}
+h2{
+  margin:0;
+  font-size:18px;
+  font-weight:820;
+  letter-spacing:-.02em;
+}
+.btn{
+  height:46px;
+  border:1px solid var(--line);
+  background:white;
+  color:#334155;
+  padding:0 16px;
+  border-radius:17px;
+  font-weight:750;
+  cursor:pointer;
+  box-shadow:0 6px 16px rgba(15,23,42,.035);
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  gap:8px;
+  white-space:nowrap;
+}
+.btn.primary{background:var(--indigo);border-color:var(--indigo);color:white}
+.btn-row{display:flex;gap:10px;flex-wrap:wrap}
+.layout{
+  display:grid;
+  grid-template-columns:minmax(520px,1fr) minmax(420px,.95fr);
+  gap:20px;
+  align-items:stretch;
+}
+.column{
+  display:grid;
+  gap:20px;
+  align-content:start;
+  min-height:760px;
+}
+.card{
+  background:var(--card);
+  border:1px solid var(--line);
+  border-radius:var(--radius);
+  box-shadow:var(--shadow);
+  overflow:hidden;
+}
+.card-head{
+  padding:18px 20px;
+  border-bottom:1px solid var(--soft);
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:14px;
+}
+.search-box{
+  height:48px;
+  display:flex;
+  align-items:center;
+  gap:12px;
+  border:1px solid var(--line);
+  border-radius:18px;
+  background:white;
+  padding:0 16px;
+  color:#94a3b8;
+}
+.search-box input{
+  width:100%;
+  border:none;
+  outline:none;
+  background:transparent;
+  font-size:14px;
+  color:#334155;
+}
+.table-card{
+  display:flex;
+  flex-direction:column;
+  min-height:320px;
+}
+.table-wrap{
+  overflow:auto;
+  min-height:0;
+  flex:1;
+}
+table{
+  width:100%;
+  border-collapse:collapse;
+  min-width:100%;
+  text-align:left;
+  font-size:14px;
+}
+th{
+  background:#f8fafc;
+  color:var(--muted);
+  text-transform:uppercase;
+  letter-spacing:.06em;
+  font-size:12px;
+  padding:13px 16px;
+  border-bottom:1px solid var(--soft);
+  white-space:nowrap;
+}
+td{
+  padding:14px 16px;
+  border-bottom:1px solid var(--soft);
+  color:#475569;
+}
+tr:hover td{background:#f8fafc}
+tr.selected td{background:rgba(79,70,229,.045)}
+td.strong{font-weight:800;color:#1e293b}
+.table-footer{
+  border-top:1px solid var(--soft);
+  background:white;
+  padding:14px;
+  display:grid;
+  grid-template-columns:1fr 1fr auto;
+  gap:10px;
+}
+.table-footer.variations{
+  grid-template-columns:1fr 1fr auto auto;
+}
+.input{
+  height:44px;
+  width:100%;
+  border:1px solid var(--line);
+  background:white;
+  border-radius:15px;
+  padding:0 12px;
+  font-size:14px;
+  color:#334155;
+}
+.proposal-panel{
+  display:flex;
+  flex-direction:column;
+  height:100%;
+  min-height:760px;
+}
+.proposal-head{
+  padding:20px;
+  border-bottom:1px solid var(--soft);
+  display:grid;
+  gap:10px;
+}
+.proposal-name{
+  width:100%;
+  height:46px;
+  border:1px solid var(--line);
+  background:white;
+  border-radius:16px;
+  padding:0 14px;
+  font-size:15px;
+  font-weight:750;
+  color:#1e293b;
+}
+.proposal-scroll{
+  overflow:auto;
+  min-height:0;
+  flex:1;
+  padding:18px;
+  display:grid;
+  gap:12px;
+}
+.item-box{
+  border:1px solid var(--soft);
+  background:#f8fafc;
+  border-radius:20px;
+  overflow:hidden;
+}
+.item-top{
+  padding:14px 16px;
+  border-bottom:1px solid rgba(226,232,240,.9);
+  display:grid;
+  grid-template-columns:auto minmax(0,1fr) auto;
+  align-items:center;
+  gap:10px;
+  min-width:0;
+}
+.item-actions{
+  display:flex;
+  align-items:center;
+  gap:8px;
+  justify-content:flex-end;
+}
+.item-action-btn{
+  height:32px;
+  border:1px solid var(--line);
+  background:white;
+  color:#334155;
+  padding:0 10px;
+  border-radius:12px;
+  font-size:12px;
+  font-weight:800;
+  cursor:pointer;
+  box-shadow:0 4px 10px rgba(15,23,42,.03);
+}
+.item-action-btn.danger{
+  color:var(--rose);
+  border-color:#fecdd3;
+  background:var(--rose-bg);
+}
+.item-id{
+  font-size:12px;
+  font-weight:850;
+  color:var(--muted);
+  white-space:nowrap;
+}
+.item-name{
+  font-size:15px;
+  font-weight:820;
+  color:#1e293b;
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+}
+.item-bottom{
+  padding:14px 16px;
+  display:grid;
+  grid-template-columns:1fr 1fr auto;
+  gap:12px;
+  align-items:center;
+}
+.price-block{
+  display:grid;
+  gap:5px;
+}
+.price-label{
+  font-size:11px;
+  text-transform:uppercase;
+  letter-spacing:.08em;
+  font-weight:850;
+  color:var(--muted);
+}
+.price-value{
+  font-size:15px;
+  font-weight:820;
+  color:#1e293b;
+}
+.change-indicator{
+  min-width:98px;
+  height:42px;
+  border-radius:16px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  font-weight:900;
+  font-size:14px;
+  border:1px solid;
+}
+.up{
+  background:var(--green-bg);
+  color:var(--green);
+  border-color:#bbf7d0;
+}
+.down{
+  background:var(--rose-bg);
+  color:var(--rose);
+  border-color:#fecdd3;
+}
+.flat{
+  background:var(--blue-bg);
+  color:var(--blue);
+  border-color:#bfdbfe;
+}
+.proposal-actions{
+  border-top:1px solid var(--soft);
+  background:white;
+  padding:16px 20px;
+  display:flex;
+  justify-content:space-between;
+  gap:12px;
+  flex-wrap:wrap;
+}
+.badge{
+  display:inline-flex;
+  align-items:center;
+  border:1px solid #c7d2fe;
+  background:var(--indigo-bg);
+  color:#4338ca;
+  border-radius:999px;
+  padding:5px 10px;
+  font-size:12px;
+  font-weight:800;
+}
+@media(max-width:1200px){
+  .layout{grid-template-columns:1fr}
+  .proposal-panel{min-height:720px}
+}
+@media(max-width:780px){
+  .workspace{padding:16px}
+  .page-head{flex-direction:column;align-items:flex-start}
+  h1{font-size:28px}
+  .table-footer{grid-template-columns:1fr}
+  .table-footer.variations{grid-template-columns:1fr}
+  .item-top{grid-template-columns:auto minmax(0,1fr)}
+  .item-actions{grid-column:1 / -1;justify-content:stretch}
+  .item-action-btn{flex:1}
+  .item-bottom{grid-template-columns:1fr}
+  .proposal-actions{flex-direction:column}
+  .btn{width:100%}
+}
+</style>
+</head>
+<body>
+<main class="workspace">
+  <section class="page-head">
+    <h1>Modificar propuesta</h1>
+  </section>
+
+  <section class="layout">
+    <section class="column">
+      <article class="card" style="padding:16px">
+        <div class="search-box">
+          <span>⌕</span>
+          <input placeholder="Buscar item por ID o nombre..." />
+        </div>
+      </article>
+
+      <article class="card table-card">
+        <div class="card-head">
+          <h2>Items</h2>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Nombre</th>
+                <th>Precio</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr class="selected">
+                <td class="strong">FUT-ALG-140</td>
+                <td>Futón algodón 140x200</td>
+                <td class="strong">249,00 €</td>
+              </tr>
+              <tr>
+                <td class="strong">TAT-160</td>
+                <td>Tatami 160x200</td>
+                <td class="strong">315,00 €</td>
+              </tr>
+              <tr>
+                <td class="strong">FUNDA-90</td>
+                <td>Funda futón 90 cm</td>
+                <td class="strong">48,00 €</td>
+              </tr>
+              <tr>
+                <td class="strong">COLCH-LAT-150</td>
+                <td>Colchón látex 150x200</td>
+                <td class="strong">429,00 €</td>
+              </tr>
+              <tr>
+                <td class="strong">MES-001</td>
+                <td>Mesita madera natural</td>
+                <td class="strong">89,00 €</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <footer class="table-footer">
+          <input class="input" placeholder="Subida en %" />
+          <input class="input" placeholder="Subida exacta" />
+          <button class="btn primary">Añadir</button>
+        </footer>
+      </article>
+
+      <article class="card table-card">
+        <div class="card-head">
+          <h2>Variaciones</h2>
+          <span class="badge">3 variaciones</span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Nombre</th>
+                <th>Precio</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr class="selected">
+                <td class="strong">FUT-ALG-140-BEI</td>
+                <td>Futón algodón 140x200 · Beige</td>
+                <td class="strong">249,00 €</td>
+              </tr>
+              <tr>
+                <td class="strong">FUT-ALG-140-GRI</td>
+                <td>Futón algodón 140x200 · Gris</td>
+                <td class="strong">249,00 €</td>
+              </tr>
+              <tr>
+                <td class="strong">FUT-ALG-140-AZU</td>
+                <td>Futón algodón 140x200 · Azul</td>
+                <td class="strong">259,00 €</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <footer class="table-footer variations">
+          <input class="input" placeholder="Subida en %" />
+          <input class="input" placeholder="Subida exacta" />
+          <button class="btn">Añadir</button>
+          <button class="btn primary">Añadir Todas Variaciones</button>
+        </footer>
+      </article>
+    </section>
+
+    <section class="column">
+      <article class="card proposal-panel">
+        <div class="proposal-head">
+          <h2>Propuesta</h2>
+          <input class="proposal-name" value="Subida general junio" />
+        </div>
+
+        <div class="proposal-scroll">
+          <article class="item-box">
+            <div class="item-top">
+              <span class="item-id">FUT-ALG-140</span>
+              <span class="item-name">Futón algodón 140x200</span>
+              <div class="item-actions">
+                <button class="item-action-btn">Modificar</button>
+                <button class="item-action-btn danger">Borrar</button>
+              </div>
+            </div>
+            <div class="item-bottom">
+              <div class="price-block">
+                <span class="price-label">Precio antiguo</span>
+                <span class="price-value">249,00 €</span>
+              </div>
+              <div class="price-block">
+                <span class="price-label">Precio nuevo</span>
+                <span class="price-value">269,00 €</span>
+              </div>
+              <div class="change-indicator up">↑ +8,03%</div>
+            </div>
+          </article>
+
+          <article class="item-box">
+            <div class="item-top">
+              <span class="item-id">TAT-160</span>
+              <span class="item-name">Tatami 160x200</span>
+              <div class="item-actions">
+                <button class="item-action-btn">Modificar</button>
+                <button class="item-action-btn danger">Borrar</button>
+              </div>
+            </div>
+            <div class="item-bottom">
+              <div class="price-block">
+                <span class="price-label">Precio antiguo</span>
+                <span class="price-value">315,00 €</span>
+              </div>
+              <div class="price-block">
+                <span class="price-label">Precio nuevo</span>
+                <span class="price-value">329,00 €</span>
+              </div>
+              <div class="change-indicator up">↑ +4,44%</div>
+            </div>
+          </article>
+
+          <article class="item-box">
+            <div class="item-top">
+              <span class="item-id">FUNDA-90</span>
+              <span class="item-name">Funda futón 90 cm</span>
+              <div class="item-actions">
+                <button class="item-action-btn">Modificar</button>
+                <button class="item-action-btn danger">Borrar</button>
+              </div>
+            </div>
+            <div class="item-bottom">
+              <div class="price-block">
+                <span class="price-label">Precio antiguo</span>
+                <span class="price-value">48,00 €</span>
+              </div>
+              <div class="price-block">
+                <span class="price-label">Precio nuevo</span>
+                <span class="price-value">51,00 €</span>
+              </div>
+              <div class="change-indicator up">↑ +6,25%</div>
+            </div>
+          </article>
+
+          <article class="item-box">
+            <div class="item-top">
+              <span class="item-id">OUTLET-023</span>
+              <span class="item-name">Base outlet exposición</span>
+              <div class="item-actions">
+                <button class="item-action-btn">Modificar</button>
+                <button class="item-action-btn danger">Borrar</button>
+              </div>
+            </div>
+            <div class="item-bottom">
+              <div class="price-block">
+                <span class="price-label">Precio antiguo</span>
+                <span class="price-value">220,00 €</span>
+              </div>
+              <div class="price-block">
+                <span class="price-label">Precio nuevo</span>
+                <span class="price-value">199,00 €</span>
+              </div>
+              <div class="change-indicator down">↓ -9,55%</div>
+            </div>
+          </article>
+
+          <article class="item-box">
+            <div class="item-top">
+              <span class="item-id">MES-001</span>
+              <span class="item-name">Mesita madera natural</span>
+              <div class="item-actions">
+                <button class="item-action-btn">Modificar</button>
+                <button class="item-action-btn danger">Borrar</button>
+              </div>
+            </div>
+            <div class="item-bottom">
+              <div class="price-block">
+                <span class="price-label">Precio antiguo</span>
+                <span class="price-value">89,00 €</span>
+              </div>
+              <div class="price-block">
+                <span class="price-label">Precio nuevo</span>
+                <span class="price-value">89,00 €</span>
+              </div>
+              <div class="change-indicator flat">→ 0,00%</div>
+            </div>
+          </article>
+        </div>
+
+        <footer class="proposal-actions">
+          <span class="badge">23 items en propuesta</span>
+          <div class="btn-row">
+            <button class="btn">Cancelar</button>
+            <button class="btn primary">Guardar cambios</button>
+          </div>
+        </footer>
+      </article>
+    </section>
+  </section>
+</main>
+</body>
+</html>

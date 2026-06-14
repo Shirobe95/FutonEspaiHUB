@@ -1,0 +1,676 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>FutonHUB - Informes y Exportaciones v1</title>
+<style>
+:root{
+  --bg:#f8fafc;--card:#fff;--line:#e2e8f0;--soft:#f1f5f9;--text:#0f172a;--muted:#64748b;
+  --indigo:#4f46e5;--indigo-bg:#eef2ff;--green:#059669;--green-bg:#ecfdf5;--blue:#2563eb;--blue-bg:#eff6ff;
+  --amber:#d97706;--amber-bg:#fffbeb;--orange:#ea580c;--orange-bg:#fff7ed;--rose:#e11d48;--rose-bg:#fff1f2;
+  --shadow:0 10px 25px rgba(15,23,42,.055);--radius:24px;
+}
+*{box-sizing:border-box}
+body{
+  margin:0;
+  font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  background:var(--bg);
+  color:var(--text);
+}
+.workspace{
+  min-height:100vh;
+  max-width:1520px;
+  margin:0 auto;
+  padding:28px;
+}
+.page-head{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:16px;
+  margin-bottom:20px;
+}
+h1{
+  margin:0;
+  font-size:32px;
+  line-height:1.15;
+  letter-spacing:-.04em;
+}
+h2{
+  margin:0;
+  font-size:18px;
+  font-weight:820;
+  letter-spacing:-.02em;
+}
+h3{
+  margin:0;
+  font-size:16px;
+  font-weight:850;
+  letter-spacing:-.02em;
+}
+p{
+  margin:0;
+  color:var(--muted);
+  line-height:1.45;
+}
+.btn{
+  height:44px;
+  border:1px solid var(--line);
+  background:white;
+  color:#334155;
+  padding:0 14px;
+  border-radius:16px;
+  font-weight:750;
+  cursor:pointer;
+  box-shadow:0 6px 16px rgba(15,23,42,.035);
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  gap:8px;
+  white-space:nowrap;
+}
+.btn.primary{
+  background:var(--indigo);
+  border-color:var(--indigo);
+  color:white;
+}
+.btn.danger{
+  background:var(--rose);
+  border-color:var(--rose);
+  color:white;
+}
+.btn-row{
+  display:flex;
+  gap:10px;
+  flex-wrap:wrap;
+}
+.status{
+  display:inline-flex;
+  border:1px solid;
+  border-radius:999px;
+  padding:5px 10px;
+  font-size:12px;
+  font-weight:800;
+  white-space:nowrap;
+}
+.ok{background:var(--green-bg);color:var(--green);border-color:#bbf7d0}
+.info{background:var(--blue-bg);color:var(--blue);border-color:#bfdbfe}
+.warning{background:var(--amber-bg);color:var(--amber);border-color:#fde68a}
+.error{background:var(--orange-bg);color:var(--orange);border-color:#fed7aa}
+.critical{background:var(--rose-bg);color:var(--rose);border-color:#fecdd3}
+.top-row{
+  display:grid;
+  grid-template-columns:1fr auto;
+  gap:16px;
+  align-items:center;
+  margin-bottom:20px;
+}
+.search-box{
+  height:50px;
+  display:flex;
+  align-items:center;
+  gap:12px;
+  border:1px solid var(--line);
+  border-radius:18px;
+  background:white;
+  padding:0 16px;
+  box-shadow:0 6px 16px rgba(15,23,42,.035);
+  color:#94a3b8;
+}
+.search-box input{
+  width:100%;
+  border:none;
+  outline:none;
+  background:transparent;
+  font-size:14px;
+  color:#334155;
+}
+.summary-grid{
+  display:grid;
+  grid-template-columns:repeat(4,1fr);
+  gap:14px;
+  margin-bottom:20px;
+}
+.summary{
+  background:white;
+  border:1px solid var(--line);
+  border-radius:20px;
+  box-shadow:var(--shadow);
+  padding:16px;
+}
+.summary .k{
+  font-size:11px;
+  text-transform:uppercase;
+  letter-spacing:.08em;
+  color:var(--muted);
+  font-weight:850;
+}
+.summary .v{
+  margin-top:8px;
+  font-size:24px;
+  color:#1e293b;
+  font-weight:900;
+  letter-spacing:-.03em;
+}
+.layout{
+  display:grid;
+  grid-template-columns:minmax(0,1.28fr) minmax(380px,.72fr);
+  gap:20px;
+  align-items:stretch;
+}
+.card{
+  background:white;
+  border:1px solid var(--line);
+  border-radius:var(--radius);
+  box-shadow:var(--shadow);
+  overflow:hidden;
+}
+.card-head{
+  padding:18px 20px;
+  border-bottom:1px solid var(--soft);
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:14px;
+}
+.table-card,.detail-card{
+  height:720px;
+  display:flex;
+  flex-direction:column;
+}
+.table-wrap{
+  overflow:auto;
+  min-height:0;
+  flex:1;
+}
+table{
+  width:100%;
+  border-collapse:collapse;
+  min-width:1080px;
+  text-align:left;
+  font-size:14px;
+}
+th{
+  background:#f8fafc;
+  color:var(--muted);
+  text-transform:uppercase;
+  letter-spacing:.06em;
+  font-size:12px;
+  padding:13px 16px;
+  border-bottom:1px solid var(--soft);
+  white-space:nowrap;
+}
+td{
+  padding:15px 16px;
+  border-bottom:1px solid var(--soft);
+  color:#475569;
+}
+tr:hover td{
+  background:#f8fafc;
+}
+tr.selected td{
+  background:rgba(79,70,229,.045);
+}
+td.strong{
+  font-weight:800;
+  color:#1e293b;
+}
+.small-btn{
+  height:34px;
+  border:1px solid var(--line);
+  background:white;
+  color:#334155;
+  padding:0 11px;
+  border-radius:12px;
+  font-weight:800;
+  cursor:pointer;
+  font-size:12px;
+}
+.detail-scroll{
+  min-height:0;
+  flex:1;
+  overflow:auto;
+  padding:18px;
+}
+.detail-title{
+  display:grid;
+  gap:6px;
+  margin-bottom:16px;
+}
+.detail-row{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:12px;
+  border:1px solid var(--soft);
+  background:#f8fafc;
+  border-radius:16px;
+  padding:12px 13px;
+  margin-bottom:10px;
+}
+.detail-row .label{
+  color:var(--muted);
+  font-size:13px;
+}
+.detail-row .value{
+  color:#1e293b;
+  font-size:14px;
+  font-weight:850;
+  text-align:right;
+}
+.filter-list{
+  display:grid;
+  gap:10px;
+  margin-top:16px;
+}
+.filter-item{
+  border:1px solid var(--soft);
+  background:#f8fafc;
+  border-radius:16px;
+  padding:12px;
+  display:grid;
+  gap:4px;
+}
+.filter-item strong{
+  color:#1e293b;
+  font-size:14px;
+}
+.filter-item span{
+  color:var(--muted);
+  font-size:13px;
+}
+.side-actions{
+  border-top:1px solid var(--soft);
+  background:white;
+  padding:16px 18px;
+  display:grid;
+  gap:12px;
+  box-shadow:0 -10px 22px rgba(15,23,42,.035);
+}
+.bottom-two{
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:12px;
+}
+
+/* Modal */
+.modal-overlay{
+  position:fixed;
+  inset:0;
+  background:rgba(15,23,42,.45);
+  backdrop-filter:blur(8px);
+  z-index:80;
+  display:none;
+  align-items:center;
+  justify-content:center;
+  padding:20px;
+}
+.modal-overlay.open{
+  display:flex;
+}
+.modal{
+  width:min(860px,100%);
+  max-height:92vh;
+  background:white;
+  border:1px solid var(--line);
+  border-radius:28px;
+  box-shadow:0 28px 80px rgba(15,23,42,.26);
+  overflow:hidden;
+  display:flex;
+  flex-direction:column;
+}
+.modal-head{
+  padding:22px;
+  border-bottom:1px solid var(--soft);
+  display:flex;
+  justify-content:space-between;
+  gap:16px;
+  align-items:flex-start;
+}
+.modal-body{
+  padding:20px;
+  overflow:auto;
+  display:grid;
+  gap:16px;
+}
+.modal-actions{
+  padding:16px 22px;
+  border-top:1px solid var(--soft);
+  display:flex;
+  justify-content:flex-end;
+  gap:10px;
+  background:#f8fafc;
+}
+.close-btn{
+  height:42px;
+  border:1px solid var(--line);
+  background:white;
+  color:#334155;
+  padding:0 14px;
+  border-radius:16px;
+  font-weight:800;
+  cursor:pointer;
+  box-shadow:0 6px 16px rgba(15,23,42,.035);
+}
+.form-grid{
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:12px;
+}
+.field{
+  display:grid;
+  gap:7px;
+}
+.field.full{
+  grid-column:1/-1;
+}
+.label{
+  font-size:11px;
+  color:var(--muted);
+  text-transform:uppercase;
+  letter-spacing:.08em;
+  font-weight:850;
+}
+.input,.select{
+  width:100%;
+  height:44px;
+  border:1px solid var(--line);
+  background:white;
+  border-radius:15px;
+  padding:0 12px;
+  font-size:14px;
+  color:#334155;
+}
+.checkbox-grid{
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:10px;
+}
+.checkbox-item{
+  border:1px solid var(--soft);
+  background:#f8fafc;
+  border-radius:16px;
+  padding:12px;
+  display:flex;
+  align-items:center;
+  gap:10px;
+  color:#334155;
+  font-size:14px;
+  font-weight:750;
+}
+.checkbox{
+  width:18px;
+  height:18px;
+  accent-color:#4f46e5;
+}
+.note{
+  border:1px solid #c7d2fe;
+  background:var(--indigo-bg);
+  color:#4338ca;
+  border-radius:18px;
+  padding:14px;
+  font-size:14px;
+  line-height:1.45;
+}
+@media(max-width:1200px){
+  .layout{
+    grid-template-columns:1fr;
+  }
+  .table-card,.detail-card{
+    height:auto;
+    min-height:620px;
+  }
+}
+@media(max-width:900px){
+  .summary-grid,.form-grid,.checkbox-grid{
+    grid-template-columns:1fr 1fr;
+  }
+}
+@media(max-width:760px){
+  .workspace{
+    padding:16px;
+  }
+  .page-head,.card-head,.modal-head{
+    align-items:flex-start;
+    flex-direction:column;
+  }
+  h1{
+    font-size:28px;
+  }
+  .top-row,.summary-grid,.form-grid,.checkbox-grid,.bottom-two{
+    grid-template-columns:1fr;
+  }
+  .btn,.close-btn{
+    width:100%;
+  }
+  .modal-actions{
+    flex-direction:column;
+  }
+}
+</style>
+</head>
+<body>
+<main class="workspace">
+  <section class="page-head">
+    <h1>Informes / Exportaciones</h1>
+    <div class="btn-row">
+      <button class="btn primary" onclick="openNewExport()">Nueva exportación</button>
+    </div>
+  </section>
+
+  <section class="top-row">
+    <div class="search-box">
+      <span>⌕</span>
+      <input placeholder="Buscar por archivo, módulo, usuario, formato o estado..." />
+    </div>
+    <button class="btn">Actualizar registro</button>
+  </section>
+
+  <section class="summary-grid">
+    <article class="summary"><div class="k">Exportaciones</div><div class="v">128</div></article>
+    <article class="summary"><div class="k">Este mes</div><div class="v">21</div></article>
+    <article class="summary"><div class="k">Errores</div><div class="v">2</div></article>
+    <article class="summary"><div class="k">Última</div><div class="v">Hoy</div></article>
+  </section>
+
+  <section class="layout">
+    <article class="card table-card">
+      <div class="card-head">
+        <h2>Registro de exportaciones</h2>
+        <span class="status info">Últimas 100</span>
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Fecha / Hora</th>
+              <th>Tipo</th>
+              <th>Módulo</th>
+              <th>Formato</th>
+              <th>Usuario / Rol</th>
+              <th>Estado</th>
+              <th>Archivo</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr class="selected">
+              <td class="strong">31/05/2026 19:05</td>
+              <td>Inventario completo</td>
+              <td>Inventario</td>
+              <td>XLSX</td>
+              <td>Admin</td>
+              <td><span class="status ok">Generado</span></td>
+              <td>inventario_20260531.xlsx</td>
+              <td><button class="small-btn">Ver</button></td>
+            </tr>
+            <tr>
+              <td class="strong">31/05/2026 18:44</td>
+              <td>Incidencias WooCommerce</td>
+              <td>WooCommerce</td>
+              <td>XLSX</td>
+              <td>Admin</td>
+              <td><span class="status warning">Generado</span></td>
+              <td>woo_incidencias_1844.xlsx</td>
+              <td><button class="small-btn">Ver</button></td>
+            </tr>
+            <tr>
+              <td class="strong">31/05/2026 18:20</td>
+              <td>Detalle de pedido</td>
+              <td>Pedidos</td>
+              <td>PDF</td>
+              <td>Admin</td>
+              <td><span class="status ok">Descargado</span></td>
+              <td>PED-HEI-029_detalle.pdf</td>
+              <td><button class="small-btn">Ver</button></td>
+            </tr>
+            <tr>
+              <td class="strong">31/05/2026 17:58</td>
+              <td>Propuesta de precios</td>
+              <td>Cambio de Precios</td>
+              <td>XLSX</td>
+              <td>Admin</td>
+              <td><span class="status ok">Generado</span></td>
+              <td>propuesta_junio.xlsx</td>
+              <td><button class="small-btn">Ver</button></td>
+            </tr>
+            <tr>
+              <td class="strong">31/05/2026 17:35</td>
+              <td>Auditoría de logs</td>
+              <td>Seguridad / Logs</td>
+              <td>PDF</td>
+              <td>Admin</td>
+              <td><span class="status ok">Generado</span></td>
+              <td>auditoria_logs_1735.pdf</td>
+              <td><button class="small-btn">Ver</button></td>
+            </tr>
+            <tr>
+              <td class="strong">31/05/2026 16:50</td>
+              <td>Pedido calculado</td>
+              <td>Pedidos</td>
+              <td>XLSX</td>
+              <td>Admin</td>
+              <td><span class="status error">Error</span></td>
+              <td>No generado</td>
+              <td><button class="small-btn">Ver</button></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </article>
+
+    <aside class="card detail-card">
+      <div class="card-head">
+        <h2>Detalle</h2>
+        <span class="status ok">Generado</span>
+      </div>
+
+      <div class="detail-scroll">
+        <div class="detail-title">
+          <h2>inventario_20260531.xlsx</h2>
+          <p>Inventario completo · XLSX</p>
+        </div>
+
+        <div class="detail-row"><div class="label">Módulo</div><div class="value">Inventario</div></div>
+        <div class="detail-row"><div class="label">Tipo</div><div class="value">Inventario completo</div></div>
+        <div class="detail-row"><div class="label">Formato</div><div class="value">XLSX</div></div>
+        <div class="detail-row"><div class="label">Usuario / Rol</div><div class="value">Admin</div></div>
+        <div class="detail-row"><div class="label">Fecha</div><div class="value">31/05/2026 19:05</div></div>
+        <div class="detail-row"><div class="label">Estado</div><div class="value"><span class="status ok">Generado</span></div></div>
+        <div class="detail-row"><div class="label">Filas</div><div class="value">842</div></div>
+        <div class="detail-row"><div class="label">Referencia</div><div class="value">EXP-INV-1905</div></div>
+
+        <div class="filter-list">
+          <div class="filter-item"><strong>Filtros usados</strong><span>Familias: todas · Estado: todos · Stock: todos</span></div>
+          <div class="filter-item"><strong>Columnas incluidas</strong><span>ID, nombre, precio, stock, familia, proveedor, M3, estado</span></div>
+          <div class="filter-item"><strong>Ruta interna</strong><span>/exports/2026/05/inventario_20260531.xlsx</span></div>
+        </div>
+      </div>
+
+      <footer class="side-actions">
+        <button class="btn primary">Descargar</button>
+        <div class="bottom-two">
+          <button class="btn">Regenerar</button>
+          <button class="btn danger">Eliminar registro</button>
+        </div>
+      </footer>
+    </aside>
+  </section>
+</main>
+
+<section class="modal-overlay" id="newExportModal">
+  <div class="modal">
+    <header class="modal-head">
+      <div>
+        <h2>Nueva exportación</h2>
+        <p>Generar informe o archivo desde un módulo del ERP.</p>
+      </div>
+      <button class="close-btn" onclick="closeNewExport()">Cerrar ✕</button>
+    </header>
+
+    <div class="modal-body">
+      <div class="form-grid">
+        <div class="field">
+          <label class="label">Módulo</label>
+          <select class="select">
+            <option>Inventario</option>
+            <option>Cambio de Precios</option>
+            <option>Pedidos</option>
+            <option>WooCommerce</option>
+            <option>Seguridad / Logs</option>
+          </select>
+        </div>
+        <div class="field">
+          <label class="label">Tipo de informe</label>
+          <select class="select">
+            <option>Inventario completo</option>
+            <option>Propuesta de precios</option>
+            <option>Pedido calculado</option>
+            <option>Detalle de pedido</option>
+            <option>Auditoría de logs</option>
+            <option>Incidencias WooCommerce</option>
+          </select>
+        </div>
+        <div class="field">
+          <label class="label">Formato</label>
+          <select class="select">
+            <option>XLSX</option>
+            <option>PDF</option>
+            <option>CSV</option>
+          </select>
+        </div>
+        <div class="field">
+          <label class="label">Nombre archivo</label>
+          <input class="input" value="exportacion_futonhub" />
+        </div>
+      </div>
+
+      <div class="checkbox-grid">
+        <label class="checkbox-item"><input class="checkbox" type="checkbox" checked /> Incluir filtros aplicados</label>
+        <label class="checkbox-item"><input class="checkbox" type="checkbox" checked /> Registrar en logs</label>
+        <label class="checkbox-item"><input class="checkbox" type="checkbox" /> Incluir incidencias</label>
+        <label class="checkbox-item"><input class="checkbox" type="checkbox" /> Abrir al generar</label>
+      </div>
+
+      <div class="note">La exportación debe quedar registrada con módulo, usuario, filtros, formato, estado y archivo generado.</div>
+    </div>
+
+    <footer class="modal-actions">
+      <button class="btn" onclick="closeNewExport()">Cancelar</button>
+      <button class="btn primary">Generar exportación</button>
+    </footer>
+  </div>
+</section>
+
+<script>
+function openNewExport(){
+  document.getElementById('newExportModal').classList.add('open');
+}
+function closeNewExport(){
+  document.getElementById('newExportModal').classList.remove('open');
+}
+</script>
+</body>
+</html>

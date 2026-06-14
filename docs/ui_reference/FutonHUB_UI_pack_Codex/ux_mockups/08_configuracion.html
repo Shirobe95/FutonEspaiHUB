@@ -1,0 +1,581 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>FutonHUB - Configuración v1</title>
+<style>
+:root{
+  --bg:#f8fafc;--card:#fff;--line:#e2e8f0;--soft:#f1f5f9;--text:#0f172a;--muted:#64748b;
+  --indigo:#4f46e5;--indigo-bg:#eef2ff;--green:#059669;--green-bg:#ecfdf5;--blue:#2563eb;--blue-bg:#eff6ff;
+  --amber:#d97706;--amber-bg:#fffbeb;--orange:#ea580c;--orange-bg:#fff7ed;--rose:#e11d48;--rose-bg:#fff1f2;
+  --shadow:0 10px 25px rgba(15,23,42,.055);--radius:24px;
+}
+*{box-sizing:border-box}
+body{
+  margin:0;
+  font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  background:var(--bg);
+  color:var(--text);
+}
+.workspace{
+  min-height:100vh;
+  max-width:1500px;
+  margin:0 auto;
+  padding:28px;
+}
+.page-head{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:16px;
+  margin-bottom:20px;
+}
+h1{
+  margin:0;
+  font-size:32px;
+  line-height:1.15;
+  letter-spacing:-.04em;
+}
+h2{
+  margin:0;
+  font-size:18px;
+  font-weight:820;
+  letter-spacing:-.02em;
+}
+h3{
+  margin:0;
+  font-size:16px;
+  font-weight:850;
+  letter-spacing:-.02em;
+}
+p{
+  margin:0;
+  color:var(--muted);
+  line-height:1.45;
+}
+.btn{
+  height:44px;
+  border:1px solid var(--line);
+  background:white;
+  color:#334155;
+  padding:0 14px;
+  border-radius:16px;
+  font-weight:750;
+  cursor:pointer;
+  box-shadow:0 6px 16px rgba(15,23,42,.035);
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  gap:8px;
+  white-space:nowrap;
+}
+.btn.primary{
+  background:var(--indigo);
+  border-color:var(--indigo);
+  color:white;
+}
+.btn.danger{
+  background:var(--rose);
+  border-color:var(--rose);
+  color:white;
+}
+.btn-row{
+  display:flex;
+  gap:10px;
+  flex-wrap:wrap;
+}
+.status{
+  display:inline-flex;
+  border:1px solid;
+  border-radius:999px;
+  padding:5px 10px;
+  font-size:12px;
+  font-weight:800;
+  white-space:nowrap;
+}
+.ok{background:var(--green-bg);color:var(--green);border-color:#bbf7d0}
+.info{background:var(--blue-bg);color:var(--blue);border-color:#bfdbfe}
+.warning{background:var(--amber-bg);color:var(--amber);border-color:#fde68a}
+.error{background:var(--orange-bg);color:var(--orange);border-color:#fed7aa}
+.critical{background:var(--rose-bg);color:var(--rose);border-color:#fecdd3}
+.tabs{
+  background:white;
+  border:1px solid var(--line);
+  border-radius:24px;
+  box-shadow:var(--shadow);
+  padding:8px;
+  display:flex;
+  gap:8px;
+  margin-bottom:20px;
+}
+.tab{
+  height:42px;
+  border:1px solid transparent;
+  background:transparent;
+  color:#475569;
+  padding:0 16px;
+  border-radius:16px;
+  font-weight:850;
+  cursor:pointer;
+}
+.tab.active{
+  background:var(--indigo-bg);
+  border-color:#c7d2fe;
+  color:#4338ca;
+}
+.panel{
+  display:none;
+}
+.panel.active{
+  display:block;
+}
+.layout{
+  display:grid;
+  grid-template-columns:minmax(0,1.2fr) minmax(340px,.8fr);
+  gap:20px;
+  align-items:start;
+}
+.card{
+  background:white;
+  border:1px solid var(--line);
+  border-radius:var(--radius);
+  box-shadow:var(--shadow);
+  overflow:hidden;
+}
+.card-head{
+  padding:18px 20px;
+  border-bottom:1px solid var(--soft);
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:14px;
+}
+.card-body{
+  padding:18px;
+}
+.form-grid{
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:12px;
+}
+.field{
+  display:grid;
+  gap:7px;
+}
+.field.full{
+  grid-column:1/-1;
+}
+.label{
+  font-size:11px;
+  color:var(--muted);
+  text-transform:uppercase;
+  letter-spacing:.08em;
+  font-weight:850;
+}
+.input,.select{
+  width:100%;
+  height:44px;
+  border:1px solid var(--line);
+  background:white;
+  border-radius:15px;
+  padding:0 12px;
+  font-size:14px;
+  color:#334155;
+}
+.input.readonly{
+  background:#f8fafc;
+  color:#64748b;
+}
+.constant-table{
+  display:grid;
+  gap:10px;
+}
+.constant-row{
+  display:grid;
+  grid-template-columns:minmax(220px,1fr) 160px 110px;
+  gap:10px;
+  align-items:center;
+  border:1px solid var(--soft);
+  background:#f8fafc;
+  border-radius:18px;
+  padding:10px;
+}
+.constant-name{
+  display:grid;
+  gap:3px;
+  min-width:0;
+}
+.constant-name strong{
+  font-size:14px;
+  color:#1e293b;
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+}
+.constant-name span{
+  font-size:12px;
+  color:var(--muted);
+}
+.value-input{
+  height:40px;
+  border:1px solid var(--line);
+  background:white;
+  border-radius:14px;
+  padding:0 10px;
+  font-weight:800;
+  color:#1e293b;
+}
+.unit{
+  height:40px;
+  border:1px solid var(--line);
+  background:white;
+  border-radius:14px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  font-size:13px;
+  font-weight:850;
+  color:#475569;
+}
+.setting-list{
+  display:grid;
+  gap:10px;
+}
+.setting-row{
+  border:1px solid var(--soft);
+  background:#f8fafc;
+  border-radius:18px;
+  padding:13px 14px;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:14px;
+}
+.setting-main{
+  display:grid;
+  gap:4px;
+}
+.setting-main strong{
+  color:#1e293b;
+  font-size:14px;
+}
+.setting-main span{
+  color:var(--muted);
+  font-size:13px;
+}
+.switch{
+  width:54px;
+  height:30px;
+  border-radius:999px;
+  background:#cbd5e1;
+  padding:3px;
+  flex:0 0 auto;
+}
+.switch.on{
+  background:var(--indigo);
+}
+.knob{
+  width:24px;
+  height:24px;
+  border-radius:50%;
+  background:white;
+  box-shadow:0 3px 8px rgba(15,23,42,.18);
+}
+.switch.on .knob{
+  margin-left:24px;
+}
+.side-list{
+  display:grid;
+  gap:10px;
+}
+.side-row{
+  border:1px solid var(--soft);
+  background:#f8fafc;
+  border-radius:18px;
+  padding:13px 14px;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:12px;
+}
+.side-row strong{
+  color:#1e293b;
+  font-size:14px;
+}
+.side-row span{
+  color:var(--muted);
+  font-size:13px;
+}
+.actions-fixed{
+  border-top:1px solid var(--soft);
+  background:white;
+  padding:16px 20px;
+  display:flex;
+  justify-content:flex-end;
+  gap:10px;
+  flex-wrap:wrap;
+  box-shadow:0 -10px 22px rgba(15,23,42,.035);
+}
+.note{
+  border:1px solid #c7d2fe;
+  background:var(--indigo-bg);
+  color:#4338ca;
+  border-radius:18px;
+  padding:14px;
+  font-size:14px;
+  line-height:1.45;
+}
+@media(max-width:1100px){
+  .layout{
+    grid-template-columns:1fr;
+  }
+}
+@media(max-width:760px){
+  .workspace{
+    padding:16px;
+  }
+  .page-head{
+    flex-direction:column;
+    align-items:flex-start;
+  }
+  h1{
+    font-size:28px;
+  }
+  .tabs{
+    overflow:auto;
+  }
+  .form-grid,.constant-row{
+    grid-template-columns:1fr;
+  }
+  .setting-row,.side-row{
+    align-items:flex-start;
+    flex-direction:column;
+  }
+  .actions-fixed{
+    flex-direction:column;
+  }
+  .btn{
+    width:100%;
+  }
+}
+</style>
+</head>
+<body>
+<main class="workspace">
+  <section class="page-head">
+    <h1>Configuración</h1>
+    <span class="status info">Motor del ERP</span>
+  </section>
+
+  <nav class="tabs">
+    <button class="tab active" data-tab="generales">Generales</button>
+    <button class="tab" data-tab="calculos">Cálculos</button>
+    <button class="tab" data-tab="seguridad">Seguridad</button>
+  </nav>
+
+  <section class="panel active" id="generales">
+    <section class="layout">
+      <article class="card">
+        <div class="card-head">
+          <h2>Generales</h2>
+          <span class="status ok">Operativo</span>
+        </div>
+        <div class="card-body">
+          <div class="form-grid">
+            <div class="field">
+              <label class="label">Entorno</label>
+              <input class="input" value="FutonHUB Producción" />
+            </div>
+            <div class="field">
+              <label class="label">Modo</label>
+              <select class="select">
+                <option>Online + Local</option>
+                <option>Solo local</option>
+                <option>Solo lectura</option>
+              </select>
+            </div>
+            <div class="field">
+              <label class="label">Rol actual</label>
+              <input class="input readonly" value="Admin" readonly />
+            </div>
+            <div class="field">
+              <label class="label">Tema</label>
+              <select class="select">
+                <option>Claro ERP</option>
+                <option>Oscuro ERP</option>
+                <option>Sistema</option>
+              </select>
+            </div>
+            <div class="field full">
+              <label class="label">Ruta base local</label>
+              <input class="input" value="GestorWoo/data/gestorwoo.sqlite3" />
+            </div>
+          </div>
+        </div>
+        <footer class="actions-fixed">
+          <button class="btn">Cancelar</button>
+          <button class="btn primary">Guardar generales</button>
+        </footer>
+      </article>
+
+      <aside class="card">
+        <div class="card-head">
+          <h2>Conexiones</h2>
+          <span class="status info">Estado</span>
+        </div>
+        <div class="card-body">
+          <div class="side-list">
+            <div class="side-row"><strong>SQLite local</strong><span class="status ok">OK</span></div>
+            <div class="side-row"><strong>Supabase</strong><span class="status ok">Online</span></div>
+            <div class="side-row"><strong>WooCommerce</strong><span class="status ok">Conectado</span></div>
+            <div class="side-row"><strong>Backups</strong><span class="status info">Activo</span></div>
+          </div>
+        </div>
+      </aside>
+    </section>
+  </section>
+
+  <section class="panel" id="calculos">
+    <section class="layout">
+      <article class="card">
+        <div class="card-head">
+          <h2>Constantes del negocio</h2>
+          <span class="status warning">Afecta cálculos</span>
+        </div>
+        <div class="card-body">
+          <div class="constant-table">
+            <div class="constant-row">
+              <div class="constant-name"><strong>IMPORTE_DESCARGA_MT</strong><span>Importe descarga por metro</span></div>
+              <input class="value-input" value="12,00" />
+              <div class="unit">€/m</div>
+            </div>
+            <div class="constant-row">
+              <div class="constant-name"><strong>PC_GASTOS_MANIPULACION</strong><span>Porcentaje manipulación</span></div>
+              <input class="value-input" value="2,00" />
+              <div class="unit">%</div>
+            </div>
+            <div class="constant-row">
+              <div class="constant-name"><strong>PC_GASTOS_FINANCIACION</strong><span>Porcentaje financiación</span></div>
+              <input class="value-input" value="2,50" />
+              <div class="unit">%</div>
+            </div>
+            <div class="constant-row">
+              <div class="constant-name"><strong>IMPORTES_VARIOS</strong><span>Importes varios</span></div>
+              <input class="value-input" value="1,00" />
+              <div class="unit">%</div>
+            </div>
+            <div class="constant-row">
+              <div class="constant-name"><strong>COSTE_TOTAL_DESCARGA_FUTONES_IVA</strong><span>Descarga futones con IVA</span></div>
+              <input class="value-input" value="326,00" />
+              <div class="unit">€</div>
+            </div>
+            <div class="constant-row">
+              <div class="constant-name"><strong>COSTE_DESCARGA_FUTONES_UNIDAD</strong><span>Descarga por unidad</span></div>
+              <input class="value-input" value="3,00" />
+              <div class="unit">€/ud</div>
+            </div>
+            <div class="constant-row">
+              <div class="constant-name"><strong>IVA_RECARGO_EQUIVALENCIA</strong><span>IVA + recargo equivalencia</span></div>
+              <input class="value-input" value="26,20" />
+              <div class="unit">%</div>
+            </div>
+            <div class="constant-row">
+              <div class="constant-name"><strong>COSTE_DIARIO_ALMACENAJE_M3</strong><span>Almacenaje diario por M3</span></div>
+              <input class="value-input" value="0,15" />
+              <div class="unit">€/m3</div>
+            </div>
+          </div>
+        </div>
+        <footer class="actions-fixed">
+          <button class="btn">Cancelar</button>
+          <button class="btn primary">Guardar cálculos</button>
+        </footer>
+      </article>
+
+      <aside class="card">
+        <div class="card-head">
+          <h2>Impacto</h2>
+          <span class="status warning">Sensible</span>
+        </div>
+        <div class="card-body">
+          <div class="note">Los cambios en constantes afectan cálculo de pedidos, costes finales, rentabilidad y exportaciones. Deben quedar registrados en logs.</div>
+        </div>
+      </aside>
+    </section>
+  </section>
+
+  <section class="panel" id="seguridad">
+    <section class="layout">
+      <article class="card">
+        <div class="card-head">
+          <h2>Seguridad</h2>
+          <span class="status ok">Protegido</span>
+        </div>
+        <div class="card-body">
+          <div class="setting-list">
+            <div class="setting-row">
+              <div class="setting-main"><strong>Preview interno obligatorio</strong><span>Validación antes de operaciones sensibles</span></div>
+              <div class="switch on"><div class="knob"></div></div>
+            </div>
+            <div class="setting-row">
+              <div class="setting-main"><strong>Bloquear precios en 0</strong><span>Critical automático si un precio queda en cero</span></div>
+              <div class="switch on"><div class="knob"></div></div>
+            </div>
+            <div class="setting-row">
+              <div class="setting-main"><strong>Confirmación por palabra</strong><span>Requiere escribir CONFIRMAR</span></div>
+              <div class="switch on"><div class="knob"></div></div>
+            </div>
+            <div class="setting-row">
+              <div class="setting-main"><strong>Cancelar operación ante Critical</strong><span>Bloqueo completo del flujo</span></div>
+              <div class="switch on"><div class="knob"></div></div>
+            </div>
+            <div class="setting-row">
+              <div class="setting-main"><strong>Backups automáticos</strong><span>Antes de cambios sensibles</span></div>
+              <div class="switch on"><div class="knob"></div></div>
+            </div>
+            <div class="setting-row">
+              <div class="setting-main"><strong>Registro de operaciones</strong><span>Guardar acción, usuario, fecha y resultado</span></div>
+              <div class="switch on"><div class="knob"></div></div>
+            </div>
+          </div>
+        </div>
+        <footer class="actions-fixed">
+          <button class="btn">Cancelar</button>
+          <button class="btn primary">Guardar seguridad</button>
+        </footer>
+      </article>
+
+      <aside class="card">
+        <div class="card-head">
+          <h2>Reglas activas</h2>
+          <span class="status info">6</span>
+        </div>
+        <div class="card-body">
+          <div class="side-list">
+            <div class="side-row"><strong>Warning</strong><span>No bloquea</span></div>
+            <div class="side-row"><strong>Error</strong><span>Bloquea paso</span></div>
+            <div class="side-row"><strong>Critical</strong><span>Bloquea todo</span></div>
+            <div class="side-row"><strong>Logs</strong><span>Obligatorios</span></div>
+          </div>
+        </div>
+      </aside>
+    </section>
+  </section>
+</main>
+
+<script>
+const tabs = document.querySelectorAll('.tab');
+const panels = document.querySelectorAll('.panel');
+
+tabs.forEach(tab=>{
+  tab.addEventListener('click', ()=>{
+    tabs.forEach(t=>t.classList.remove('active'));
+    panels.forEach(p=>p.classList.remove('active'));
+    tab.classList.add('active');
+    document.getElementById(tab.dataset.tab).classList.add('active');
+  });
+});
+</script>
+</body>
+</html>

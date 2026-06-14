@@ -1,0 +1,708 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>FutonHUB - Pedidos v1.1</title>
+<style>
+:root{
+  --bg:#f8fafc;--card:#fff;--line:#e2e8f0;--soft:#f1f5f9;--text:#0f172a;--muted:#64748b;
+  --indigo:#4f46e5;--indigo-bg:#eef2ff;--green:#059669;--green-bg:#ecfdf5;--blue:#2563eb;--blue-bg:#eff6ff;
+  --amber:#d97706;--amber-bg:#fffbeb;--orange:#ea580c;--orange-bg:#fff7ed;--rose:#e11d48;--rose-bg:#fff1f2;
+  --shadow:0 10px 25px rgba(15,23,42,.055);--radius:24px;
+}
+*{box-sizing:border-box}
+body{
+  margin:0;
+  font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  background:var(--bg);
+  color:var(--text);
+}
+.workspace{
+  min-height:100vh;
+  padding:28px;
+  max-width:1520px;
+  margin:0 auto;
+}
+.page-head{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:16px;
+  margin-bottom:20px;
+}
+h1{
+  margin:0;
+  font-size:32px;
+  line-height:1.15;
+  letter-spacing:-.04em;
+}
+h2{
+  margin:0;
+  font-size:18px;
+  font-weight:820;
+  letter-spacing:-.02em;
+}
+h3{
+  margin:0;
+  font-size:16px;
+  font-weight:850;
+  letter-spacing:-.02em;
+}
+p{
+  margin:0;
+  color:var(--muted);
+  line-height:1.45;
+}
+.btn{
+  height:44px;
+  border:1px solid var(--line);
+  background:white;
+  color:#334155;
+  padding:0 14px;
+  border-radius:16px;
+  font-weight:750;
+  cursor:pointer;
+  box-shadow:0 6px 16px rgba(15,23,42,.035);
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  gap:8px;
+  white-space:nowrap;
+}
+.btn.primary{background:var(--indigo);border-color:var(--indigo);color:white}
+.btn.danger{background:var(--rose);border-color:var(--rose);color:white}
+.btn.ok{background:var(--green);border-color:var(--green);color:white}
+.btn-row{display:flex;gap:10px;flex-wrap:wrap}
+.layout{
+  display:grid;
+  grid-template-columns:minmax(580px,1.22fr) minmax(420px,.78fr);
+  gap:20px;
+  align-items:stretch;
+}
+.left-zone,.right-zone{
+  display:grid;
+  gap:20px;
+  align-content:start;
+}
+.card{
+  background:white;
+  border:1px solid var(--line);
+  border-radius:var(--radius);
+  box-shadow:var(--shadow);
+  overflow:hidden;
+}
+.card-head{
+  padding:18px 20px;
+  border-bottom:1px solid var(--soft);
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:14px;
+}
+.providers-grid{
+  display:grid;
+  grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:14px;
+  padding:16px;
+}
+.provider-card{
+  border:1px solid var(--soft);
+  background:#f8fafc;
+  border-radius:20px;
+  padding:14px;
+  display:grid;
+  gap:12px;
+}
+.provider-top{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:12px;
+}
+.provider-icon{
+  width:42px;
+  height:42px;
+  border-radius:16px;
+  background:var(--indigo-bg);
+  color:#4338ca;
+  display:grid;
+  place-items:center;
+  font-weight:900;
+}
+.provider-meta{
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:8px;
+}
+.meta{
+  border:1px solid rgba(226,232,240,.9);
+  background:white;
+  border-radius:14px;
+  padding:8px 9px;
+}
+.meta .k{
+  font-size:10px;
+  text-transform:uppercase;
+  letter-spacing:.08em;
+  color:var(--muted);
+  font-weight:850;
+}
+.meta .v{
+  margin-top:4px;
+  font-size:13px;
+  color:#1e293b;
+  font-weight:850;
+}
+.status{
+  display:inline-flex;
+  border:1px solid;
+  border-radius:999px;
+  padding:5px 10px;
+  font-size:12px;
+  font-weight:800;
+  white-space:nowrap;
+}
+.status-ok{background:var(--green-bg);color:var(--green);border-color:#bbf7d0}
+.status-info{background:var(--blue-bg);color:var(--blue);border-color:#bfdbfe}
+.status-warning{background:var(--amber-bg);color:var(--amber);border-color:#fde68a}
+.status-error{background:var(--orange-bg);color:var(--orange);border-color:#fed7aa}
+.status-critical{background:var(--rose-bg);color:var(--rose);border-color:#fecdd3}
+.table-wrap{
+  overflow:auto;
+}
+table{
+  width:100%;
+  border-collapse:collapse;
+  min-width:860px;
+  text-align:left;
+  font-size:14px;
+}
+th{
+  background:#f8fafc;
+  color:var(--muted);
+  text-transform:uppercase;
+  letter-spacing:.06em;
+  font-size:12px;
+  padding:13px 16px;
+  border-bottom:1px solid var(--soft);
+  white-space:nowrap;
+}
+td{
+  padding:15px 16px;
+  border-bottom:1px solid var(--soft);
+  color:#475569;
+}
+tr:hover td{background:#f8fafc}
+tr.selected td{background:rgba(79,70,229,.045)}
+td.strong{font-weight:800;color:#1e293b}
+.small-btn{
+  height:34px;
+  border:1px solid var(--line);
+  background:white;
+  color:#334155;
+  padding:0 11px;
+  border-radius:12px;
+  font-weight:800;
+  cursor:pointer;
+  font-size:12px;
+}
+.detail-card{
+  height:790px;
+  display:flex;
+  flex-direction:column;
+}
+.detail-scroll{
+  min-height:0;
+  flex:1;
+  overflow:auto;
+  padding:18px;
+}
+.detail-title-row{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:12px;
+  margin-bottom:16px;
+}
+.detail-title-main{
+  display:grid;
+  gap:5px;
+  min-width:0;
+}
+.summary-row{
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:10px;
+  margin-bottom:16px;
+}
+.summary{
+  border:1px solid var(--soft);
+  background:#f8fafc;
+  border-radius:16px;
+  padding:10px 11px;
+}
+.summary .k{
+  font-size:10px;
+  text-transform:uppercase;
+  letter-spacing:.08em;
+  font-weight:800;
+  color:var(--muted);
+}
+.summary .v{
+  font-size:18px;
+  font-weight:850;
+  color:#1e293b;
+  margin-top:5px;
+}
+.order-items{
+  display:grid;
+  gap:10px;
+}
+.order-item{
+  border:1px solid var(--soft);
+  background:#f8fafc;
+  border-radius:18px;
+  padding:12px;
+  display:grid;
+  grid-template-columns:minmax(0,1fr) 78px 110px;
+  gap:10px;
+  align-items:center;
+}
+.item-main{
+  min-width:0;
+  display:grid;
+  gap:4px;
+}
+.item-id{
+  font-size:11px;
+  color:var(--muted);
+  font-weight:850;
+  white-space:nowrap;
+}
+.item-name{
+  color:#1e293b;
+  font-weight:820;
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+}
+.qty,.cost{
+  border:1px solid var(--line);
+  background:white;
+  border-radius:14px;
+  padding:9px 10px;
+  font-size:13px;
+  font-weight:850;
+  color:#1e293b;
+  text-align:center;
+}
+.detail-actions-fixed{
+  border-top:1px solid var(--soft);
+  background:white;
+  padding:16px 20px;
+  display:grid;
+  gap:12px;
+  box-shadow:0 -10px 22px rgba(15,23,42,.035);
+}
+.detail-actions-fixed .bottom-two{
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:12px;
+}
+
+/* Popup recibido */
+.modal-overlay{
+  position:fixed;
+  inset:0;
+  background:rgba(15,23,42,.45);
+  backdrop-filter:blur(8px);
+  z-index:80;
+  display:none;
+  align-items:center;
+  justify-content:center;
+  padding:20px;
+}
+.modal-overlay.open{display:flex}
+.modal{
+  width:min(900px,100%);
+  max-height:90vh;
+  background:white;
+  border:1px solid var(--line);
+  border-radius:28px;
+  box-shadow:0 28px 80px rgba(15,23,42,.26);
+  overflow:hidden;
+  display:flex;
+  flex-direction:column;
+}
+.modal-head{
+  padding:22px;
+  border-bottom:1px solid var(--soft);
+  display:flex;
+  justify-content:space-between;
+  gap:16px;
+  align-items:flex-start;
+}
+.modal-body{
+  padding:20px;
+  overflow:auto;
+}
+.modal-actions{
+  padding:16px 22px;
+  border-top:1px solid var(--soft);
+  display:flex;
+  justify-content:flex-end;
+  gap:10px;
+  background:#f8fafc;
+}
+.close-btn{
+  height:42px;
+  border:1px solid var(--line);
+  background:white;
+  color:#334155;
+  padding:0 14px;
+  border-radius:16px;
+  font-weight:800;
+  cursor:pointer;
+  box-shadow:0 6px 16px rgba(15,23,42,.035);
+}
+.receive-mode{
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:12px;
+  margin-bottom:18px;
+}
+.mode-card{
+  border:1px solid var(--line);
+  background:#f8fafc;
+  border-radius:18px;
+  padding:14px;
+}
+.mode-card strong{
+  display:block;
+  color:#1e293b;
+  margin-bottom:4px;
+}
+.mode-card span{
+  color:var(--muted);
+  font-size:13px;
+}
+.receive-input{
+  width:86px;
+  height:38px;
+  border:1px solid var(--line);
+  background:white;
+  border-radius:14px;
+  padding:0 10px;
+  font-weight:800;
+  color:#1e293b;
+}
+.checkbox{
+  width:18px;
+  height:18px;
+  accent-color:#4f46e5;
+}
+@media(max-width:1250px){
+  .layout{grid-template-columns:1fr}
+  .detail-card{height:auto;min-height:740px}
+}
+@media(max-width:760px){
+  .workspace{padding:16px}
+  .page-head{align-items:flex-start;flex-direction:column}
+  h1{font-size:28px}
+  .providers-grid,.summary-row,.receive-mode{grid-template-columns:1fr}
+  .order-item{grid-template-columns:1fr}
+  .qty,.cost{text-align:left}
+  .detail-title-row,.card-head{align-items:flex-start;flex-direction:column}
+  .detail-actions-fixed .bottom-two{grid-template-columns:1fr}
+  .btn{width:100%}
+  .modal-actions{flex-direction:column}
+  .close-btn{width:100%}
+}
+</style>
+</head>
+<body>
+<main class="workspace">
+  <section class="page-head">
+    <h1>Pedidos</h1>
+  </section>
+
+  <section class="layout">
+    <section class="left-zone">
+      <article class="card">
+        <div class="card-head">
+          <h2>Proveedores</h2>
+        </div>
+
+        <div class="providers-grid">
+          <article class="provider-card">
+            <div class="provider-top">
+              <div class="provider-icon">E</div>
+              <span class="status status-ok">Activo</span>
+            </div>
+            <h3>Ekomat</h3>
+            <div class="provider-meta">
+              <div class="meta"><div class="k">En marcha</div><div class="v">2</div></div>
+              <div class="meta"><div class="k">Último</div><div class="v">7 d</div></div>
+            </div>
+            <button class="btn primary">Calcular nuevo pedido</button>
+          </article>
+
+          <article class="provider-card">
+            <div class="provider-top">
+              <div class="provider-icon">P</div>
+              <span class="status status-info">Activo</span>
+            </div>
+            <h3>Pascal</h3>
+            <div class="provider-meta">
+              <div class="meta"><div class="k">En marcha</div><div class="v">1</div></div>
+              <div class="meta"><div class="k">Último</div><div class="v">11 d</div></div>
+            </div>
+            <button class="btn primary">Calcular nuevo pedido</button>
+          </article>
+
+          <article class="provider-card">
+            <div class="provider-top">
+              <div class="provider-icon">H</div>
+              <span class="status status-warning">Revisar</span>
+            </div>
+            <h3>Heimei</h3>
+            <div class="provider-meta">
+              <div class="meta"><div class="k">En marcha</div><div class="v">3</div></div>
+              <div class="meta"><div class="k">Último</div><div class="v">3 d</div></div>
+            </div>
+            <button class="btn primary">Calcular nuevo pedido</button>
+          </article>
+
+          <article class="provider-card">
+            <div class="provider-top">
+              <div class="provider-icon">O</div>
+              <span class="status status-ok">Activo</span>
+            </div>
+            <h3>Otros</h3>
+            <div class="provider-meta">
+              <div class="meta"><div class="k">En marcha</div><div class="v">0</div></div>
+              <div class="meta"><div class="k">Último</div><div class="v">-</div></div>
+            </div>
+            <button class="btn primary">Calcular nuevo pedido</button>
+          </article>
+        </div>
+      </article>
+
+      <article class="card">
+        <div class="card-head">
+          <h2>Pedidos en marcha</h2>
+          <span class="status status-info">6 abiertos</span>
+        </div>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>ID Pedido</th>
+                <th>Proveedor</th>
+                <th>Fecha</th>
+                <th>Items</th>
+                <th>Total M3</th>
+                <th>Estado</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr class="selected">
+                <td class="strong">PED-HEI-028</td>
+                <td>Heimei</td>
+                <td>28/05/2026</td>
+                <td class="strong">23</td>
+                <td class="strong">8,42</td>
+                <td><span class="status status-warning">Validación</span></td>
+              </tr>
+              <tr>
+                <td class="strong">PED-EKO-017</td>
+                <td>Ekomat</td>
+                <td>27/05/2026</td>
+                <td class="strong">41</td>
+                <td class="strong">12,10</td>
+                <td><span class="status status-ok">Calculado</span></td>
+              </tr>
+              <tr>
+                <td class="strong">PED-PAS-011</td>
+                <td>Pascal</td>
+                <td>25/05/2026</td>
+                <td class="strong">14</td>
+                <td class="strong">6,88</td>
+                <td><span class="status status-info">Borrador</span></td>
+              </tr>
+              <tr>
+                <td class="strong">PED-EKO-016</td>
+                <td>Ekomat</td>
+                <td>22/05/2026</td>
+                <td class="strong">29</td>
+                <td class="strong">9,02</td>
+                <td><span class="status status-error">Error</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </article>
+    </section>
+
+    <aside class="right-zone">
+      <article class="card detail-card">
+        <div class="card-head">
+          <div class="detail-title-row" style="margin:0;width:100%">
+            <div class="detail-title-main">
+              <h2>PED-HEI-028</h2>
+              <p>Heimei · 28/05/2026</p>
+            </div>
+            <button class="btn">Detalles</button>
+          </div>
+        </div>
+
+        <div class="detail-scroll">
+          <div class="summary-row">
+            <div class="summary"><div class="k">Items</div><div class="v">23</div></div>
+            <div class="summary"><div class="k">Total M3</div><div class="v">8,42</div></div>
+            <div class="summary"><div class="k">Coste</div><div class="v">4.812 €</div></div>
+            <div class="summary"><div class="k">Estado</div><div class="v">Validación</div></div>
+          </div>
+
+          <section class="order-items">
+            <article class="order-item">
+              <div class="item-main">
+                <span class="item-id">1244001</span>
+                <span class="item-name">Tatami 90x200</span>
+              </div>
+              <div class="qty">12 uds</div>
+              <div class="cost">1.248,00 €</div>
+            </article>
+
+            <article class="order-item">
+              <div class="item-main">
+                <span class="item-id">0730009</span>
+                <span class="item-name">Producto especial que cuenta</span>
+              </div>
+              <div class="qty">4 uds</div>
+              <div class="cost">416,00 €</div>
+            </article>
+
+            <article class="order-item">
+              <div class="item-main">
+                <span class="item-id">TAT-160</span>
+                <span class="item-name">Tatami 160x200</span>
+              </div>
+              <div class="qty">6 uds</div>
+              <div class="cost">1.890,00 €</div>
+            </article>
+
+            <article class="order-item">
+              <div class="item-main">
+                <span class="item-id">A MEDIDA</span>
+                <span class="item-name">Pedido cliente personalizado</span>
+              </div>
+              <div class="qty">1 ud</div>
+              <div class="cost">Pendiente</div>
+            </article>
+
+            <article class="order-item">
+              <div class="item-main">
+                <span class="item-id">FUNDA-90</span>
+                <span class="item-name">Funda futón 90 cm</span>
+              </div>
+              <div class="qty">6 uds</div>
+              <div class="cost">288,00 €</div>
+            </article>
+          </section>
+        </div>
+
+        <footer class="detail-actions-fixed">
+          <button class="btn ok" onclick="openReceiveModal()">Recibido</button>
+          <div class="bottom-two">
+            <button class="btn danger">Borrar pedido</button>
+            <button class="btn primary">Exportar</button>
+          </div>
+        </footer>
+      </article>
+    </aside>
+  </section>
+</main>
+
+<section class="modal-overlay" id="receiveModal">
+  <div class="modal">
+    <header class="modal-head">
+      <div>
+        <h2>Recepción de pedido</h2>
+        <p>PED-HEI-028 · Selecciona recepción total o parcial.</p>
+      </div>
+      <button class="close-btn" onclick="closeReceiveModal()">Cerrar ✕</button>
+    </header>
+
+    <div class="modal-body">
+      <div class="receive-mode">
+        <div class="mode-card">
+          <strong>Recibido completo</strong>
+          <span>Marca todos los items como recibidos.</span>
+        </div>
+        <div class="mode-card">
+          <strong>Recibido parcial</strong>
+          <span>Permite seleccionar items y cantidades recibidas.</span>
+        </div>
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Recibido</th>
+              <th>ID</th>
+              <th>Nombre</th>
+              <th>Cantidad pedida</th>
+              <th>Cantidad recibida</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><input class="checkbox" type="checkbox" checked /></td>
+              <td class="strong">1244001</td>
+              <td>Tatami 90x200</td>
+              <td>12</td>
+              <td><input class="receive-input" value="12" /></td>
+            </tr>
+            <tr>
+              <td><input class="checkbox" type="checkbox" checked /></td>
+              <td class="strong">0730009</td>
+              <td>Producto especial que cuenta</td>
+              <td>4</td>
+              <td><input class="receive-input" value="4" /></td>
+            </tr>
+            <tr>
+              <td><input class="checkbox" type="checkbox" /></td>
+              <td class="strong">TAT-160</td>
+              <td>Tatami 160x200</td>
+              <td>6</td>
+              <td><input class="receive-input" value="0" /></td>
+            </tr>
+            <tr>
+              <td><input class="checkbox" type="checkbox" /></td>
+              <td class="strong">A MEDIDA</td>
+              <td>Pedido cliente personalizado</td>
+              <td>1</td>
+              <td><input class="receive-input" value="0" /></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <footer class="modal-actions">
+      <button class="btn" onclick="closeReceiveModal()">Cancelar</button>
+      <button class="btn primary">Confirmar recepción</button>
+    </footer>
+  </div>
+</section>
+
+<script>
+function openReceiveModal(){document.getElementById('receiveModal').classList.add('open');}
+function closeReceiveModal(){document.getElementById('receiveModal').classList.remove('open');}
+</script>
+</body>
+</html>

@@ -1,0 +1,1757 @@
+%PDF-1.4
+%‚„œ”
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R 5 0 R 7 0 R 9 0 R 11 0 R 13 0 R 15 0 R 17 0 R] /Count 8 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 19 0 R >> >> /Contents 4 0 R >>
+endobj
+4 0 obj
+<< /Length 2869 >>
+stream
+BT
+/F1 18 Tf
+48 786 Td
+(FutonHUB - Menu lateral UI-ERP) Tj
+ET
+BT
+/F1 10 Tf
+48 751 Td
+(Fecha de trabajo: 2026-05-27) Tj
+ET
+BT
+/F1 10 Tf
+48 731 Td
+(Objetivo: ordenar todas las funciones y partes del mini ERP antes de conectar funcionalidad) Tj
+ET
+BT
+/F1 10 Tf
+48 718 Td
+(real en la UI. Este documento se puede imprimir o revisar en PDF para marcar decisiones a) Tj
+ET
+BT
+/F1 10 Tf
+48 705 Td
+(mano.) Tj
+ET
+BT
+/F1 15 Tf
+48 679 Td
+(Criterios de organizacion) Tj
+ET
+BT
+/F1 10 Tf
+48 649 Td
+(  - El ERP debe abrir con login antes de mostrar la ventana principal.) Tj
+ET
+BT
+/F1 10 Tf
+48 636 Td
+(  - La ventana principal tendra un menu lateral, topbar y area central por modulo.) Tj
+ET
+BT
+/F1 10 Tf
+48 623 Td
+(  - La topbar debe mostrar estado Online y rol: Admin o Worker.) Tj
+ET
+BT
+/F1 10 Tf
+48 610 Td
+(  - Las funciones visibles dependen del rol y de los permisos cloud.) Tj
+ET
+BT
+/F1 10 Tf
+48 597 Td
+(  - Las acciones criticas siempre requieren validacion, preview, confirmacion, ejecucion) Tj
+ET
+BT
+/F1 10 Tf
+62 584 Td
+(protegida, resultado visible y log.) Tj
+ET
+BT
+/F1 10 Tf
+48 571 Td
+(  - WooCommerce real no se toca sin preview, confirmacion y caja negra.) Tj
+ET
+BT
+/F1 10 Tf
+48 558 Td
+(  - El menu debe permitir crecer con nuevos modulos sin rehacer la estructura.) Tj
+ET
+BT
+/F1 15 Tf
+48 532 Td
+(Mapa propuesto de menu lateral) Tj
+ET
+BT
+/F1 12 Tf
+48 502 Td
+(Principal) Tj
+ET
+BT
+/F1 10 Tf
+48 479 Td
+(  - [ ] Dashboard) Tj
+ET
+BT
+/F1 12 Tf
+48 459 Td
+(Operaciones) Tj
+ET
+BT
+/F1 10 Tf
+48 436 Td
+(  - [ ] Inventario) Tj
+ET
+BT
+/F1 10 Tf
+48 423 Td
+(  - [ ] Cambio de Precios) Tj
+ET
+BT
+/F1 10 Tf
+48 410 Td
+(  - [ ] Calcular Pedido) Tj
+ET
+BT
+/F1 12 Tf
+48 390 Td
+(Gestion) Tj
+ET
+BT
+/F1 10 Tf
+48 367 Td
+(  - [ ] WooCommerce) Tj
+ET
+BT
+/F1 10 Tf
+48 354 Td
+(  - [ ] Proveedores) Tj
+ET
+BT
+/F1 10 Tf
+48 341 Td
+(  - [ ] Informes) Tj
+ET
+BT
+/F1 12 Tf
+48 321 Td
+(Sistema) Tj
+ET
+BT
+/F1 10 Tf
+48 298 Td
+(  - [ ] Configuracion) Tj
+ET
+BT
+/F1 10 Tf
+48 285 Td
+(  - [ ] Seguridad / Logs) Tj
+ET
+BT
+/F1 15 Tf
+48 259 Td
+(Dashboard) Tj
+ET
+BT
+/F1 10 Tf
+48 229 Td
+(Ubicacion propuesta: Principal > Dashboard) Tj
+ET
+BT
+/F1 10 Tf
+48 209 Td
+(Debe contener:) Tj
+ET
+BT
+/F1 10 Tf
+48 189 Td
+(  - [ ] Alertas Criticas) Tj
+ET
+BT
+/F1 10 Tf
+48 176 Td
+(  - [ ] Warnings Activos) Tj
+ET
+BT
+/F1 10 Tf
+48 163 Td
+(  - [ ] Pendiente a Sincronizar) Tj
+ET
+BT
+/F1 10 Tf
+48 150 Td
+(  - [ ] Sistema) Tj
+ET
+BT
+/F1 10 Tf
+48 137 Td
+(  - [ ] Vista detallada dinamica segun tarjeta seleccionada) Tj
+ET
+BT
+/F1 10 Tf
+48 124 Td
+(  - [ ] Acciones rapidas) Tj
+ET
+BT
+/F1 10 Tf
+48 111 Td
+(  - [ ] Ultima actividad) Tj
+ET
+BT
+/F1 10 Tf
+48 98 Td
+(  - [ ] Estado de Supabase) Tj
+ET
+BT
+/F1 10 Tf
+48 85 Td
+(  - [ ] Estado de WooCommerce) Tj
+ET
+BT
+/F1 10 Tf
+48 72 Td
+(  - [ ] Estado de locks locales y online) Tj
+ET
+BT
+/F1 10 Tf
+48 52 Td
+(Acciones rapidas iniciales:) Tj
+ET
+BT
+/F1 8 Tf
+48 28 Td
+(FutonHUB UI-ERP - Menu lateral - pagina 1/8) Tj
+ET
+endstream
+endobj
+5 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 19 0 R >> >> /Contents 6 0 R >>
+endobj
+6 0 obj
+<< /Length 2961 >>
+stream
+BT
+/F1 10 Tf
+48 786 Td
+(  - [ ] Calcular Pedido) Tj
+ET
+BT
+/F1 10 Tf
+48 773 Td
+(  - [ ] Crear propuesta de precio) Tj
+ET
+BT
+/F1 10 Tf
+48 760 Td
+(  - [ ] WooCommerce) Tj
+ET
+BT
+/F1 10 Tf
+48 740 Td
+(Pendiente de decidir:) Tj
+ET
+BT
+/F1 10 Tf
+48 720 Td
+(  - [ ] Incluir acceso rapido a Inventario) Tj
+ET
+BT
+/F1 10 Tf
+48 707 Td
+(  - [ ] Incluir acceso rapido a Logs criticos) Tj
+ET
+BT
+/F1 10 Tf
+48 694 Td
+(  - [ ] Mostrar indicadores por rol) Tj
+ET
+BT
+/F1 15 Tf
+48 668 Td
+(Inventario) Tj
+ET
+BT
+/F1 10 Tf
+48 638 Td
+(Ubicacion propuesta: Operaciones > Inventario) Tj
+ET
+BT
+/F1 10 Tf
+48 618 Td
+(Debe contener:) Tj
+ET
+BT
+/F1 10 Tf
+48 598 Td
+(  - [ ] Buscador de items) Tj
+ET
+BT
+/F1 10 Tf
+48 585 Td
+(  - [ ] Tabla de inventario interno) Tj
+ET
+BT
+/F1 10 Tf
+48 572 Td
+(  - [ ] Detalle lateral del item) Tj
+ET
+BT
+/F1 10 Tf
+48 559 Td
+(  - [ ] Stock tienda) Tj
+ET
+BT
+/F1 10 Tf
+48 546 Td
+(  - [ ] Stock almacen) Tj
+ET
+BT
+/F1 10 Tf
+48 533 Td
+(  - [ ] Relacion con WooCommerce) Tj
+ET
+BT
+/F1 10 Tf
+48 520 Td
+(  - [ ] Estado de link local / Supabase / Woo) Tj
+ET
+BT
+/F1 10 Tf
+48 507 Td
+(  - [ ] Preview de cambio interno) Tj
+ET
+BT
+/F1 10 Tf
+48 494 Td
+(  - [ ] Aplicar cambio interno Supabase) Tj
+ET
+BT
+/F1 10 Tf
+48 481 Td
+(  - [ ] Historial del item) Tj
+ET
+BT
+/F1 10 Tf
+48 468 Td
+(  - [ ] Logs y snapshots relacionados) Tj
+ET
+BT
+/F1 10 Tf
+48 455 Td
+(  - [ ] Exportar inventario) Tj
+ET
+BT
+/F1 10 Tf
+48 435 Td
+(Flujo base:) Tj
+ET
+BT
+/F1 10 Tf
+48 415 Td
+(  - [ ] Buscar item) Tj
+ET
+BT
+/F1 10 Tf
+48 402 Td
+(  - [ ] Seleccionar item) Tj
+ET
+BT
+/F1 10 Tf
+48 389 Td
+(  - [ ] Ver detalle) Tj
+ET
+BT
+/F1 10 Tf
+48 376 Td
+(  - [ ] Preparar cambio) Tj
+ET
+BT
+/F1 10 Tf
+48 363 Td
+(  - [ ] Validar) Tj
+ET
+BT
+/F1 10 Tf
+48 350 Td
+(  - [ ] Preview) Tj
+ET
+BT
+/F1 10 Tf
+48 337 Td
+(  - [ ] Confirmar) Tj
+ET
+BT
+/F1 10 Tf
+48 324 Td
+(  - [ ] Aplicar Supabase) Tj
+ET
+BT
+/F1 10 Tf
+48 311 Td
+(  - [ ] Guardar snapshot/log) Tj
+ET
+BT
+/F1 10 Tf
+48 298 Td
+(  - [ ] Mostrar resultado) Tj
+ET
+BT
+/F1 10 Tf
+48 278 Td
+(Roles:) Tj
+ET
+BT
+/F1 10 Tf
+48 258 Td
+(  - [ ] Admin: puede aplicar cambios y ver trazabilidad completa) Tj
+ET
+BT
+/F1 10 Tf
+48 245 Td
+(  - [ ] Worker: puede consultar y proponer/ejecutar solo lo permitido) Tj
+ET
+BT
+/F1 15 Tf
+48 219 Td
+(Cambio de Precios) Tj
+ET
+BT
+/F1 10 Tf
+48 189 Td
+(Ubicacion propuesta: Operaciones > Cambio de Precios) Tj
+ET
+BT
+/F1 10 Tf
+48 169 Td
+(Debe contener:) Tj
+ET
+BT
+/F1 10 Tf
+48 149 Td
+(  - [ ] Buscador de producto/variacion) Tj
+ET
+BT
+/F1 10 Tf
+48 136 Td
+(  - [ ] Crear propuesta de precio) Tj
+ET
+BT
+/F1 10 Tf
+48 123 Td
+(  - [ ] Preview de propuesta) Tj
+ET
+BT
+/F1 10 Tf
+48 110 Td
+(  - [ ] Validaciones de seguridad) Tj
+ET
+BT
+/F1 10 Tf
+48 97 Td
+(  - [ ] Bandeja de propuestas) Tj
+ET
+BT
+/F1 10 Tf
+48 84 Td
+(  - [ ] Estados: pending, approved, rejected, publishing, published, error) Tj
+ET
+BT
+/F1 10 Tf
+48 71 Td
+(  - [ ] Detalle de propuesta) Tj
+ET
+BT
+/F1 10 Tf
+48 58 Td
+(  - [ ] Aprobar propuesta) Tj
+ET
+BT
+/F1 8 Tf
+48 28 Td
+(FutonHUB UI-ERP - Menu lateral - pagina 2/8) Tj
+ET
+endstream
+endobj
+7 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 19 0 R >> >> /Contents 8 0 R >>
+endobj
+8 0 obj
+<< /Length 3043 >>
+stream
+BT
+/F1 10 Tf
+48 786 Td
+(  - [ ] Rechazar propuesta) Tj
+ET
+BT
+/F1 10 Tf
+48 773 Td
+(  - [ ] Preview WooCommerce) Tj
+ET
+BT
+/F1 10 Tf
+48 760 Td
+(  - [ ] Publicar en WooCommerce) Tj
+ET
+BT
+/F1 10 Tf
+48 747 Td
+(  - [ ] Lock online por propuesta) Tj
+ET
+BT
+/F1 10 Tf
+48 734 Td
+(  - [ ] Rollback de estado si falla antes de Woo) Tj
+ET
+BT
+/F1 10 Tf
+48 721 Td
+(  - [ ] Estado error si falla despues de escribir Woo) Tj
+ET
+BT
+/F1 10 Tf
+48 708 Td
+(  - [ ] Audit log y snapshot) Tj
+ET
+BT
+/F1 10 Tf
+48 688 Td
+(Reglas criticas:) Tj
+ET
+BT
+/F1 10 Tf
+48 668 Td
+(  - [ ] Bloquear precio cero o negativo) Tj
+ET
+BT
+/F1 10 Tf
+48 655 Td
+(  - [ ] Bloquear publicacion de padre variable) Tj
+ET
+BT
+/F1 10 Tf
+48 642 Td
+(  - [ ] Alertar bajadas fuertes) Tj
+ET
+BT
+/F1 10 Tf
+48 629 Td
+(  - [ ] Bloquear si hay Critical) Tj
+ET
+BT
+/F1 10 Tf
+48 616 Td
+(  - [ ] Detectar sale_price activo) Tj
+ET
+BT
+/F1 10 Tf
+48 603 Td
+(  - [ ] Comparar Woo actual contra propuesta) Tj
+ET
+BT
+/F1 10 Tf
+48 583 Td
+(Roles:) Tj
+ET
+BT
+/F1 10 Tf
+48 563 Td
+(  - [ ] Admin: aprobar, rechazar, publicar y revisar errores) Tj
+ET
+BT
+/F1 10 Tf
+48 550 Td
+(  - [ ] Worker: crear propuestas y ver estado segun permisos) Tj
+ET
+BT
+/F1 15 Tf
+48 524 Td
+(Calcular Pedido) Tj
+ET
+BT
+/F1 10 Tf
+48 494 Td
+(Ubicacion propuesta: Operaciones > Calcular Pedido) Tj
+ET
+BT
+/F1 10 Tf
+48 474 Td
+(Debe contener:) Tj
+ET
+BT
+/F1 10 Tf
+48 454 Td
+(  - [ ] Selector de proveedor) Tj
+ET
+BT
+/F1 10 Tf
+48 441 Td
+(  - [ ] Proveedor Ekomat) Tj
+ET
+BT
+/F1 10 Tf
+48 428 Td
+(  - [ ] Proveedor Pascal) Tj
+ET
+BT
+/F1 10 Tf
+48 415 Td
+(  - [ ] Proveedor Heimei) Tj
+ET
+BT
+/F1 10 Tf
+48 402 Td
+(  - [ ] Proveedor Cipta) Tj
+ET
+BT
+/F1 10 Tf
+48 389 Td
+(  - [ ] Carga o lectura de Excel) Tj
+ET
+BT
+/F1 10 Tf
+48 376 Td
+(  - [ ] Validacion de datos) Tj
+ET
+BT
+/F1 10 Tf
+48 363 Td
+(  - [ ] Tabla de lineas) Tj
+ET
+BT
+/F1 10 Tf
+48 350 Td
+(  - [ ] Errores M3) Tj
+ET
+BT
+/F1 10 Tf
+48 337 Td
+(  - [ ] Datos faltantes) Tj
+ET
+BT
+/F1 10 Tf
+48 324 Td
+(  - [ ] Resultado calculado) Tj
+ET
+BT
+/F1 10 Tf
+48 311 Td
+(  - [ ] Exportacion Excel) Tj
+ET
+BT
+/F1 10 Tf
+48 298 Td
+(  - [ ] Historico de calculos) Tj
+ET
+BT
+/F1 10 Tf
+48 285 Td
+(  - [ ] Acceso a constantes del negocio) Tj
+ET
+BT
+/F1 10 Tf
+48 265 Td
+(Flujo base:) Tj
+ET
+BT
+/F1 10 Tf
+48 245 Td
+(  - [ ] Elegir proveedor) Tj
+ET
+BT
+/F1 10 Tf
+48 232 Td
+(  - [ ] Cargar pedido) Tj
+ET
+BT
+/F1 10 Tf
+48 219 Td
+(  - [ ] Validar datos) Tj
+ET
+BT
+/F1 10 Tf
+48 206 Td
+(  - [ ] Corregir o marcar errores) Tj
+ET
+BT
+/F1 10 Tf
+48 193 Td
+(  - [ ] Calcular) Tj
+ET
+BT
+/F1 10 Tf
+48 180 Td
+(  - [ ] Revisar resultado) Tj
+ET
+BT
+/F1 10 Tf
+48 167 Td
+(  - [ ] Exportar) Tj
+ET
+BT
+/F1 10 Tf
+48 154 Td
+(  - [ ] Registrar log si afecta datos) Tj
+ET
+BT
+/F1 10 Tf
+48 134 Td
+(Pendiente de decidir:) Tj
+ET
+BT
+/F1 10 Tf
+48 114 Td
+(  - [ ] Guardar historico completo de pedidos calculados) Tj
+ET
+BT
+/F1 10 Tf
+48 101 Td
+(  - [ ] Asociar calculos a proveedor y fecha) Tj
+ET
+BT
+/F1 10 Tf
+48 88 Td
+(  - [ ] Permitir plantillas por proveedor) Tj
+ET
+BT
+/F1 15 Tf
+48 62 Td
+(WooCommerce) Tj
+ET
+BT
+/F1 8 Tf
+48 28 Td
+(FutonHUB UI-ERP - Menu lateral - pagina 3/8) Tj
+ET
+endstream
+endobj
+9 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 19 0 R >> >> /Contents 10 0 R >>
+endobj
+10 0 obj
+<< /Length 3031 >>
+stream
+BT
+/F1 10 Tf
+48 786 Td
+(Ubicacion propuesta: Gestion > WooCommerce) Tj
+ET
+BT
+/F1 10 Tf
+48 766 Td
+(Debe contener:) Tj
+ET
+BT
+/F1 10 Tf
+48 746 Td
+(  - [ ] Estado de conexion WooCommerce) Tj
+ET
+BT
+/F1 10 Tf
+48 733 Td
+(  - [ ] Sincronizar productos desde WooCommerce) Tj
+ET
+BT
+/F1 10 Tf
+48 720 Td
+(  - [ ] Importar producto Woo concreto a Supabase) Tj
+ET
+BT
+/F1 10 Tf
+48 707 Td
+(  - [ ] Comparar local / Supabase / Woo) Tj
+ET
+BT
+/F1 10 Tf
+48 694 Td
+(  - [ ] Detectar diferencias) Tj
+ET
+BT
+/F1 10 Tf
+48 681 Td
+(  - [ ] Preview de sincronizacion) Tj
+ET
+BT
+/F1 10 Tf
+48 668 Td
+(  - [ ] Ver precio actual Woo) Tj
+ET
+BT
+/F1 10 Tf
+48 655 Td
+(  - [ ] Ver sale_price activo) Tj
+ET
+BT
+/F1 10 Tf
+48 642 Td
+(  - [ ] Revisar variaciones) Tj
+ET
+BT
+/F1 10 Tf
+48 629 Td
+(  - [ ] Incidencias de sincronizacion) Tj
+ET
+BT
+/F1 10 Tf
+48 616 Td
+(  - [ ] Logs de operaciones Woo) Tj
+ET
+BT
+/F1 10 Tf
+48 596 Td
+(Regla de separacion:) Tj
+ET
+BT
+/F1 10 Tf
+48 576 Td
+(  - [ ] Cambio de Precios prepara, aprueba y publica precios.) Tj
+ET
+BT
+/F1 10 Tf
+48 563 Td
+(  - [ ] WooCommerce gestiona estado, comparacion, importacion y sincronizacion de tienda.) Tj
+ET
+BT
+/F1 15 Tf
+48 537 Td
+(Proveedores) Tj
+ET
+BT
+/F1 10 Tf
+48 507 Td
+(Ubicacion propuesta: Gestion > Proveedores) Tj
+ET
+BT
+/F1 10 Tf
+48 487 Td
+(Debe contener:) Tj
+ET
+BT
+/F1 10 Tf
+48 467 Td
+(  - [ ] Ficha de proveedor) Tj
+ET
+BT
+/F1 10 Tf
+48 454 Td
+(  - [ ] Ekomat) Tj
+ET
+BT
+/F1 10 Tf
+48 441 Td
+(  - [ ] Pascal) Tj
+ET
+BT
+/F1 10 Tf
+48 428 Td
+(  - [ ] Heimei) Tj
+ET
+BT
+/F1 10 Tf
+48 415 Td
+(  - [ ] Cipta) Tj
+ET
+BT
+/F1 10 Tf
+48 402 Td
+(  - [ ] Especialidad) Tj
+ET
+BT
+/F1 10 Tf
+48 389 Td
+(  - [ ] Notas operativas) Tj
+ET
+BT
+/F1 10 Tf
+48 376 Td
+(  - [ ] Ultimo pedido) Tj
+ET
+BT
+/F1 10 Tf
+48 363 Td
+(  - [ ] Acceso directo a Calcular Pedido) Tj
+ET
+BT
+/F1 10 Tf
+48 350 Td
+(  - [ ] Futuras condiciones comerciales) Tj
+ET
+BT
+/F1 10 Tf
+48 337 Td
+(  - [ ] Contactos) Tj
+ET
+BT
+/F1 10 Tf
+48 324 Td
+(  - [ ] Documentos o plantillas) Tj
+ET
+BT
+/F1 10 Tf
+48 304 Td
+(Pendiente de decidir:) Tj
+ET
+BT
+/F1 10 Tf
+48 284 Td
+(  - [ ] Que datos son configuracion y que datos son informacion operativa) Tj
+ET
+BT
+/F1 10 Tf
+48 271 Td
+(  - [ ] Si los proveedores se editan desde UI o quedan fijos en v1) Tj
+ET
+BT
+/F1 15 Tf
+48 245 Td
+(Informes) Tj
+ET
+BT
+/F1 10 Tf
+48 215 Td
+(Ubicacion propuesta: Gestion > Informes) Tj
+ET
+BT
+/F1 10 Tf
+48 195 Td
+(Debe contener:) Tj
+ET
+BT
+/F1 10 Tf
+48 175 Td
+(  - [ ] Informe de propuesta de precios) Tj
+ET
+BT
+/F1 10 Tf
+48 162 Td
+(  - [ ] Informe de coste de pedido) Tj
+ET
+BT
+/F1 10 Tf
+48 149 Td
+(  - [ ] Informe de inventario) Tj
+ET
+BT
+/F1 10 Tf
+48 136 Td
+(  - [ ] Informe de incidencias WooCommerce) Tj
+ET
+BT
+/F1 10 Tf
+48 123 Td
+(  - [ ] Informe de auditoria/logs) Tj
+ET
+BT
+/F1 10 Tf
+48 110 Td
+(  - [ ] Filtros por fecha) Tj
+ET
+BT
+/F1 10 Tf
+48 97 Td
+(  - [ ] Filtros por modulo) Tj
+ET
+BT
+/F1 10 Tf
+48 84 Td
+(  - [ ] Preview) Tj
+ET
+BT
+/F1 10 Tf
+48 71 Td
+(  - [ ] Exportar Excel) Tj
+ET
+BT
+/F1 10 Tf
+48 58 Td
+(  - [ ] Exportar PDF) Tj
+ET
+BT
+/F1 8 Tf
+48 28 Td
+(FutonHUB UI-ERP - Menu lateral - pagina 4/8) Tj
+ET
+endstream
+endobj
+11 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 19 0 R >> >> /Contents 12 0 R >>
+endobj
+12 0 obj
+<< /Length 2820 >>
+stream
+BT
+/F1 10 Tf
+48 786 Td
+(  - [ ] Historico de exportaciones) Tj
+ET
+BT
+/F1 10 Tf
+48 766 Td
+(Pendiente de decidir:) Tj
+ET
+BT
+/F1 10 Tf
+48 746 Td
+(  - [ ] Que informes son obligatorios para v1) Tj
+ET
+BT
+/F1 10 Tf
+48 733 Td
+(  - [ ] Que exportaciones deben dejar log) Tj
+ET
+BT
+/F1 15 Tf
+48 707 Td
+(Configuracion) Tj
+ET
+BT
+/F1 10 Tf
+48 677 Td
+(Ubicacion propuesta: Sistema > Configuracion) Tj
+ET
+BT
+/F1 10 Tf
+48 657 Td
+(Pestanas propuestas:) Tj
+ET
+BT
+/F1 10 Tf
+48 637 Td
+(  - [ ] Generales) Tj
+ET
+BT
+/F1 10 Tf
+48 624 Td
+(  - [ ] Calculos) Tj
+ET
+BT
+/F1 10 Tf
+48 611 Td
+(  - [ ] Seguridad) Tj
+ET
+BT
+/F1 10 Tf
+48 591 Td
+(Debe contener:) Tj
+ET
+BT
+/F1 10 Tf
+48 571 Td
+(  - [ ] Entorno activo) Tj
+ET
+BT
+/F1 10 Tf
+48 558 Td
+(  - [ ] Modo supabase_guarded) Tj
+ET
+BT
+/F1 10 Tf
+48 545 Td
+(  - [ ] Rol local fallback) Tj
+ET
+BT
+/F1 10 Tf
+48 532 Td
+(  - [ ] Machine name) Tj
+ET
+BT
+/F1 10 Tf
+48 519 Td
+(  - [ ] Rutas de base local) Tj
+ET
+BT
+/F1 10 Tf
+48 506 Td
+(  - [ ] Conexiones Supabase) Tj
+ET
+BT
+/F1 10 Tf
+48 493 Td
+(  - [ ] Conexiones WooCommerce) Tj
+ET
+BT
+/F1 10 Tf
+48 480 Td
+(  - [ ] Constantes del negocio) Tj
+ET
+BT
+/F1 10 Tf
+48 467 Td
+(  - [ ] Umbrales de bajada de precio) Tj
+ET
+BT
+/F1 10 Tf
+48 454 Td
+(  - [ ] Backups) Tj
+ET
+BT
+/F1 10 Tf
+48 441 Td
+(  - [ ] Reglas de permisos) Tj
+ET
+BT
+/F1 10 Tf
+48 421 Td
+(Reglas:) Tj
+ET
+BT
+/F1 10 Tf
+48 401 Td
+(  - [ ] Cambios sensibles requieren preview) Tj
+ET
+BT
+/F1 10 Tf
+48 388 Td
+(  - [ ] Cambios sensibles dejan audit log) Tj
+ET
+BT
+/F1 10 Tf
+48 375 Td
+(  - [ ] Cambios que afecten calculos deben ser trazables) Tj
+ET
+BT
+/F1 15 Tf
+48 349 Td
+(Seguridad / Logs) Tj
+ET
+BT
+/F1 10 Tf
+48 319 Td
+(Ubicacion propuesta: Sistema > Seguridad / Logs) Tj
+ET
+BT
+/F1 10 Tf
+48 299 Td
+(Debe contener:) Tj
+ET
+BT
+/F1 10 Tf
+48 279 Td
+(  - [ ] Audit logs locales) Tj
+ET
+BT
+/F1 10 Tf
+48 266 Td
+(  - [ ] Audit logs cloud) Tj
+ET
+BT
+/F1 10 Tf
+48 253 Td
+(  - [ ] Operation snapshots) Tj
+ET
+BT
+/F1 10 Tf
+48 240 Td
+(  - [ ] Rollback desde snapshot) Tj
+ET
+BT
+/F1 10 Tf
+48 227 Td
+(  - [ ] Preview de rollback) Tj
+ET
+BT
+/F1 10 Tf
+48 214 Td
+(  - [ ] Locks locales) Tj
+ET
+BT
+/F1 10 Tf
+48 201 Td
+(  - [ ] Locks online RPC) Tj
+ET
+BT
+/F1 10 Tf
+48 188 Td
+(  - [ ] Diagnostico local) Tj
+ET
+BT
+/F1 10 Tf
+48 175 Td
+(  - [ ] Diagnostico cloud sin login) Tj
+ET
+BT
+/F1 10 Tf
+48 162 Td
+(  - [ ] Diagnostico cloud con login) Tj
+ET
+BT
+/F1 10 Tf
+48 149 Td
+(  - [ ] Estado operativo Supabase) Tj
+ET
+BT
+/F1 10 Tf
+48 136 Td
+(  - [ ] Herramientas admin) Tj
+ET
+BT
+/F1 10 Tf
+48 123 Td
+(  - [ ] Limpieza de datos TEST) Tj
+ET
+BT
+/F1 10 Tf
+48 110 Td
+(  - [ ] Backups y restauracion si se decide ubicar aqui) Tj
+ET
+BT
+/F1 10 Tf
+48 90 Td
+(Flujo rollback:) Tj
+ET
+BT
+/F1 10 Tf
+48 70 Td
+(  - [ ] Listar snapshots) Tj
+ET
+BT
+/F1 10 Tf
+48 57 Td
+(  - [ ] Elegir operation_id) Tj
+ET
+BT
+/F1 8 Tf
+48 28 Td
+(FutonHUB UI-ERP - Menu lateral - pagina 5/8) Tj
+ET
+endstream
+endobj
+13 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 19 0 R >> >> /Contents 14 0 R >>
+endobj
+14 0 obj
+<< /Length 2611 >>
+stream
+BT
+/F1 10 Tf
+48 786 Td
+(  - [ ] Generar preview) Tj
+ET
+BT
+/F1 10 Tf
+48 773 Td
+(  - [ ] Confirmar REVERTIR) Tj
+ET
+BT
+/F1 10 Tf
+48 760 Td
+(  - [ ] Aplicar Supabase) Tj
+ET
+BT
+/F1 10 Tf
+48 747 Td
+(  - [ ] Guardar snapshot/log de rollback) Tj
+ET
+BT
+/F1 10 Tf
+48 734 Td
+(  - [ ] Mostrar resultado) Tj
+ET
+BT
+/F1 10 Tf
+48 714 Td
+(Roles:) Tj
+ET
+BT
+/F1 10 Tf
+48 694 Td
+(  - [ ] Admin: acceso completo) Tj
+ET
+BT
+/F1 10 Tf
+48 681 Td
+(  - [ ] Worker: acceso limitado o solo trazabilidad propia) Tj
+ET
+BT
+/F1 15 Tf
+48 655 Td
+(Login y permisos) Tj
+ET
+BT
+/F1 10 Tf
+48 625 Td
+(No es una opcion del menu, pero condiciona toda la UI.) Tj
+ET
+BT
+/F1 10 Tf
+48 605 Td
+(Debe contener:) Tj
+ET
+BT
+/F1 10 Tf
+48 585 Td
+(  - [ ] Popup antes de mostrar ERP) Tj
+ET
+BT
+/F1 10 Tf
+48 572 Td
+(  - [ ] Usuario) Tj
+ET
+BT
+/F1 10 Tf
+48 559 Td
+(  - [ ] Contrasena) Tj
+ET
+BT
+/F1 10 Tf
+48 546 Td
+(  - [ ] Boton Aceptar) Tj
+ET
+BT
+/F1 10 Tf
+48 533 Td
+(  - [ ] Boton Cancelar) Tj
+ET
+BT
+/F1 10 Tf
+48 520 Td
+(  - [ ] Enter para aceptar) Tj
+ET
+BT
+/F1 10 Tf
+48 507 Td
+(  - [ ] Escape para cancelar) Tj
+ET
+BT
+/F1 10 Tf
+48 494 Td
+(  - [ ] Popup de validando usuario) Tj
+ET
+BT
+/F1 10 Tf
+48 481 Td
+(  - [ ] Lectura de rol cloud) Tj
+ET
+BT
+/F1 10 Tf
+48 468 Td
+(  - [ ] Registro de dispositivo visto) Tj
+ET
+BT
+/F1 10 Tf
+48 455 Td
+(  - [ ] Topbar con Online + rol) Tj
+ET
+BT
+/F1 10 Tf
+48 442 Td
+(  - [ ] Ocultar modulos no permitidos) Tj
+ET
+BT
+/F1 10 Tf
+48 429 Td
+(  - [ ] Bloquear herramientas si no hay sesion) Tj
+ET
+BT
+/F1 15 Tf
+48 403 Td
+(Estados oficiales) Tj
+ET
+BT
+/F1 10 Tf
+48 373 Td
+(  - [ ] OK) Tj
+ET
+BT
+/F1 10 Tf
+48 360 Td
+(  - [ ] Info) Tj
+ET
+BT
+/F1 10 Tf
+48 347 Td
+(  - [ ] Warning) Tj
+ET
+BT
+/F1 10 Tf
+48 334 Td
+(  - [ ] Error) Tj
+ET
+BT
+/F1 10 Tf
+48 321 Td
+(  - [ ] Critical) Tj
+ET
+BT
+/F1 10 Tf
+48 301 Td
+(Uso:) Tj
+ET
+BT
+/F1 10 Tf
+48 281 Td
+(  - [ ] Dashboard) Tj
+ET
+BT
+/F1 10 Tf
+48 268 Td
+(  - [ ] Tablas) Tj
+ET
+BT
+/F1 10 Tf
+48 255 Td
+(  - [ ] Chips) Tj
+ET
+BT
+/F1 10 Tf
+48 242 Td
+(  - [ ] Previews) Tj
+ET
+BT
+/F1 10 Tf
+48 229 Td
+(  - [ ] Logs) Tj
+ET
+BT
+/F1 10 Tf
+48 216 Td
+(  - [ ] Validaciones) Tj
+ET
+BT
+/F1 10 Tf
+48 196 Td
+(Regla:) Tj
+ET
+BT
+/F1 10 Tf
+48 176 Td
+(  - [ ] Critical bloquea siempre la operacion completa.) Tj
+ET
+BT
+/F1 15 Tf
+48 150 Td
+(Acciones criticas) Tj
+ET
+BT
+/F1 10 Tf
+48 120 Td
+(Checklist obligatorio:) Tj
+ET
+BT
+/F1 10 Tf
+48 100 Td
+(  - [ ] Preparar datos) Tj
+ET
+BT
+/F1 10 Tf
+48 87 Td
+(  - [ ] Validar) Tj
+ET
+BT
+/F1 10 Tf
+48 74 Td
+(  - [ ] Preview) Tj
+ET
+BT
+/F1 10 Tf
+48 61 Td
+(  - [ ] Confirmacion) Tj
+ET
+BT
+/F1 10 Tf
+48 48 Td
+(  - [ ] Ejecucion protegida) Tj
+ET
+BT
+/F1 8 Tf
+48 28 Td
+(FutonHUB UI-ERP - Menu lateral - pagina 6/8) Tj
+ET
+endstream
+endobj
+15 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 19 0 R >> >> /Contents 16 0 R >>
+endobj
+16 0 obj
+<< /Length 2646 >>
+stream
+BT
+/F1 10 Tf
+48 786 Td
+(  - [ ] Resultado visible) Tj
+ET
+BT
+/F1 10 Tf
+48 773 Td
+(  - [ ] Audit log) Tj
+ET
+BT
+/F1 10 Tf
+48 760 Td
+(  - [ ] Snapshot cuando aplique) Tj
+ET
+BT
+/F1 10 Tf
+48 740 Td
+(Acciones criticas identificadas:) Tj
+ET
+BT
+/F1 10 Tf
+48 720 Td
+(  - [ ] Publicar precio WooCommerce) Tj
+ET
+BT
+/F1 10 Tf
+48 707 Td
+(  - [ ] Rollback) Tj
+ET
+BT
+/F1 10 Tf
+48 694 Td
+(  - [ ] Cambio stock interno) Tj
+ET
+BT
+/F1 10 Tf
+48 681 Td
+(  - [ ] Migracion SQLite a Supabase) Tj
+ET
+BT
+/F1 10 Tf
+48 668 Td
+(  - [ ] Importacion masiva) Tj
+ET
+BT
+/F1 10 Tf
+48 655 Td
+(  - [ ] Sincronizacion masiva WooCommerce) Tj
+ET
+BT
+/F1 10 Tf
+48 642 Td
+(  - [ ] Cambios de constantes sensibles) Tj
+ET
+BT
+/F1 10 Tf
+48 629 Td
+(  - [ ] Restaurar backup) Tj
+ET
+BT
+/F1 15 Tf
+48 603 Td
+(Modulos futuros a reservar) Tj
+ET
+BT
+/F1 10 Tf
+48 573 Td
+(Ideas para no cerrar la arquitectura:) Tj
+ET
+BT
+/F1 10 Tf
+48 553 Td
+(  - [ ] Pedidos) Tj
+ET
+BT
+/F1 10 Tf
+48 540 Td
+(  - [ ] Clientes) Tj
+ET
+BT
+/F1 10 Tf
+48 527 Td
+(  - [ ] Compras) Tj
+ET
+BT
+/F1 10 Tf
+48 514 Td
+(  - [ ] Ventas) Tj
+ET
+BT
+/F1 10 Tf
+48 501 Td
+(  - [ ] Facturacion) Tj
+ET
+BT
+/F1 10 Tf
+48 488 Td
+(  - [ ] Tareas internas) Tj
+ET
+BT
+/F1 10 Tf
+48 475 Td
+(  - [ ] Documentos) Tj
+ET
+BT
+/F1 10 Tf
+48 462 Td
+(  - [ ] Incidencias) Tj
+ET
+BT
+/F1 10 Tf
+48 449 Td
+(  - [ ] Analitica) Tj
+ET
+BT
+/F1 10 Tf
+48 436 Td
+(  - [ ] Integraciones externas) Tj
+ET
+BT
+/F1 15 Tf
+48 410 Td
+(Tabla de decision manual) Tj
+ET
+BT
+/F1 10 Tf
+48 380 Td
+(Usar esta tabla para marcar a mano en el PDF.) Tj
+ET
+BT
+/F1 10 Tf
+48 360 Td
+(Modulo / funcion:) Tj
+ET
+BT
+/F1 10 Tf
+48 340 Td
+(Ubicacion final:) Tj
+ET
+BT
+/F1 10 Tf
+48 320 Td
+(Rol Admin:) Tj
+ET
+BT
+/F1 10 Tf
+48 300 Td
+(Rol Worker:) Tj
+ET
+BT
+/F1 10 Tf
+48 280 Td
+(Prioridad: Alta / Media / Baja) Tj
+ET
+BT
+/F1 10 Tf
+48 260 Td
+(Estado: Implementado / Parcial / Pendiente / Futuro) Tj
+ET
+BT
+/F1 10 Tf
+48 240 Td
+(Accion critica: Si / No) Tj
+ET
+BT
+/F1 10 Tf
+48 220 Td
+(Necesita preview: Si / No) Tj
+ET
+BT
+/F1 10 Tf
+48 200 Td
+(Necesita audit log: Si / No) Tj
+ET
+BT
+/F1 10 Tf
+48 180 Td
+(Notas:) Tj
+ET
+BT
+/F1 15 Tf
+48 154 Td
+(Orden recomendado para implementar UI real) Tj
+ET
+BT
+/F1 10 Tf
+48 124 Td
+(  - [ ] Cerrar estructura del menu lateral) Tj
+ET
+BT
+/F1 10 Tf
+48 111 Td
+(  - [ ] Definir permisos por modulo) Tj
+ET
+BT
+/F1 10 Tf
+48 98 Td
+(  - [ ] Conectar Dashboard a diagnosticos reales) Tj
+ET
+BT
+/F1 10 Tf
+48 85 Td
+(  - [ ] Conectar Inventario en modo lectura) Tj
+ET
+BT
+/F1 10 Tf
+48 72 Td
+(  - [ ] Conectar Cambio de Precios en modo lectura/propuesta) Tj
+ET
+BT
+/F1 10 Tf
+48 59 Td
+(  - [ ] Conectar Seguridad / Logs en modo lectura) Tj
+ET
+BT
+/F1 8 Tf
+48 28 Td
+(FutonHUB UI-ERP - Menu lateral - pagina 7/8) Tj
+ET
+endstream
+endobj
+17 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 19 0 R >> >> /Contents 18 0 R >>
+endobj
+18 0 obj
+<< /Length 364 >>
+stream
+BT
+/F1 10 Tf
+48 786 Td
+(  - [ ] Activar acciones con preview y confirmacion) Tj
+ET
+BT
+/F1 10 Tf
+48 773 Td
+(  - [ ] Migrar Calcular Pedido a modulo ERP) Tj
+ET
+BT
+/F1 10 Tf
+48 760 Td
+(  - [ ] Refinar Informes y Proveedores) Tj
+ET
+BT
+/F1 10 Tf
+48 747 Td
+(  - [ ] Preparar modulos futuros) Tj
+ET
+BT
+/F1 8 Tf
+48 28 Td
+(FutonHUB UI-ERP - Menu lateral - pagina 8/8) Tj
+ET
+endstream
+endobj
+19 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+xref
+0 20
+0000000000 65535 f 
+0000000015 00000 n 
+0000000064 00000 n 
+0000000167 00000 n 
+0000000294 00000 n 
+0000003215 00000 n 
+0000003342 00000 n 
+0000006355 00000 n 
+0000006482 00000 n 
+0000009577 00000 n 
+0000009705 00000 n 
+0000012789 00000 n 
+0000012918 00000 n 
+0000015791 00000 n 
+0000015920 00000 n 
+0000018584 00000 n 
+0000018713 00000 n 
+0000021412 00000 n 
+0000021541 00000 n 
+0000021957 00000 n 
+trailer
+<< /Size 20 /Root 1 0 R >>
+startxref
+22028
+%%EOF

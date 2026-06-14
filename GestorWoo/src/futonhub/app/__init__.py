@@ -1,0 +1,1 @@
+"""Entradas de aplicacion FutonHUB."""

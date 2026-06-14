@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>FutonHUB - WooCommerce v1</title>
+<style>
+:root{
+  --bg:#f8fafc;--card:#fff;--line:#e2e8f0;--soft:#f1f5f9;--text:#0f172a;--muted:#64748b;
+  --indigo:#4f46e5;--indigo-bg:#eef2ff;--green:#059669;--green-bg:#ecfdf5;--blue:#2563eb;--blue-bg:#eff6ff;
+  --amber:#d97706;--amber-bg:#fffbeb;--orange:#ea580c;--orange-bg:#fff7ed;--rose:#e11d48;--rose-bg:#fff1f2;
+  --shadow:0 10px 25px rgba(15,23,42,.055);--radius:24px;
+}
+*{box-sizing:border-box}
+body{margin:0;font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:var(--bg);color:var(--text)}
+.workspace{min-height:100vh;max-width:1540px;margin:0 auto;padding:28px}
+.page-head,.top-row,.card-head{display:flex;align-items:center;justify-content:space-between;gap:16px}
+.page-head{margin-bottom:20px}
+h1{margin:0;font-size:32px;line-height:1.15;letter-spacing:-.04em}
+h2{margin:0;font-size:18px;font-weight:820;letter-spacing:-.02em}
+p{margin:0;color:var(--muted);line-height:1.45}
+.btn{height:44px;border:1px solid var(--line);background:white;color:#334155;padding:0 14px;border-radius:16px;font-weight:750;cursor:pointer;box-shadow:0 6px 16px rgba(15,23,42,.035);display:inline-flex;align-items:center;justify-content:center;gap:8px;white-space:nowrap}
+.btn.primary{background:var(--indigo);border-color:var(--indigo);color:white}
+.btn.danger{background:var(--rose);border-color:var(--rose);color:white}
+.btn-row{display:flex;gap:10px;flex-wrap:wrap}
+.status{display:inline-flex;border:1px solid;border-radius:999px;padding:5px 10px;font-size:12px;font-weight:800;white-space:nowrap}
+.ok{background:var(--green-bg);color:var(--green);border-color:#bbf7d0}
+.info{background:var(--blue-bg);color:var(--blue);border-color:#bfdbfe}
+.warning{background:var(--amber-bg);color:var(--amber);border-color:#fde68a}
+.error{background:var(--orange-bg);color:var(--orange);border-color:#fed7aa}
+.critical{background:var(--rose-bg);color:var(--rose);border-color:#fecdd3}
+.top-row{display:grid;grid-template-columns:1fr auto;margin-bottom:20px}
+.search-box{height:50px;display:flex;align-items:center;gap:12px;border:1px solid var(--line);border-radius:18px;background:white;padding:0 16px;box-shadow:0 6px 16px rgba(15,23,42,.035);color:#94a3b8}
+.search-box input{width:100%;border:none;outline:none;background:transparent;font-size:14px;color:#334155}
+.summary-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:20px}
+.summary{background:white;border:1px solid var(--line);border-radius:20px;box-shadow:var(--shadow);padding:16px}
+.summary .k{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);font-weight:850}
+.summary .v{margin-top:8px;font-size:24px;color:#1e293b;font-weight:900;letter-spacing:-.03em}
+.layout{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(360px,.65fr);gap:20px;align-items:stretch}
+.card{background:white;border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);overflow:hidden}
+.card-head{padding:18px 20px;border-bottom:1px solid var(--soft)}
+.table-card,.side-card{height:720px;display:flex;flex-direction:column}
+.table-wrap{overflow:auto;min-height:0;flex:1}
+table{width:100%;border-collapse:collapse;min-width:1180px;text-align:left;font-size:14px}
+th{background:#f8fafc;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;font-size:12px;padding:13px 16px;border-bottom:1px solid var(--soft);white-space:nowrap}
+td{padding:15px 16px;border-bottom:1px solid var(--soft);color:#475569}
+tr:hover td{background:#f8fafc}
+tr.selected td{background:rgba(79,70,229,.045)}
+td.strong{font-weight:800;color:#1e293b}
+.diff-up{color:var(--green);font-weight:850}
+.diff-down{color:var(--rose);font-weight:850}
+.side-scroll{min-height:0;flex:1;overflow:auto;padding:18px}
+.detail-title{display:grid;gap:6px;margin-bottom:16px}
+.detail-row{display:flex;align-items:center;justify-content:space-between;gap:12px;border:1px solid var(--soft);background:#f8fafc;border-radius:16px;padding:12px 13px;margin-bottom:10px}
+.detail-row .label{font-size:13px;color:var(--muted)}
+.detail-row .value{font-size:14px;font-weight:850;color:#1e293b;text-align:right}
+.warning-box{border:1px solid #fde68a;background:var(--amber-bg);color:#92400e;border-radius:18px;padding:14px;font-size:14px;line-height:1.45;margin-top:14px}
+.preview-list{display:grid;gap:10px;margin-top:14px}
+.preview-item{border:1px solid var(--soft);background:#f8fafc;border-radius:16px;padding:12px;display:grid;gap:6px}
+.preview-item strong{color:#1e293b;font-size:14px}
+.preview-item span{color:var(--muted);font-size:13px}
+.side-actions{border-top:1px solid var(--soft);background:white;padding:16px 18px;display:grid;gap:12px;box-shadow:0 -10px 22px rgba(15,23,42,.035)}
+.bottom-two{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.flow{margin-top:20px;background:white;border:1px solid var(--line);border-radius:24px;box-shadow:var(--shadow);padding:16px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.flow-step{height:36px;display:inline-flex;align-items:center;border:1px solid var(--line);background:#f8fafc;border-radius:999px;padding:0 12px;font-size:12px;color:#475569;font-weight:850}
+.flow-step.active{border-color:#c7d2fe;background:var(--indigo-bg);color:#4338ca}
+.flow-step.blocked{border-color:#fecdd3;background:var(--rose-bg);color:var(--rose)}
+.modal-overlay{position:fixed;inset:0;background:rgba(15,23,42,.45);backdrop-filter:blur(8px);z-index:80;display:none;align-items:center;justify-content:center;padding:20px}
+.modal-overlay.open{display:flex}
+.modal{width:min(720px,100%);background:white;border:1px solid var(--line);border-radius:28px;box-shadow:0 28px 80px rgba(15,23,42,.26);overflow:hidden}
+.modal-head{padding:22px;border-bottom:1px solid var(--soft);display:flex;justify-content:space-between;gap:16px;align-items:flex-start}
+.modal-body{padding:22px;display:grid;gap:14px}
+.modal-actions{padding:16px 22px;border-top:1px solid var(--soft);display:flex;justify-content:flex-end;gap:10px;background:#f8fafc}
+.close-btn{height:42px;border:1px solid var(--line);background:white;color:#334155;padding:0 14px;border-radius:16px;font-weight:800;cursor:pointer;box-shadow:0 6px 16px rgba(15,23,42,.035)}
+.confirm-input{height:46px;border:1px solid var(--line);background:white;border-radius:16px;padding:0 14px;font-size:14px}
+@media(max-width:1250px){.layout{grid-template-columns:1fr}.table-card,.side-card{height:auto;min-height:620px}}
+@media(max-width:900px){.summary-grid{grid-template-columns:1fr 1fr}.top-row{grid-template-columns:1fr}}
+@media(max-width:760px){.workspace{padding:16px}.page-head{align-items:flex-start;flex-direction:column}h1{font-size:28px}.summary-grid,.bottom-two{grid-template-columns:1fr}.btn,.close-btn{width:100%}.modal-actions{flex-direction:column}}
+</style>
+</head>
+<body>
+<main class="workspace">
+  <section class="page-head">
+    <h1>WooCommerce</h1>
+    <div class="btn-row">
+      <button class="btn primary">Leer WooCommerce</button>
+      <button class="btn">Actualizar base de datos</button>
+      <button class="btn">Auto-clasificar</button>
+    </div>
+  </section>
+
+  <section class="top-row">
+    <div class="search-box"><span>⌕</span><input placeholder="Buscar producto, ID, SKU o diferencia..." /></div>
+    <button class="btn">Exportar incidencias</button>
+  </section>
+
+  <section class="summary-grid">
+    <article class="summary"><div class="k">API Woo</div><div class="v">OK</div></article>
+    <article class="summary"><div class="k">Cambios detectados</div><div class="v">27</div></article>
+    <article class="summary"><div class="k">Sin clasificar</div><div class="v">14</div></article>
+    <article class="summary"><div class="k">Incidencias</div><div class="v">3</div></article>
+  </section>
+
+  <section class="layout">
+    <article class="card table-card">
+      <div class="card-head"><h2>Actualización local desde Woo</h2><span class="status warning">Cambios detectados</span></div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>ID local</th><th>ID Woo</th><th>Nombre</th><th>Campo</th><th>Base local</th><th>WooCommerce</th><th>Diferencia</th><th>Clasificación</th><th>Acción</th><th>Estado</th></tr>
+          </thead>
+          <tbody>
+            <tr class="selected"><td class="strong">FUT-ALG-140</td><td>3841</td><td>Futón algodón 140x200</td><td>Precio</td><td class="strong">249,00 €</td><td>269,00 €</td><td class="diff-up">Woo +20,00 €</td><td>Futones · Algodón</td><td>Actualizar local</td><td><span class="status warning">Warning</span></td></tr>
+            <tr><td class="strong">TAT-160</td><td>4102</td><td>Tatami 160x200</td><td>Stock</td><td class="strong">2</td><td>3</td><td class="diff-up">Woo +1</td><td>Tatamis</td><td>Actualizar local</td><td><span class="status info">Info</span></td></tr>
+            <tr><td class="strong">SOFA-IND-01</td><td>611</td><td>Sofá cama individual</td><td>Familia</td><td class="strong">Sin definir</td><td>Sofá cama</td><td>Clasificación nueva</td><td>Sofá camas</td><td>Auto-clasificar</td><td><span class="status warning">Warning</span></td></tr>
+            <tr><td class="strong">FUNDA-90</td><td>5120</td><td>Funda futón 90 cm</td><td>Material / grupo</td><td class="strong">Sin clasificar</td><td>Funda algodón</td><td>Clasificación nueva</td><td>Complementos · Fundas</td><td>Auto-clasificar</td><td><span class="status ok">OK</span></td></tr>
+            <tr><td class="strong">PORT-001</td><td>5201</td><td>Futón portátil plegable</td><td>Familia</td><td class="strong">Fundas</td><td>Futón portátil</td><td>Posible mala familia</td><td>Revisar manual</td><td>Revisar</td><td><span class="status error">Error</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </article>
+
+    <aside class="card side-card">
+      <div class="card-head"><h2>Detalle</h2><span class="status warning">Actualización local</span></div>
+      <div class="side-scroll">
+        <div class="detail-title"><h2>Futón algodón 140x200</h2><p>FUT-ALG-140 · Woo ID 3841</p></div>
+        <div class="detail-row"><div class="label">Campo</div><div class="value">Precio</div></div>
+        <div class="detail-row"><div class="label">Base local</div><div class="value">249,00 €</div></div>
+        <div class="detail-row"><div class="label">WooCommerce</div><div class="value">269,00 €</div></div>
+        <div class="detail-row"><div class="label">Clasificación</div><div class="value">Futones · Algodón</div></div>
+        <div class="detail-row"><div class="label">Acción</div><div class="value">Actualizar local</div></div>
+        <div class="detail-row"><div class="label">Estado</div><div class="value"><span class="status warning">Warning</span></div></div>
+        <div class="warning-box">Esta sección está pensada para mantener la base local actualizada desde WooCommerce y mejorar la organización interna mediante auto-clasificación.</div>
+        <div class="preview-list">
+          <div class="preview-item"><strong>Actualizar base de datos</strong><span>Trae cambios detectados desde WooCommerce hacia la base local del HUB.</span></div>
+          <div class="preview-item"><strong>Auto-clasificar</strong><span>Propone familia, subgrupo, materiales y medidas usando nombre, atributos y variaciones.</span></div>
+          <div class="preview-item"><strong>Revisión manual</strong><span>Los casos dudosos quedan marcados para revisión antes de guardarse.</span></div>
+        </div>
+      </div>
+      <footer class="side-actions">
+        <button class="btn primary">Actualizar base de datos</button>
+        <div class="bottom-two">
+          <button class="btn">Auto-clasificar</button>
+          <button class="btn">Revisar manual</button>
+        </div>
+      </footer>
+    </aside>
+  </section>
+
+  </main>
+
+<section class="modal-overlay" id="confirmModal">
+  <div class="modal">
+    <header class="modal-head">
+      <div><h2>Aplicar cambios en WooCommerce</h2><p>Esta acción modifica la web real. Requiere ausencia de Critical y confirmación explícita.</p></div>
+      <button class="close-btn" onclick="closeConfirmModal()">Cerrar ✕</button>
+    </header>
+    <div class="modal-body">
+      <div class="warning-box" style="margin:0">Hay 1 Critical activo. La operación queda bloqueada hasta resolverlo.</div>
+      <input class="confirm-input" placeholder='Escribir "CONFIRMAR" cuando esté permitido' />
+    </div>
+    <footer class="modal-actions">
+      <button class="btn" onclick="closeConfirmModal()">Cancelar</button>
+      <button class="btn danger">Aplicar bloqueado</button>
+    </footer>
+  </div>
+</section>
+
+<script>
+function openConfirmModal(){document.getElementById('confirmModal').classList.add('open');}
+function closeConfirmModal(){document.getElementById('confirmModal').classList.remove('open');}
+</script>
+</body>
+</html>

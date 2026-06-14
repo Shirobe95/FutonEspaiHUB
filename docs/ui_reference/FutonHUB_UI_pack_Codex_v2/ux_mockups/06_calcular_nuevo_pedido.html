@@ -1,0 +1,582 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>FutonHUB - Calcular nuevo pedido v1.1</title>
+<style>
+:root{
+  --bg:#f8fafc;--card:#fff;--line:#e2e8f0;--soft:#f1f5f9;--text:#0f172a;--muted:#64748b;
+  --indigo:#4f46e5;--indigo-bg:#eef2ff;--green:#059669;--green-bg:#ecfdf5;--blue:#2563eb;--blue-bg:#eff6ff;
+  --amber:#d97706;--amber-bg:#fffbeb;--orange:#ea580c;--orange-bg:#fff7ed;--shadow:0 10px 25px rgba(15,23,42,.055);--radius:24px;
+}
+*{box-sizing:border-box}
+body{
+  margin:0;
+  font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  background:var(--bg);
+  color:var(--text);
+}
+.workspace{
+  min-height:100vh;
+  max-width:1560px;
+  margin:0 auto;
+  padding:28px;
+}
+.page-head{
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  gap:16px;
+  margin-bottom:20px;
+}
+h1{
+  margin:0;
+  font-size:32px;
+  line-height:1.15;
+  letter-spacing:-.04em;
+}
+h2{
+  margin:0;
+  font-size:18px;
+  font-weight:820;
+  letter-spacing:-.02em;
+}
+h3{
+  margin:0;
+  font-size:16px;
+  font-weight:850;
+  letter-spacing:-.02em;
+}
+p{
+  margin:0;
+  color:var(--muted);
+  line-height:1.45;
+}
+.btn{
+  height:44px;
+  border:1px solid var(--line);
+  background:white;
+  color:#334155;
+  padding:0 14px;
+  border-radius:16px;
+  font-weight:750;
+  cursor:pointer;
+  box-shadow:0 6px 16px rgba(15,23,42,.035);
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  gap:8px;
+  white-space:nowrap;
+}
+.btn.primary{background:var(--indigo);border-color:var(--indigo);color:white}
+.btn.ok{background:var(--green);border-color:var(--green);color:white}
+.btn-row{display:flex;gap:10px;flex-wrap:wrap}
+.layout{
+  display:grid;
+  grid-template-columns:minmax(390px,.8fr) minmax(760px,1.2fr);
+  gap:20px;
+  align-items:stretch;
+}
+.column{
+  display:grid;
+  gap:20px;
+  align-content:start;
+}
+.card{
+  background:var(--card);
+  border:1px solid var(--line);
+  border-radius:var(--radius);
+  box-shadow:var(--shadow);
+  overflow:hidden;
+}
+.card-head{
+  padding:18px 20px;
+  border-bottom:1px solid var(--soft);
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:14px;
+}
+.section-pad{padding:18px}
+.status{
+  display:inline-flex;
+  border:1px solid;
+  border-radius:999px;
+  padding:5px 10px;
+  font-size:12px;
+  font-weight:800;
+  white-space:nowrap;
+}
+.status-info{background:var(--blue-bg);color:var(--blue);border-color:#bfdbfe}
+.status-ok{background:var(--green-bg);color:var(--green);border-color:#bbf7d0}
+.status-warning{background:var(--amber-bg);color:var(--amber);border-color:#fde68a}
+
+.compact-upload{
+  display:grid;
+  gap:12px;
+}
+.upload-row{
+  display:grid;
+  grid-template-columns:auto 1fr auto;
+  gap:10px;
+  align-items:center;
+}
+.file-chip{
+  min-height:44px;
+  border:1px solid var(--line);
+  background:#f8fafc;
+  border-radius:16px;
+  padding:0 14px;
+  display:flex;
+  align-items:center;
+  color:#334155;
+  font-weight:700;
+  overflow:hidden;
+}
+.file-name{
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+}
+.file-type{
+  height:32px;
+  padding:0 10px;
+  border-radius:12px;
+  border:1px solid #c7d2fe;
+  background:var(--indigo-bg);
+  color:#4338ca;
+  font-size:12px;
+  font-weight:850;
+  display:flex;
+  align-items:center;
+}
+.form-grid{
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:12px;
+}
+.field{
+  display:grid;
+  gap:7px;
+}
+.field.full{grid-column:1/-1}
+.label{
+  font-size:11px;
+  color:var(--muted);
+  text-transform:uppercase;
+  letter-spacing:.08em;
+  font-weight:850;
+}
+.input,.select{
+  width:100%;
+  height:44px;
+  border:1px solid var(--line);
+  background:white;
+  border-radius:15px;
+  padding:0 12px;
+  font-size:14px;
+  color:#334155;
+}
+.note{
+  border:1px solid #e2e8f0;
+  background:#f8fafc;
+  border-radius:16px;
+  padding:12px;
+  color:#475569;
+  font-size:13px;
+}
+.note strong{color:#1e293b}
+.summary-grid{
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:10px;
+}
+.summary{
+  border:1px solid var(--soft);
+  background:#f8fafc;
+  border-radius:16px;
+  padding:10px 11px;
+}
+.summary .k{
+  font-size:10px;
+  text-transform:uppercase;
+  letter-spacing:.08em;
+  font-weight:800;
+  color:var(--muted);
+}
+.summary .v{
+  font-size:18px;
+  font-weight:850;
+  color:#1e293b;
+  margin-top:5px;
+}
+.right-card{
+  min-height:860px;
+  display:flex;
+  flex-direction:column;
+}
+.table-wrap{
+  overflow:auto;
+  min-height:0;
+  flex:1;
+}
+table{
+  width:100%;
+  border-collapse:collapse;
+  min-width:1640px;
+  text-align:left;
+  font-size:13px;
+}
+th{
+  background:#f8fafc;
+  color:var(--muted);
+  text-transform:uppercase;
+  letter-spacing:.06em;
+  font-size:11px;
+  padding:13px 14px;
+  border-bottom:1px solid var(--soft);
+  white-space:nowrap;
+}
+td{
+  padding:13px 14px;
+  border-bottom:1px solid var(--soft);
+  color:#475569;
+  white-space:nowrap;
+}
+tr:hover td{background:#f8fafc}
+td.strong{font-weight:820;color:#1e293b}
+.warn{color:var(--amber);font-weight:820}
+.err{color:var(--orange);font-weight:820}
+.ok{color:var(--green);font-weight:820}
+.footer-summary{
+  border-top:1px solid var(--soft);
+  background:white;
+  padding:16px 18px;
+  display:grid;
+  gap:12px;
+}
+.footer-values{
+  display:grid;
+  grid-template-columns:repeat(4,1fr);
+  gap:10px;
+}
+.value-card{
+  border:1px solid var(--soft);
+  background:#f8fafc;
+  border-radius:16px;
+  padding:10px 11px;
+}
+.value-card .k{
+  font-size:10px;
+  text-transform:uppercase;
+  letter-spacing:.08em;
+  font-weight:850;
+  color:var(--muted);
+}
+.value-card .v{
+  margin-top:5px;
+  font-size:16px;
+  font-weight:850;
+  color:#1e293b;
+}
+@media(max-width:1280px){
+  .layout{grid-template-columns:1fr}
+}
+@media(max-width:900px){
+  .form-grid,.summary-grid,.footer-values{grid-template-columns:1fr}
+}
+@media(max-width:760px){
+  .workspace{padding:16px}
+  .page-head{flex-direction:column;align-items:flex-start}
+  h1{font-size:28px}
+  .upload-row{grid-template-columns:1fr}
+  .btn{width:100%}
+}
+</style>
+</head>
+<body>
+<main class="workspace">
+  <section class="page-head">
+    <h1>Calcular nuevo pedido</h1>
+    <div class="btn-row">
+      <button class="btn">Cancelar</button>
+      <button class="btn ok">Guardar pedido</button>
+      <button class="btn primary">Exportar</button>
+    </div>
+  </section>
+
+  <section class="layout">
+    <section class="column">
+      <article class="card">
+        <div class="card-head">
+          <h2>Pedido</h2>
+          <span class="status status-info">Proveedor: Heimei</span>
+        </div>
+        <div class="section-pad" style="display:grid;gap:16px">
+          <div class="compact-upload">
+            <div class="upload-row">
+              <button class="btn">Cargar pedido</button>
+              <div class="file-chip"><span class="file-name">pedido_heimei_mayo.xlsx</span></div>
+              <div class="file-type">XLSX</div>
+            </div>
+          </div>
+
+          <div class="form-grid">
+            <div class="field">
+              <label class="label">Nombre del pedido</label>
+              <input class="input" value="PED-HEI-029" />
+            </div>
+            <div class="field">
+              <label class="label">Fecha</label>
+              <input class="input" value="31/05/2026" />
+            </div>
+            <div class="field">
+              <label class="label">Rentabilidad</label>
+              <select class="select">
+                <option>Desactivada</option>
+                <option>Porcentaje</option>
+                <option>Precio final</option>
+              </select>
+            </div>
+            <div class="field">
+              <label class="label">Valor rentabilidad</label>
+              <input class="input" placeholder="Opcional" />
+            </div>
+
+            <div class="field">
+              <label class="label">Precio en Dólares</label>
+              <input class="input" value="3945" />
+            </div>
+            <div class="field">
+              <label class="label">Precio pagado en Euros</label>
+              <input class="input" value="3620" />
+            </div>
+            <div class="field">
+              <label class="label">Factura transporte</label>
+              <input class="input" value="412" />
+            </div>
+            <div class="field">
+              <label class="label">Derechos aranceles</label>
+              <input class="input" value="326" />
+            </div>
+            <div class="field">
+              <label class="label">% Transporte</label>
+              <input class="input" value="10" />
+            </div>
+            <div class="field">
+              <label class="label">% Descarga</label>
+              <input class="input" value="3" />
+            </div>
+            <div class="field">
+              <label class="label">% Varios</label>
+              <input class="input" value="1" />
+            </div>
+            <div class="field">
+              <label class="label">% Manipulación</label>
+              <input class="input" value="2" />
+            </div>
+            <div class="field">
+              <label class="label">% Financiación</label>
+              <input class="input" value="2,5" />
+            </div>
+            <div class="field">
+              <label class="label">Tipo cálculo</label>
+              <select class="select">
+                <option>Tatamis / Heimei</option>
+                <option>Heimei general</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="note">
+            <strong>Flujo heredado del proveedor:</strong> esta ventana ya se abre con el proveedor seleccionado desde la sección de Pedidos. Solo muestra las entradas necesarias para ese proveedor.
+          </div>
+
+          <div class="summary-grid">
+            <div class="summary"><div class="k">Items detectados</div><div class="v">23</div></div>
+            <div class="summary"><div class="k">M3 total</div><div class="v">8,42</div></div>
+            <div class="summary"><div class="k">Errores</div><div class="v">1</div></div>
+            <div class="summary"><div class="k">Warnings</div><div class="v">2</div></div>
+          </div>
+
+          <div class="btn-row">
+            <button class="btn primary">Calcular pedido</button>
+            <button class="btn">Recalcular</button>
+          </div>
+        </div>
+      </article>
+    </section>
+
+    <section class="column">
+      <article class="card right-card">
+        <div class="card-head">
+          <h2>Resultado del cálculo</h2>
+          <span class="status status-info">Tabla de cálculo del pedido</span>
+        </div>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Producto / Medida</th>
+                <th>Color</th>
+                <th>Und.</th>
+                <th>Cuenta pedido</th>
+                <th>M3 inv.</th>
+                <th>M3 total</th>
+                <th>Estado</th>
+                <th>Precio proveedor</th>
+                <th>Precio en dólares / C.Transporte+IVA</th>
+                <th>Precio pagado € / M3 camión</th>
+                <th>Tasa cambio / C.Transp. M3</th>
+                <th>Precio artículo € / C.Transp. ref</th>
+                <th>Factura transporte / C.Descarga total</th>
+                <th>Aranceles / C.Descarga prod.</th>
+                <th>% Transporte / IVA+RE</th>
+                <th>% Descarga / Precio con IVA</th>
+                <th>% Varios / Coste descarga</th>
+                <th>% Manipulación / Almacenaje</th>
+                <th>% Financiación / Picking</th>
+                <th>Precio coste final</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td class="strong">1244001</td>
+                <td>Tatami 90x200</td>
+                <td>Natural</td>
+                <td>12</td>
+                <td>12</td>
+                <td>0,20</td>
+                <td>2,40</td>
+                <td class="ok">OK</td>
+                <td>72,00 €</td>
+                <td>3945 $</td>
+                <td>3620 €</td>
+                <td>1,09</td>
+                <td>66,05 €</td>
+                <td>412 €</td>
+                <td>326 €</td>
+                <td>10%</td>
+                <td>3%</td>
+                <td>1%</td>
+                <td>2%</td>
+                <td>2,5%</td>
+                <td class="strong">104,95 €</td>
+              </tr>
+              <tr>
+                <td class="strong">0730009</td>
+                <td>Producto especial que cuenta</td>
+                <td>-</td>
+                <td>4</td>
+                <td>4</td>
+                <td>0,22</td>
+                <td>0,88</td>
+                <td class="warn">Cuenta descarga</td>
+                <td>68,00 €</td>
+                <td>3945 $</td>
+                <td>3620 €</td>
+                <td>1,09</td>
+                <td>62,40 €</td>
+                <td>412 €</td>
+                <td>326 €</td>
+                <td>10%</td>
+                <td>3%</td>
+                <td>1%</td>
+                <td>2%</td>
+                <td>2,5%</td>
+                <td class="strong">98,75 €</td>
+              </tr>
+              <tr>
+                <td class="strong">TAT-160</td>
+                <td>Tatami 160x200</td>
+                <td>Natural</td>
+                <td>6</td>
+                <td>6</td>
+                <td>0,52</td>
+                <td>3,12</td>
+                <td class="ok">OK</td>
+                <td>210,00 €</td>
+                <td>3945 $</td>
+                <td>3620 €</td>
+                <td>1,09</td>
+                <td>192,30 €</td>
+                <td>412 €</td>
+                <td>326 €</td>
+                <td>10%</td>
+                <td>3%</td>
+                <td>1%</td>
+                <td>2%</td>
+                <td>2,5%</td>
+                <td class="strong">286,60 €</td>
+              </tr>
+              <tr>
+                <td class="strong">A MEDIDA</td>
+                <td>Pedido cliente personalizado</td>
+                <td>-</td>
+                <td>1</td>
+                <td>1</td>
+                <td>0,42</td>
+                <td>0,42</td>
+                <td class="err">Falta precio base</td>
+                <td>Pendiente</td>
+                <td>3945 $</td>
+                <td>3620 €</td>
+                <td>1,09</td>
+                <td>Pendiente</td>
+                <td>412 €</td>
+                <td>326 €</td>
+                <td>10%</td>
+                <td>3%</td>
+                <td>1%</td>
+                <td>2%</td>
+                <td>2,5%</td>
+                <td class="strong">Pendiente</td>
+              </tr>
+              <tr>
+                <td class="strong">FUNDA-90</td>
+                <td>Funda futón 90 cm</td>
+                <td>Beige</td>
+                <td>6</td>
+                <td>No cuenta</td>
+                <td>0,06</td>
+                <td>0,36</td>
+                <td class="ok">OK</td>
+                <td>28,00 €</td>
+                <td>3945 $</td>
+                <td>3620 €</td>
+                <td>1,09</td>
+                <td>25,68 €</td>
+                <td>412 €</td>
+                <td>326 €</td>
+                <td>10%</td>
+                <td>3%</td>
+                <td>1%</td>
+                <td>2%</td>
+                <td>2,5%</td>
+                <td class="strong">40,88 €</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <footer class="footer-summary">
+          <div class="footer-values">
+            <div class="value-card"><div class="k">Precio en Euros</div><div class="v">3.620 €</div></div>
+            <div class="value-card"><div class="k">Precio en Dólares</div><div class="v">3.945 $</div></div>
+            <div class="value-card"><div class="k">Factura transporte</div><div class="v">412 €</div></div>
+            <div class="value-card"><div class="k">Derechos aranceles</div><div class="v">326 €</div></div>
+            <div class="value-card"><div class="k">Manipulación</div><div class="v">88 €</div></div>
+            <div class="value-card"><div class="k">Financiación</div><div class="v">121 €</div></div>
+            <div class="value-card"><div class="k">Varios</div><div class="v">34 €</div></div>
+            <div class="value-card"><div class="k">Coste total pedido</div><div class="v">4.812 €</div></div>
+          </div>
+        </footer>
+      </article>
+    </section>
+  </section>
+</main>
+</body>
+</html>

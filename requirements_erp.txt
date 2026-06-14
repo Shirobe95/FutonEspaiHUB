@@ -1,0 +1,15 @@
+# FutonHUB ERP dependencies
+# Python soportado: 3.11 o 3.12.
+# No usar Python 3.14 para evitar builds nativos innecesarios en Windows.
+
+supabase==2.10.0
+python-dotenv>=1.0,<2
+requests>=2.31,<3
+pandas>=2.2,<3
+openpyxl>=3.1,<4
+pillow>=10,<13
+pypdf>=4,<7
+PyPDF2>=3,<4
+reportlab>=4,<5
+python-dateutil>=2.8,<3
+pytest>=8,<10
