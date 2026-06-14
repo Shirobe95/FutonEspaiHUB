@@ -12,11 +12,12 @@
 
 | Elemento | Ruta | Estado | Regla |
 |---|---|---|---|
-| Lanzador oficial | `Abrir ERP.bat` | Operativo | Debe seguir siendo la forma oficial de abrir el ERP |
-| Bootstrap Windows | `abrir_futon_espai.py` | Operativo | Resuelve el arranque |
-| Launcher/CLI histórico | `GestorWoo/gestorwoo.py` | Legacy útil | No convertirlo en entrada principal de usuario |
-| Launcher EXE | `GestorWoo/FutonEspaiLauncher.py` | Soporte build | Mantener compatibilidad |
-
+| Entrada oficial | `Abrir ERP.bat` | Operativo | Debe seguir siendo la forma oficial de abrir el ERP |
+| CLI ejecutada por la entrada oficial | `GestorWoo/gestorwoo.py` | Operativo | `Abrir ERP.bat` la invoca con `erp-prototype` |
+| Dispatcher real | `gestorwoo.cli` | Operativo | Resuelve el comando `erp-prototype` |
+| ERP actual | `futonhub.ui.erp.prototype` | Operativo | Contiene `FutonHubErpPrototype` y `run_erp_prototype` |
+| Lanzador alternativo/historico | `abrir_futon_espai.py` | Legacy util | No es la entrada oficial de esta fase |
+| Soporte launcher/build | `GestorWoo/FutonEspaiLauncher.py` | Soporte build | Mantener compatibilidad |
 La UI ERP real se concentra actualmente en:
 
 ```text
