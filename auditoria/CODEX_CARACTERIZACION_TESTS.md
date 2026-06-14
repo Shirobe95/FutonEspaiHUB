@@ -72,3 +72,40 @@ Limitaciones:
 - No instancia `WooCommerceClient`.
 - No ejecuta preview ni publicacion real.
 - No escribe en WooCommerce ni Supabase.
+
+## Commit: clasificacion Woo y enlaces
+
+Comportamiento protegido:
+
+- Padres variables sin SKU quedan informativos.
+- Productos test y sus variaciones se excluyen del seguimiento operativo.
+- Si un padre variable comparte SKU con una variacion, la variacion conserva el enlace operativo.
+- El enlace automatico prioriza `woo_id`.
+- El enlace por SKU incluye alias basados en `heca_reference`.
+- `build_sync_preview` conserva los estados `ignored_test_item`, `parent_sku_owned_by_variation`, `variable_parent_without_sku` y `sku`.
+- El preview de enlace manual no toca WooCommerce y solo rellena campos de clasificacion vacios, sin pisar valores internos existentes.
+
+Archivos tocados:
+
+- `GestorWoo/tests/test_characterization_woocommerce_sync.py`
+- `auditoria/CODEX_CARACTERIZACION_TESTS.md`
+
+Comando ejecutado:
+
+```powershell
+python -m unittest GestorWoo.tests.test_characterization_woocommerce_sync -v
+```
+
+Resultado:
+
+```text
+Ran 7 tests in 0.004s
+OK
+```
+
+Limitaciones:
+
+- Usa monkeypatch/dobles para cargas Woo/Supabase.
+- No instancia `WooCommerceClient`.
+- No llama a `apply_manual_woo_link`.
+- No escribe en WooCommerce ni Supabase.
