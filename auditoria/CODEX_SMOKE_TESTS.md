@@ -18,6 +18,7 @@ Abrir ERP.bat -> GestorWoo/gestorwoo.py erp-prototype -> gestorwoo.cli -> futonh
 | 004A inventory list | Listado, columnas, recarga inicial, busqueda por codigo/SKU, busqueda textual, busqueda con/sin acentos, sin resultados, seleccion, detalle lateral, navegacion | Aprobado | 2026-06-15 | `c953a3bd4736c2cccf73ce33f5f7b7604792b03f` | Usuario confirma cierre sin traceback y comportamiento esperado del listado | Sin incidencias funcionales reportadas |
 | 004B inventory detail/history | Seleccion, detalle lateral existente, historial, navegacion y cierre | Aprobado | 2026-06-15 | `6a1aa15b3e5ef5f984b49547b03919dac2433877` | Smoke manual real aprobado mediante `Abrir ERP.bat` | Deuda Unicode documentada sin corregir |
 | 004B.1 Woo price inventory history | Publicacion Woo, web actualizada, `inventory_items.woo_price`, historial completo, graficas, rollback, segundo evento historico y eventos previos conservados con SKU `0201014` | Aprobado | 2026-06-15 | `a2e3e87d831897e311f7cc86ed1b943b710aa974` / docs `a3d0b7426ad42967a81c240a34d404a196fd95a3` | Usuario confirma smoke test manual aprobado tras migracion minima y recarga de schema | Sin backfill historico; no iniciar 004C1 en este cierre |
+| 004C1 inventory field editing | Edicion de `notes`/`family`, preview, cancelacion sin cambios, guardado, refresco, persistencia, campos reservados solo lectura, Woo intacto y cierre | Aprobado | 2026-06-15 | `5a1e2ee1b645eb21784cec41e12bbf578b44cf1a` | Usuario confirma smoke test manual aprobado mediante `Abrir ERP.bat` | Stock reservado para 004C2; sin cambios Woo |
 
 ## Suite automatizada asociada
 
@@ -30,7 +31,7 @@ python -m unittest discover -s GestorWoo\tests -v
 Resultado actual:
 
 ```text
-Ran 64 tests in 0.115s
+Ran 75 tests in 0.111s
 OK
 ```
 

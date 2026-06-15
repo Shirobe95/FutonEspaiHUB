@@ -5,20 +5,27 @@ Fecha: 2026-06-15
 Commit real:
 
 ```text
-f0ebc14c506e94464f45c1cd01e939f062ceccb3
-refactor: extract inventory field editing
+5a1e2ee1b645eb21784cec41e12bbf578b44cf1a
+fix: restrict inventory field editing scope
 ```
 
 Hash padre:
 
 ```text
-5686ccc06972181f5c7c69447c368ffbdcebc37d
+87c053f0e0dd2ccab898cb514214d4ce5b361bac
 ```
 
 Estado de push:
 
 ```text
 Pushed a origin/refactor/modularizacion-v1
+```
+
+Commit funcional inicial del corte:
+
+```text
+f0ebc14c506e94464f45c1cd01e939f062ceccb3
+refactor: extract inventory field editing
 ```
 
 ## Alcance
@@ -151,7 +158,7 @@ Tests anadidos:
 Suite final:
 
 ```text
-Ran 75 tests in 0.093s
+Ran 75 tests in 0.111s
 OK
 ```
 
@@ -168,3 +175,14 @@ OK
 - Confirmar mensaje con `operation_id`.
 - Confirmar refresco del item en Inventario.
 - Confirmar que WooCommerce no cambia.
+
+Resultado manual aprobado:
+
+- Edicion de campos internos correcta.
+- Preview correcto.
+- Cancelacion sin cambios.
+- Guardado y refresco correctos.
+- Persistencia confirmada.
+- `commercial_status`, `heca_reference`, `woo_sku`, `store_stock` y `warehouse_stock` visibles como solo lectura.
+- WooCommerce no se modifica.
+- Cierre sin traceback.
