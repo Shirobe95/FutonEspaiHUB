@@ -113,7 +113,7 @@ Commit base de `main`:
 Estado de rama:
 
 ```text
-## refactor/modularizacion-v1...origin/refactor/modularizacion-v1 [ahead 4]
+## refactor/modularizacion-v1...origin/refactor/modularizacion-v1
 ```
 
 Commits acumulados desde la caracterizacion:

@@ -23,7 +23,7 @@ c953a3bd4736c2cccf73ce33f5f7b7604792b03f
 Estado de push:
 
 ```text
-Pendiente de push. Rama local ahead 3 respecto a origin/refactor/modularizacion-v1.
+Pushed a origin/refactor/modularizacion-v1.
 ```
 
 ## Alcance

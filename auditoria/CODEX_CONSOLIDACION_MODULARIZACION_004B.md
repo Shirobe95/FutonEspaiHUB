@@ -31,10 +31,10 @@ Base de `main`:
 Estado remoto:
 
 ```text
-## refactor/modularizacion-v1...origin/refactor/modularizacion-v1 [ahead 4]
+## refactor/modularizacion-v1...origin/refactor/modularizacion-v1
 ```
 
-Los cortes 003, 004A y 004B estan confirmados localmente y pendientes de push por limite del entorno.
+Los cortes 003, 004A, 004B y la consolidacion documental estan confirmados y enviados a origin/refactor/modularizacion-v1.
 
 ## Commits estructurales y documental
 
@@ -42,10 +42,10 @@ Los cortes 003, 004A y 004B estan confirmados localmente y pendientes de push po
 |---|---|---|---|
 | 001 shared UI | `e00855ca4bc1fd69151b3ebe2a6b9a0867f85a8b` | `0adf26a1bfbc3899f8c499c5195da98c0ccbfb65` | Pushed |
 | 002 shell/navigation | `f1a7134ac4d9fb8dce36dbd2bd58d5b8a4b22d29` | `e00855ca4bc1fd69151b3ebe2a6b9a0867f85a8b` | Pushed |
-| 003 Dashboard | `c35b2bf661b1a5b8e4f152a6e882210d46a85b51` | `f1a7134ac4d9fb8dce36dbd2bd58d5b8a4b22d29` | Pendiente |
-| 004A Inventario listado | `c953a3bd4736c2cccf73ce33f5f7b7604792b03f` | `c35b2bf661b1a5b8e4f152a6e882210d46a85b51` | Pendiente |
-| 004B Inventario detalle/historial | `6a1aa15b3e5ef5f984b49547b03919dac2433877` | `c953a3bd4736c2cccf73ce33f5f7b7604792b03f` | Pendiente |
-| Consolidacion documental | Este commit `docs: consolidate modularization progress through inventory detail` | `6a1aa15b3e5ef5f984b49547b03919dac2433877` | Pendiente |
+| 003 Dashboard | `c35b2bf661b1a5b8e4f152a6e882210d46a85b51` | `f1a7134ac4d9fb8dce36dbd2bd58d5b8a4b22d29` | Pushed |
+| 004A Inventario listado | `c953a3bd4736c2cccf73ce33f5f7b7604792b03f` | `c35b2bf661b1a5b8e4f152a6e882210d46a85b51` | Pushed |
+| 004B Inventario detalle/historial | `6a1aa15b3e5ef5f984b49547b03919dac2433877` | `c953a3bd4736c2cccf73ce33f5f7b7604792b03f` | Pushed |
+| Consolidacion documental | `4ebbf20df97806bba746982d8880b7584f6d98b9` | `6a1aa15b3e5ef5f984b49547b03919dac2433877` | Pushed |
 
 ## Suite automatizada
 
@@ -58,7 +58,7 @@ python -m unittest discover -s GestorWoo\tests -v
 Resultado:
 
 ```text
-Ran 53 tests in 0.079s
+Ran 53 tests in 0.095s
 OK
 ```
 
