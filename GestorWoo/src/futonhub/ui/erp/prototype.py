@@ -31,7 +31,6 @@ from futonhub.cloud.services.inventory import (
     fetch_inventory_pack_components,
     list_cloud_inventory_items,
     preview_create_cloud_inventory_item,
-    preview_internal_inventory_update,
     search_cloud_inventory_items,
     update_inventory_item_fields,
 )
@@ -81,6 +80,7 @@ from futonhub.ui.erp.dashboard import ErpDashboardMixin
 from futonhub.ui.erp.inventory_detail import ErpInventoryDetailMixin
 from futonhub.ui.erp.inventory_edit import ErpInventoryEditMixin
 from futonhub.ui.erp.inventory_list import ErpInventoryListMixin
+from futonhub.ui.erp.inventory_stock import ErpInventoryStockMixin
 from futonhub.ui.erp.shell import ErpShellNavigationMixin, NAV_ITEMS
 from futonhub.ui.erp.shared_ui import (
     AMBER,
@@ -457,7 +457,7 @@ EXPORT_RECORDS = [
 ]
 
 
-class FutonHubErpPrototype(ErpInventoryEditMixin, ErpInventoryDetailMixin, ErpInventoryListMixin, ErpDashboardMixin, ErpShellNavigationMixin, ErpSharedUiMixin, tk.Tk):
+class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryEditMixin, ErpInventoryDetailMixin, ErpInventoryListMixin, ErpDashboardMixin, ErpShellNavigationMixin, ErpSharedUiMixin, tk.Tk):
     def __init__(self) -> None:
         super().__init__()
         self.title("FutonHUB - UI ERP Prototype")
@@ -1524,77 +1524,6 @@ class FutonHubErpPrototype(ErpInventoryEditMixin, ErpInventoryDetailMixin, ErpIn
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def _open_inventory_stock_preview_modal(self, item: InventoryItem) -> None:
-        if self._cloud_session is None:
-            messagebox.showerror("Inventario", "No hay sesion Supabase activa.")
-            return
-        if not item.raw:
-            messagebox.showinfo("Inventario", "Este item es visual/mock. Busca un item real antes de generar preview.")
-            return
-        win = tk.Toplevel(self)
-        win.title("Preview cambio stock interno")
-        win.configure(bg=BG)
-        win.transient(self)
-        win.grab_set()
-        center_window(win, 760, 560)
-        win.columnconfigure(0, weight=1)
-        header = tk.Frame(win, bg=CARD, highlightbackground=LINE, highlightthickness=1)
-        header.grid(row=0, column=0, sticky="ew", padx=18, pady=(18, 0))
-        header.columnconfigure(0, weight=1)
-        tk.Label(header, text="Preview cambio stock interno", bg=CARD, fg=TEXT, font=("Segoe UI", 16, "bold")).grid(row=0, column=0, sticky="w", padx=18, pady=(16, 2))
-        tk.Label(header, text=f"{item.code} - {item.name}", bg=CARD, fg=MUTED).grid(row=1, column=0, sticky="w", padx=18, pady=(0, 16))
-        self._button(header, "Cerrar", command=win.destroy).grid(row=0, column=1, rowspan=2, padx=18, pady=16)
-
-        body = tk.Frame(win, bg=CARD, highlightbackground=LINE, highlightthickness=1)
-        body.grid(row=1, column=0, sticky="ew", padx=18, pady=12)
-        body.columnconfigure(0, weight=1)
-        body.columnconfigure(1, weight=1)
-        store_var = tk.StringVar()
-        warehouse_var = tk.StringVar()
-        notes_var = tk.StringVar(value="Preview desde UI ERP. No aplicar sin confirmacion.")
-        self._field(body, "Nuevo stock tienda", store_var).grid(row=0, column=0, sticky="ew", padx=(16, 8), pady=(16, 10))
-        self._field(body, "Nuevo stock almacen", warehouse_var).grid(row=0, column=1, sticky="ew", padx=(8, 16), pady=(16, 10))
-        self._field(body, "Notas", notes_var).grid(row=1, column=0, columnspan=2, sticky="ew", padx=16, pady=(0, 12))
-        result = tk.Text(body, height=12, bg="#0F172A", fg="#E2E8F0", insertbackground="#E2E8F0", relief=tk.FLAT, wrap=tk.WORD, font=("Consolas", 9))
-        result.insert("1.0", "Genera preview para validar el cambio. No se escribe en Supabase desde este popup.")
-        result.configure(state=tk.DISABLED)
-        result.grid(row=2, column=0, columnspan=2, sticky="ew", padx=16, pady=(0, 16))
-
-        def generate_preview() -> None:
-            result.configure(state=tk.NORMAL)
-            result.delete("1.0", tk.END)
-            result.insert("1.0", "Generando preview real...")
-            result.configure(state=tk.DISABLED)
-
-            def worker() -> None:
-                try:
-                    preview = preview_internal_inventory_update(
-                        self._cloud_session,
-                        int(item.code),
-                        store_var.get() or None,
-                        warehouse_var.get() or None,
-                        notes_var.get(),
-                    )
-                    text = json.dumps(preview, ensure_ascii=False, indent=2, default=str)
-                except Exception as exc:
-                    text = f"ERROR: {exc}"
-                self.after(0, lambda: render_preview(text))
-
-            threading.Thread(target=worker, daemon=True).start()
-
-        def render_preview(text: str) -> None:
-            if not result.winfo_exists():
-                return
-            result.configure(state=tk.NORMAL)
-            result.delete("1.0", tk.END)
-            result.insert("1.0", text)
-            result.configure(state=tk.DISABLED)
-
-        footer = tk.Frame(win, bg=BG)
-        footer.grid(row=2, column=0, sticky="ew", padx=18, pady=(0, 18))
-        self._button(footer, "Generar preview", primary=True, command=generate_preview).pack(side=tk.RIGHT)
-        self._button(footer, "Cancelar", command=win.destroy).pack(side=tk.RIGHT, padx=(0, 8))
-
     def _detail_row(self, parent: tk.Misc, label: str, value: str) -> tk.Frame:
         frame = tk.Frame(parent, bg=SOFT, highlightbackground=LINE, highlightthickness=1)
         tk.Label(frame, text=label, bg=SOFT, fg=MUTED, font=("Segoe UI", 9), anchor=tk.W).pack(side=tk.LEFT, padx=12, pady=9)
@@ -1754,6 +1683,11 @@ class FutonHubErpPrototype(ErpInventoryEditMixin, ErpInventoryDetailMixin, ErpIn
                 on_applied=lambda: self._after_inventory_item_updated(win),
             ),
         ).pack(fill=tk.X, padx=12, pady=(12, 7))
+        self._button(left_actions, "Movimiento stock", command=lambda: self._open_inventory_stock_preview_modal(item)).pack(
+            fill=tk.X,
+            padx=12,
+            pady=(0, 7),
+        )
         self._button(left_actions, "Agregar a Propuesta de precios", command=lambda: self._open_inventory_proposal_modal(item)).pack(
             fill=tk.X,
             padx=12,

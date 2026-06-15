@@ -105,6 +105,11 @@ class ErpInventoryDetailMixin:
             padx=12,
             pady=detail_pad,
         )
+        self._button(actions, "Movimiento stock", command=lambda: self._open_inventory_stock_preview_modal(item)).pack(
+            fill=tk.X,
+            padx=12,
+            pady=(0, 7),
+        )
         self._button(actions, "Agregar a Propuesta de precios", command=lambda: self._open_inventory_proposal_modal(item)).pack(
             fill=tk.X,
             padx=12,
