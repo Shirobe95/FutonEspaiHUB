@@ -112,7 +112,7 @@ class ErpInventoryDetailMixin:
         )
 
     def _load_inventory_history(self, price_host: tk.Frame, stock_host: tk.Frame, item: InventoryItem) -> None:
-        self._render_inventory_history_card(price_host, "Historial de precios", [], "Cargando historial real...", item.price, INDIGO)
+        self._render_inventory_history_card(price_host, "Historial completo", [], "Cargando historial real...", item.price, INDIGO)
         self._render_inventory_history_card(stock_host, "Historial de stock", [], "Cargando historial real...", item.stock, GREEN)
 
         def history_worker() -> None:
@@ -129,11 +129,11 @@ class ErpInventoryDetailMixin:
     def _render_inventory_history(self, price_host: tk.Frame, stock_host: tk.Frame, history: list[dict[str, Any]], item: InventoryItem) -> None:
         price_history = [row for row in history if str(row.get("field") or "").lower() in {"price", "woo_price", "precio", "precio local", "price_local"}]
         stock_history = [row for row in history if str(row.get("field") or "").lower() in {"store_stock", "warehouse_stock", "stock", "stock_total"}]
-        self._render_inventory_history_card(price_host, "Historial de precios", price_history, "Sin historial de precios registrado", item.price, INDIGO)
+        self._render_inventory_history_card(price_host, "Historial completo", price_history, "Sin historial de precios registrado", item.price, INDIGO)
         self._render_inventory_history_card(stock_host, "Historial de stock", stock_history, "Sin historial de stock registrado", item.stock, GREEN)
 
     def _render_inventory_history_error(self, price_host: tk.Frame, stock_host: tk.Frame, error: str, item: InventoryItem) -> None:
-        self._render_inventory_history_card(price_host, "Historial de precios", [], f"No se pudo cargar historial: {error}", item.price, INDIGO)
+        self._render_inventory_history_card(price_host, "Historial completo", [], f"No se pudo cargar historial: {error}", item.price, INDIGO)
         self._render_inventory_history_card(stock_host, "Historial de stock", [], f"No se pudo cargar historial: {error}", item.stock, GREEN)
 
     def _render_inventory_history_card(self, parent: tk.Frame, title: str, history: list[dict[str, Any]], empty_text: str, current_value: str, color: str) -> None:

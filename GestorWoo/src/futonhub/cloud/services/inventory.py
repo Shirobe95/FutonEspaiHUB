@@ -685,7 +685,7 @@ def fetch_inventory_item_history(session, item_id: int, limit: int = 80) -> list
             .execute()
         )
         for row in getattr(resp, 'data', None) or []:
-            field = row.get('field') or row.get('changed_field') or row.get('change_type') or 'inventario'
+            field = row.get('field') or row.get('field_name') or row.get('changed_field') or row.get('change_type') or 'inventario'
             before = row.get('old_value') if 'old_value' in row else row.get('before_value')
             after = row.get('new_value') if 'new_value' in row else row.get('after_value')
             add_change(row.get('created_at'), row.get('operation_id') or row.get('id'), 'inventory_change_history', str(field), before, after, row.get('message') or row.get('notes') or '')
@@ -725,6 +725,307 @@ def fetch_inventory_item_history(session, item_id: int, limit: int = 80) -> list
 
     events.sort(key=lambda row: str(row.get('created_at') or ''), reverse=True)
     return events[:limit]
+
+
+def _as_dict(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _first_int(*values: Any) -> int | None:
+    for value in values:
+        if value in (None, ''):
+            continue
+        try:
+            return int(str(value).strip())
+        except Exception:
+            continue
+    return None
+
+
+def _select_single_inventory_item(session, column: str, value: Any) -> tuple[dict[str, Any] | None, str]:
+    if value in (None, ''):
+        return None, ''
+    try:
+        resp = (
+            session.client.table('inventory_items')
+            .select('item_id,heca_reference,woo_sku,woo_id,woo_parent_id,name')
+            .eq(column, value)
+            .limit(2)
+            .execute()
+        )
+        rows = getattr(resp, 'data', None) or []
+    except Exception as exc:
+        return None, f'No se pudo resolver inventory_items por {column}={value}: {exc}'
+    if len(rows) == 1:
+        return rows[0], ''
+    if len(rows) > 1:
+        return None, f'Resolucion ambigua de inventory_items por {column}={value}.'
+    return None, ''
+
+
+def _select_inventory_item_by_id(session, item_id: int) -> dict[str, Any]:
+    resp = (
+        session.client.table('inventory_items')
+        .select('item_id,name,heca_reference,woo_sku,woo_id,woo_parent_id,woo_price,source_row')
+        .eq('item_id', int(item_id))
+        .limit(1)
+        .execute()
+    )
+    rows = getattr(resp, 'data', None) or []
+    if not rows:
+        raise CloudAuditError(f'No existe inventory_items.item_id={item_id} para sincronizar precio Woo.')
+    return rows[0]
+
+
+def resolve_inventory_item_id_for_woo_price_event(
+    session,
+    *,
+    proposal: dict[str, Any] | None = None,
+    cloud_item: dict[str, Any] | None = None,
+    woo_id: Any = None,
+) -> dict[str, Any]:
+    proposal = _as_dict(proposal)
+    cloud_item = _as_dict(cloud_item)
+    source_row = _as_dict(proposal.get('source_row'))
+    item_snapshot = _as_dict(source_row.get('item_snapshot'))
+    diagnostics: list[str] = []
+
+    direct_item_id = _first_int(
+        proposal.get('item_id'),
+        proposal.get('inventory_item_id'),
+        source_row.get('item_id'),
+        source_row.get('inventory_item_id'),
+        item_snapshot.get('item_id'),
+        item_snapshot.get('inventory_item_id'),
+        cloud_item.get('item_id'),
+    )
+    if direct_item_id is not None:
+        return {'item_id': direct_item_id, 'strategy': 'direct_item_id', 'source': 'direct_item_id', 'diagnostics': diagnostics}
+
+    resolved_woo_id = _first_int(woo_id, proposal.get('item_woo_id'), proposal.get('local_id'), item_snapshot.get('woo_id'), cloud_item.get('woo_id'))
+    if resolved_woo_id is not None:
+        row, diagnostic = _select_single_inventory_item(session, 'woo_id', resolved_woo_id)
+        if row:
+            return {'item_id': row.get('item_id'), 'strategy': 'inventory_items.woo_id', 'source': 'inventory_items.woo_id', 'row': row, 'diagnostics': diagnostics}
+        if diagnostic:
+            diagnostics.append(diagnostic)
+
+    for value in (
+        item_snapshot.get('heca_reference'),
+        source_row.get('heca_reference'),
+        proposal.get('heca_reference'),
+        item_snapshot.get('sku'),
+        item_snapshot.get('woo_sku'),
+        cloud_item.get('sku'),
+        cloud_item.get('woo_sku'),
+    ):
+        text = str(value or '').strip()
+        if not text:
+            continue
+        for column in ('heca_reference', 'woo_sku'):
+            row, diagnostic = _select_single_inventory_item(session, column, text)
+            if row:
+                return {'item_id': row.get('item_id'), 'strategy': f'inventory_items.{column}', 'source': f'inventory_items.{column}', 'row': row, 'diagnostics': diagnostics}
+            if diagnostic:
+                diagnostics.append(diagnostic)
+
+    diagnostics.append('No se pudo resolver inventory_items.item_id para evento Woo; no se inventa asociacion.')
+    return {'item_id': None, 'strategy': '', 'source': '', 'diagnostics': diagnostics}
+
+
+def _history_insert_candidates(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    item_name = str(payload.get('item_name') or '')
+    old_value = payload.get('old_value')
+    new_value = payload.get('new_value')
+    message = str(payload.get('message') or payload.get('notes') or '')
+    action = str(payload.get('action') or '')
+    metadata = _json_safe(payload.get('metadata') or {})
+    source = str(payload.get('source') or 'woocommerce_publish')
+    field = str(payload.get('field') or 'woo_price')
+    operation_id = payload.get('operation_id')
+    item_id = payload.get('item_id')
+    return [
+        {
+            'item_id': item_id,
+            'field': field,
+            'field_name': field,
+            'old_value': old_value,
+            'new_value': new_value,
+            'operation_id': operation_id,
+            'message': message,
+            'notes': message,
+            'source': source,
+            'change_source': source,
+            'action': action,
+            'metadata': metadata,
+            'item_name': item_name,
+        },
+        {
+            'item_id': item_id,
+            'field': field,
+            'old_value': old_value,
+            'new_value': new_value,
+            'operation_id': operation_id,
+            'message': message,
+            'notes': message,
+            'source': source,
+            'action': action,
+            'metadata': metadata,
+        },
+        {
+            'item_id': item_id,
+            'field_name': field,
+            'old_value': old_value,
+            'new_value': new_value,
+            'operation_id': operation_id,
+            'notes': message,
+            'change_source': source,
+            'item_name': item_name,
+        },
+        {
+            'item_id': item_id,
+            'field': field,
+            'old_value': old_value,
+            'new_value': new_value,
+            'operation_id': operation_id,
+            'message': message,
+        },
+    ]
+
+
+def record_woo_price_inventory_history(
+    session,
+    *,
+    operation_id: str,
+    item_id: Any,
+    before: Any,
+    after: Any,
+    action: str,
+    message: str = '',
+    metadata: dict[str, Any] | None = None,
+    item_name: str = '',
+) -> dict[str, Any]:
+    resolved_item_id = _first_int(item_id)
+    if resolved_item_id is None:
+        return {'inserted': False, 'reason': 'missing_item_id'}
+    if before == after:
+        return {'inserted': False, 'reason': 'unchanged'}
+
+    try:
+        existing = (
+            session.client.table('inventory_change_history')
+            .select('id,operation_id')
+            .eq('operation_id', operation_id)
+            .eq('item_id', resolved_item_id)
+            .limit(1)
+            .execute()
+        )
+        existing_rows = getattr(existing, 'data', None) or []
+        for row in existing_rows:
+            row_field = str(row.get('field') or row.get('field_name') or row.get('changed_field') or '').lower()
+            if row_field in {'', 'woo_price', 'precio woo'}:
+                return {'inserted': False, 'reason': 'duplicate', 'item_id': resolved_item_id, 'row': row}
+    except Exception as exc:
+        raise CloudAuditError(f'No se pudo comprobar idempotencia de inventory_change_history: {exc}') from exc
+
+    payload = {
+        'item_id': resolved_item_id,
+        'item_name': item_name,
+        'field': 'woo_price',
+        'old_value': None if before is None else str(before),
+        'new_value': None if after is None else str(after),
+        'operation_id': operation_id,
+        'message': message or action,
+        'notes': message or action,
+        'source': 'woocommerce_publish',
+        'action': action,
+        'metadata': _json_safe(metadata or {}),
+    }
+    errors: list[str] = []
+    for candidate in _history_insert_candidates(payload):
+        try:
+            resp = session.client.table('inventory_change_history').insert(candidate).execute()
+            rows = getattr(resp, 'data', None) or []
+            return {'inserted': True, 'item_id': resolved_item_id, 'row': rows[0] if rows else candidate}
+        except Exception as exc:
+            errors.append(str(exc))
+    raise CloudAuditError('No se pudo insertar inventory_change_history para precio Woo: ' + ' | '.join(errors))
+
+
+def sync_woocommerce_price_inventory_state(
+    session,
+    *,
+    operation_id: str,
+    proposal: dict[str, Any] | None,
+    cloud_item: dict[str, Any] | None,
+    woo_id: Any,
+    before_price: Any,
+    verified_price: Any,
+    action: str,
+    message: str,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    resolution = resolve_inventory_item_id_for_woo_price_event(session, proposal=proposal, cloud_item=cloud_item, woo_id=woo_id)
+    item_id = _first_int(resolution.get('item_id'))
+    if item_id is None:
+        raise CloudAuditError('No se pudo resolver inventory_items.item_id para sincronizar precio Woo: ' + '; '.join(resolution.get('diagnostics') or []))
+
+    before_item = _select_inventory_item_by_id(session, item_id)
+    previous_inventory_price = before_item.get('woo_price')
+    new_price_text = None if verified_price is None else str(verified_price)
+    source_row = before_item.get('source_row') if isinstance(before_item.get('source_row'), dict) else {}
+    update_payload = {
+        'woo_price': new_price_text,
+        'updated_at': datetime.now(timezone.utc).isoformat(),
+        'updated_by': getattr(session, 'user_id', None),
+        'source_row': {
+            **source_row,
+            'woo_price_sync': True,
+            'woo_price_sync_operation_id': operation_id,
+            'woo_price_sync_action': action,
+            'woo_price_sync_message': message,
+            'woo_price_sync_resolution': _json_safe(resolution),
+        },
+    }
+    update_errors: list[str] = []
+    for payload in (
+        update_payload,
+        {key: value for key, value in update_payload.items() if key != 'source_row'},
+        {'woo_price': new_price_text},
+    ):
+        try:
+            resp = session.client.table('inventory_items').update(payload).eq('item_id', item_id).execute()
+            rows = getattr(resp, 'data', None) or []
+            if rows:
+                written = rows[0]
+            else:
+                check = session.client.table('inventory_items').select('item_id,woo_price').eq('item_id', item_id).limit(1).execute()
+                check_rows = getattr(check, 'data', None) or []
+                written = check_rows[0] if check_rows else {}
+            if str((written or {}).get('woo_price') or '') == str(new_price_text or ''):
+                history = record_woo_price_inventory_history(
+                    session,
+                    operation_id=operation_id,
+                    item_id=item_id,
+                    before=before_price if before_price is not None else previous_inventory_price,
+                    after=new_price_text,
+                    action=action,
+                    message=message,
+                    metadata={**(metadata or {}), 'resolution': resolution, 'inventory_before': _json_safe(before_item)},
+                    item_name=str(before_item.get('name') or ''),
+                )
+                return {
+                    'ok': True,
+                    'item_id': item_id,
+                    'resolution': resolution,
+                    'inventory_before': before_item,
+                    'inventory_after': written or {'item_id': item_id, 'woo_price': new_price_text},
+                    'history': history,
+                }
+            update_errors.append(f"inventory_items.item_id={item_id} no confirmo woo_price={new_price_text!r}; respuesta={written!r}")
+        except Exception as exc:
+            update_errors.append(str(exc))
+    raise CloudAuditError('Woo verificado, pero fallo sincronizacion de inventory_items.woo_price: ' + ' | '.join(update_errors))
 
 
 def preview_inventory_item_field_update(session, item_id: int, changes: dict[str, Any]) -> dict[str, Any]:

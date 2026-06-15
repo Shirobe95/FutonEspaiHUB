@@ -135,6 +135,9 @@ class WooRollbackContractTests(unittest.TestCase):
             "futonhub.cloud.audit.new_operation_id", return_value="RESTORE-1"
         ), patch("futonhub.cloud.audit.write_audit_event", return_value={"ok": True}), patch(
             "gestorwoo.woocommerce.WooCommerceClient", FakeWooClient
+        ), patch(
+            "futonhub.cloud.services.inventory.sync_woocommerce_price_inventory_state",
+            return_value={"history": {}, "resolution": {}},
         ):
             result = security_logs.restore_snapshot_to_previous_state(session, _snapshot())
 
@@ -156,6 +159,9 @@ class WooRollbackContractTests(unittest.TestCase):
             "futonhub.cloud.audit.new_operation_id", return_value="RESTORE-2"
         ), patch("futonhub.cloud.audit.write_audit_event", return_value={"ok": True}), patch(
             "gestorwoo.woocommerce.WooCommerceClient", FakeWooClient
+        ), patch(
+            "futonhub.cloud.services.inventory.sync_woocommerce_price_inventory_state",
+            return_value={"history": {}, "resolution": {}},
         ):
             security_logs.restore_snapshot_to_previous_state(
                 session,
@@ -175,6 +181,9 @@ class WooRollbackContractTests(unittest.TestCase):
             "futonhub.cloud.audit.new_operation_id", return_value="RESTORE-3"
         ), patch("futonhub.cloud.audit.write_audit_event", return_value={"ok": True}), patch(
             "gestorwoo.woocommerce.WooCommerceClient", FakeWooClient
+        ), patch(
+            "futonhub.cloud.services.inventory.sync_woocommerce_price_inventory_state",
+            return_value={"history": {}, "resolution": {}},
         ):
             with self.assertRaises(ValueError):
                 security_logs.restore_snapshot_to_previous_state(Session(), _snapshot())
@@ -182,4 +191,3 @@ class WooRollbackContractTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

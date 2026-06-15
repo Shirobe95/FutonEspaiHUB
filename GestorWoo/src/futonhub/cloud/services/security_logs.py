@@ -31,6 +31,33 @@ def _json_safe(value: Any) -> Any:
         return {"_raw": str(value)}
 
 
+def _money_or_none(value: Any) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        return float(str(value).replace(",", "."))
+    except Exception:
+        return None
+
+
+def _effective_woo_price(data: dict[str, Any] | None) -> float | None:
+    data = data or {}
+    sale = _money_or_none(data.get("sale_price"))
+    if sale is not None and sale > 0:
+        return sale
+    regular = _money_or_none(data.get("regular_price"))
+    if regular is not None and regular > 0:
+        return regular
+    return _money_or_none(data.get("price"))
+
+
+def _format_price_value(value: Any) -> str | None:
+    amount = _money_or_none(value)
+    if amount is None:
+        return None
+    return f"{amount:.2f}"
+
+
 def _contains_text(row: dict[str, Any], needle: str) -> bool:
     if not needle:
         return True
@@ -612,6 +639,7 @@ def restore_snapshot_to_previous_state(session, snapshot: dict[str, Any]) -> dic
     errors: list[str] = []
 
     if preview.get("special_restore") == "woocommerce_publish":
+        from futonhub.cloud.services.inventory import sync_woocommerce_price_inventory_state
         from gestorwoo.woocommerce import WooCommerceClient
         proposal = _as_dict(preview.get("proposal"))
         cloud_item = _as_dict(preview.get("cloud_item"))
@@ -647,6 +675,53 @@ def restore_snapshot_to_previous_state(session, snapshot: dict[str, Any]) -> dic
                 f"obtenido regular={got_regular!r}, sale={got_sale!r}."
             )
 
+        snapshot_before = _as_dict(snapshot.get("before_data"))
+        preview_row = _as_dict(snapshot_before.get("preview_row"))
+        rollback_from_price = (
+            proposal.get("new_price")
+            if proposal.get("new_price") not in (None, "")
+            else preview_row.get("new_price")
+        )
+        try:
+            inventory_sync_result = sync_woocommerce_price_inventory_state(
+                session,
+                operation_id=restore_operation_id,
+                proposal=proposal,
+                cloud_item=cloud_item,
+                woo_id=woo_id,
+                before_price=_format_price_value(rollback_from_price),
+                verified_price=_format_price_value(_effective_woo_price(verified)),
+                action="restore_woocommerce_price_snapshot",
+                message="Precio Woo restaurado desde snapshot y verificado.",
+                metadata={
+                    "source_operation_id": snapshot.get("operation_id"),
+                    "proposal_id": proposal.get("id"),
+                    "item_kind": kind,
+                    "woo_id": woo_id,
+                    "parent_woo_id": parent_id,
+                    "payload": _json_safe(payload),
+                },
+            )
+        except Exception as exc:
+            write_audit_event(
+                session,
+                AuditEvent(
+                    operation_id=restore_operation_id,
+                    module="woocommerce_publish",
+                    action="restore_woocommerce_price_snapshot_partial_internal_sync_failed",
+                    status="ERROR",
+                    severity="CRITICAL",
+                    entity_type="price_change_proposal",
+                    entity_id=str(proposal.get("id") or snapshot.get("entity_id") or ""),
+                    before_data={"snapshot": _json_safe(snapshot)},
+                    after_data={"woo_restored": True, "payload": payload, "internal_sync_error": str(exc)},
+                    message="WooCommerce fue restaurado y verificado, pero fallo la sincronizacion interna de Inventario/historial.",
+                    error_detail=str(exc),
+                ),
+                settings,
+            )
+            raise
+
         session.client.table(mirror_table).update({
             "price": str(verified.get("price") or ""),
             "regular_price": got_regular,
@@ -660,6 +735,9 @@ def restore_snapshot_to_previous_state(session, snapshot: dict[str, Any]) -> dic
                 "rolled_back_from_operation_id": snapshot.get("operation_id"),
                 "rollback_operation_id": restore_operation_id,
                 "woo_after_rollback_verified": _json_safe(verified),
+                "inventory_sync": _json_safe(inventory_sync_result),
+                "inventory_history": _json_safe(inventory_sync_result.get("history")),
+                "inventory_history_resolution": _json_safe(inventory_sync_result.get("resolution")),
             }
             rollback_update = {
                 "status": "rolled_back",
@@ -714,6 +792,9 @@ def restore_snapshot_to_previous_state(session, snapshot: dict[str, Any]) -> dic
             "operation_id": restore_operation_id,
             "restored": restored,
             "preview": preview,
+            "inventory_sync": inventory_sync_result,
+            "inventory_history": inventory_sync_result.get("history"),
+            "inventory_history_resolution": inventory_sync_result.get("resolution"),
         }
 
     for change in preview.get("changes", []):

@@ -5,6 +5,7 @@ from typing import Any
 
 from futonhub.cloud.audit import AuditEvent, CloudAuditError, OperationSnapshot, new_operation_id, write_audit_event, write_snapshot
 from futonhub.cloud.locks import acquire_system_lock, release_system_lock
+from futonhub.cloud.services.inventory import sync_woocommerce_price_inventory_state
 from futonhub.cloud.services.price_proposals import fetch_cloud_item_for_price as _fetch_cloud_item_for_price
 from futonhub.cloud.services.prices import money_or_none as _money_or_none, price_safety_preview as _price_safety_preview, short_row_value as _short_row_value
 from gestorwoo.config import Settings, load_settings
@@ -71,6 +72,13 @@ def _effective_woo_price(data: dict[str, Any] | None) -> float | None:
     if regular is not None and regular > 0:
         return regular
     return _safe_money(data.get("price"))
+
+
+def _format_price_value(value: Any) -> str | None:
+    amount = _safe_money(value)
+    if amount is None:
+        return None
+    return f"{amount:.2f}"
 
 
 def _pricing_payload_for_effective_price(woo_before: dict[str, Any], new_price: float) -> tuple[dict[str, Any], str]:
@@ -467,6 +475,25 @@ def publish_woocommerce_price(session, *, proposal_id: str, confirm: str = "", a
             )
 
         woo_after = woo_verified
+        inventory_sync_result = sync_woocommerce_price_inventory_state(
+            session,
+            operation_id=operation_id,
+            proposal=proposal,
+            cloud_item=cloud_item,
+            woo_id=woo_id,
+            before_price=_format_price_value(_effective_woo_price(woo_before)),
+            verified_price=_format_price_value(verified_effective_price),
+            action="admin_publish_woocommerce_price",
+            message="Precio Woo publicado y verificado.",
+            metadata={
+                "proposal_id": proposal_id,
+                "item_kind": kind,
+                "woo_id": woo_id,
+                "parent_woo_id": cloud_item.get("parent_woo_id") or (_proposal_item_snapshot(proposal) or {}).get("parent_woo_id"),
+                "pricing_payload": _json_safe(pricing_payload),
+                "pricing_strategy": pricing_strategy,
+            },
+        )
         mirror_payload = {
             "price": str(woo_verified.get("price") or f"{new_price:.2f}"),
             "regular_price": str(woo_verified.get("regular_price") or ""),
@@ -493,6 +520,9 @@ def publish_woocommerce_price(session, *, proposal_id: str, confirm: str = "", a
                 "pricing_payload": _json_safe(pricing_payload),
                 "pricing_strategy": pricing_strategy,
                 "verified_effective_price": verified_effective_price,
+                "inventory_sync": _json_safe(inventory_sync_result),
+                "inventory_history": _json_safe(inventory_sync_result.get("history")),
+                "inventory_history_resolution": _json_safe(inventory_sync_result.get("resolution")),
                 "acknowledged_woo_warnings": bool(acknowledge_warnings),
             },
         }
@@ -543,11 +573,38 @@ def publish_woocommerce_price(session, *, proposal_id: str, confirm: str = "", a
             "new_price": new_price,
             "item_kind": kind,
             "woo_id": woo_id,
+            "inventory_sync": inventory_sync_result,
+            "inventory_history": inventory_sync_result.get("history"),
+            "inventory_history_resolution": inventory_sync_result.get("resolution"),
         }
-    except CloudAuditError:
+    except CloudAuditError as exc:
         if publishing_marked and not woo_written:
             try:
                 session.client.table("price_change_proposals").update({"status": "approved"}).eq("id", proposal_id).eq("status", "publishing").execute()
+            except Exception:
+                pass
+        if woo_written:
+            try:
+                session.client.table("price_change_proposals").update({
+                    "status": "error",
+                    "error_message": "Woo actualizado, pero fallo cierre interno de Inventario/historial. Reintentar sincronizacion interna sin republicar Woo.",
+                }).eq("id", proposal_id).execute()
+            except Exception:
+                pass
+            try:
+                write_audit_event(session, AuditEvent(
+                    operation_id=operation_id,
+                    module="woocommerce_publish",
+                    action="admin_publish_woocommerce_price_partial_internal_sync_failed",
+                    status="ERROR",
+                    severity="CRITICAL",
+                    entity_type="price_change_proposal",
+                    entity_id=str(proposal_id),
+                    before_data=_json_safe(before_bundle),
+                    after_data={"woo_written": True, "proposal_id": proposal_id, "internal_sync_error": str(exc)},
+                    message="WooCommerce fue actualizado y verificado, pero fallo la sincronizacion interna de Inventario/historial.",
+                    error_detail=str(exc),
+                ), settings)
             except Exception:
                 pass
         raise

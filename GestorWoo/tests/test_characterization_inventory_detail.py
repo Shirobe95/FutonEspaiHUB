@@ -126,7 +126,7 @@ class InventoryHistoryTests(unittest.TestCase):
 
         app._render_inventory_history("price", "stock", history, item)
 
-        self.assertEqual(app.cards[0][0], "Historial de precios")
+        self.assertEqual(app.cards[0][0], "Historial completo")
         self.assertEqual(app.cards[0][1], [{"field": "woo_price", "after": "249.00"}])
         self.assertEqual(app.cards[1][0], "Historial de stock")
         self.assertEqual(app.cards[1][1], [{"field": "store_stock", "after": "2"}])
