@@ -69,7 +69,21 @@ class NavigationContractTests(unittest.TestCase):
             with self.subTest(nav_key=key):
                 self.assertTrue(hasattr(FutonHubErpPrototype, method_name))
 
+    def test_inventory_alias_keeps_show_view_compatibility(self) -> None:
+        from futonhub.ui.erp.shell import ErpShellNavigationMixin
+
+        class Shell(ErpShellNavigationMixin):
+            def __init__(self) -> None:
+                self._current_key = "dashboard"
+                self._nav_buttons = {}
+                self._content = None
+
+        shell = Shell()
+
+        shell._show_view("inventory")
+
+        self.assertEqual(shell._current_key, "inventario")
+
 
 if __name__ == "__main__":
     unittest.main()
-

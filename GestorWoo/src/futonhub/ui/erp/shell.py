@@ -119,6 +119,8 @@ class ErpShellNavigationMixin:
         self._status_chip(self._status_area, role.title(), "Info").pack(side=tk.LEFT)
 
     def _show_view(self, key: str) -> None:
+        if key == "inventory":
+            key = "inventario"
         self._current_key = key
         for item_key, button in self._nav_buttons.items():
             if item_key == key:
