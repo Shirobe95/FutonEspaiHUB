@@ -678,7 +678,7 @@ La carpeta `docs/` contiene decenas de notas de versiones. Son valiosas, pero no
 
 ## 4.4 Tests actuales son insuficientes para el tamaño del sistema
 
-Los 11 tests pasan, pero se concentran en arquitectura y seguridad operacional básica. No cubren toda la UI ni los flujos E2E.
+El baseline v61.2 tenia 11 tests automatizados. La rama actual tras Corte 004B tiene 53 tests, pero la cobertura sigue siendo insuficiente para todo el ERP: no cubre toda la UI ni los flujos E2E.
 
 **Acción:** añadir tests de servicios con dobles de Supabase/Woo y una suite manual reproducible.
 
