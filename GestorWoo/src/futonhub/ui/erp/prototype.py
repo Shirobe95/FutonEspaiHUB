@@ -1622,11 +1622,12 @@ class FutonHubErpPrototype(ErpInventoryEditMixin, ErpInventoryDetailMixin, ErpIn
         win.rowconfigure(1, weight=1)
 
         editable_values = self._inventory_editable_initial_values(item)
-        edit_vars: dict[str, tk.StringVar] = {field: tk.StringVar(value=value) for field, value in editable_values.items()}
+        editable_initial = self._inventory_detail_editable_initial_values(editable_values)
+        edit_vars: dict[str, tk.StringVar] = {field: tk.StringVar(value=value) for field, value in editable_initial.items()}
         apply_in_progress = {"value": False}
 
         def collect_changes() -> dict[str, tuple[str, str]]:
-            return self._collect_inventory_detail_changes(editable_values, edit_vars)
+            return self._collect_inventory_detail_changes(editable_initial, edit_vars)
 
         def close_with_guard() -> None:
             if apply_in_progress["value"]:
@@ -1692,25 +1693,12 @@ class FutonHubErpPrototype(ErpInventoryEditMixin, ErpInventoryDetailMixin, ErpIn
             pady=8,
         ).pack(fill=tk.X, pady=(0, 10))
 
-        for label, field in [
-            ("Nombre", "name"),
-            ("Estado comercial", "commercial_status"),
-            ("Familia", "family"),
-            ("Subgrupo", "subgroup"),
-            ("Medidas", "size"),
-            ("Materiales", "materials"),
-            ("M3 unidad", "cubic_meters"),
-            ("Rotación C", "rotation_c"),
-            ("Bultos", "packages"),
-            ("Precio proveedor", "primary_supplier_price"),
-            ("Precio Pascal", "pascal_price"),
-            ("HECA reference", "heca_reference"),
-            ("Woo SKU", "woo_sku"),
-            ("Stock tienda", "store_stock"),
-            ("Stock almacén", "warehouse_stock"),
-            ("Notas internas", "notes"),
-        ]:
+        for label, field in self._inventory_detail_editable_rows():
             self._editable_detail_row(details_content, label, edit_vars[field]).pack(fill=tk.X, pady=4)
+
+        tk.Label(details_content, text="Datos reservados / lectura", bg=CARD, fg=TEXT, font=("Segoe UI", 11, "bold")).pack(anchor=tk.W, pady=(12, 4))
+        for label, value in self._inventory_detail_readonly_reserved_rows(editable_values):
+            self._detail_row(details_content, label, value).pack(fill=tk.X, pady=4)
 
         readonly_rows = [
             ("ID", item.code),

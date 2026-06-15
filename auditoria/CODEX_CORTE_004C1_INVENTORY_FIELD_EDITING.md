@@ -67,7 +67,6 @@ GestorWoo/tests/test_characterization_inventory_edit.py
 Filas editables presentadas por la ventana de detalle completo:
 
 - `name` / Nombre
-- `commercial_status` / Estado comercial
 - `family` / Familia
 - `subgroup` / Subgrupo
 - `size` / Medidas
@@ -77,13 +76,17 @@ Filas editables presentadas por la ventana de detalle completo:
 - `packages` / Bultos
 - `primary_supplier_price` / Precio proveedor
 - `pascal_price` / Precio Pascal
-- `heca_reference` / HECA reference
-- `woo_sku` / Woo SKU
-- `store_stock` / Stock tienda
-- `warehouse_stock` / Stock almacen
 - `notes` / Notas internas
 
-Whitelist real del servicio existente `update_inventory_item_fields`:
+Campos visibles como solo lectura en 004C1:
+
+- `commercial_status` / Estado comercial: el servicio existente lo rechaza.
+- `heca_reference` / HECA reference: el servicio existente lo rechaza.
+- `woo_sku` / Woo SKU: el servicio existente lo rechaza.
+- `store_stock` / Stock tienda: reservado al Corte 004C2 de movimientos de stock.
+- `warehouse_stock` / Stock almacen: reservado al Corte 004C2 de movimientos de stock.
+
+Whitelist real del servicio existente que queda usada por 004C1:
 
 - `name`
 - `family`
@@ -95,11 +98,9 @@ Whitelist real del servicio existente `update_inventory_item_fields`:
 - `packages`
 - `primary_supplier_price`
 - `pascal_price`
-- `store_stock`
-- `warehouse_stock`
 - `notes`
 
-Limitacion heredada no corregida en este corte: la UI ya mostraba `commercial_status`, `heca_reference` y `woo_sku` como filas editables, pero el servicio existente no las acepta en `INVENTORY_EDITABLE_FIELDS`. Si se modifican, el servicio debe rechazar el cambio como campo no editable.
+Correccion previa al smoke: la UI ya no ofrece como editables `commercial_status`, `heca_reference`, `woo_sku`, `store_stock` ni `warehouse_stock`. No se amplio la whitelist del servicio.
 
 ## Valores vacios
 
@@ -142,11 +143,15 @@ Tests anadidos:
 - `test_apply_changes_calls_internal_inventory_service_and_does_not_touch_woo`
 - `test_apply_changes_reports_service_failure_without_destroying_review`
 - `test_after_inventory_item_updated_refreshes_current_inventory_view`
+- `test_unsupported_fields_are_reserved_readonly_rows`
+- `test_stock_fields_are_not_part_of_004c1_editable_rows`
+- `test_unsupported_and_stock_fields_are_not_collected_for_service_payload`
+- `test_empty_optional_numeric_becomes_none_in_existing_service_preview`
 
 Suite final:
 
 ```text
-Ran 71 tests in 0.095s
+Ran 75 tests in 0.093s
 OK
 ```
 

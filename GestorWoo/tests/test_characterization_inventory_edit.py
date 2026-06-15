@@ -9,6 +9,7 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
+from futonhub.cloud.services import inventory as inventory_service  # noqa: E402
 from futonhub.ui.erp.inventory_edit import ErpInventoryEditMixin  # noqa: E402
 from futonhub.ui.erp.shared_ui import InventoryItem  # noqa: E402
 
@@ -140,6 +141,42 @@ class InventoryEditTests(unittest.TestCase):
         self.assertEqual(values["pascal_price"], "88.5")
         self.assertEqual(values["notes"], "nota interna")
 
+    def test_unsupported_fields_are_reserved_readonly_rows(self) -> None:
+        app = InventoryEditCollector()
+        initial = app._inventory_editable_initial_values(inventory_item())
+
+        readonly = dict(app._inventory_detail_readonly_reserved_rows(initial))
+
+        self.assertEqual(readonly["Estado comercial"], "Normal")
+        self.assertEqual(readonly["HECA reference"], "0201014")
+        self.assertEqual(readonly["Woo SKU"], "0201014")
+
+    def test_stock_fields_are_not_part_of_004c1_editable_rows(self) -> None:
+        app = InventoryEditCollector()
+
+        editable_fields = {field for _label, field in app._inventory_detail_editable_rows()}
+        readonly_fields = {field for _label, field in app._inventory_detail_readonly_reserved_fields()}
+
+        self.assertNotIn("store_stock", editable_fields)
+        self.assertNotIn("warehouse_stock", editable_fields)
+        self.assertIn("store_stock", readonly_fields)
+        self.assertIn("warehouse_stock", readonly_fields)
+
+    def test_unsupported_and_stock_fields_are_not_collected_for_service_payload(self) -> None:
+        app = InventoryEditCollector()
+        initial = app._inventory_editable_initial_values(inventory_item())
+        editable_initial = app._inventory_detail_editable_initial_values(initial)
+        vars_by_field = {field: Var(value) for field, value in editable_initial.items()}
+        vars_by_field["notes"] = Var("nota nueva")
+        vars_by_field["woo_sku"] = Var("SKU-NO-DEBE-ENVIARSE")
+        vars_by_field["store_stock"] = Var("99")
+
+        changes = app._collect_inventory_detail_changes(editable_initial, vars_by_field)
+
+        self.assertEqual(changes, {"notes": ("", "nota nueva")})
+        self.assertNotIn("woo_sku", changes)
+        self.assertNotIn("store_stock", changes)
+
     def test_collect_changes_detects_real_changes(self) -> None:
         app = InventoryEditCollector()
         initial = {"name": "Futon prueba", "notes": ""}
@@ -189,6 +226,13 @@ class InventoryEditTests(unittest.TestCase):
         self.assertTrue(review.destroyed)
         self.assertEqual(applied, [True])
         showinfo.assert_called_once()
+
+    def test_empty_optional_numeric_becomes_none_in_existing_service_preview(self) -> None:
+        with patch("futonhub.cloud.services.inventory._fetch_inventory_item_by_id", return_value={"item_id": 201014, "pascal_price": 12.5}):
+            preview = inventory_service.preview_inventory_item_field_update(Session(), 201014, {"pascal_price": ""})
+
+        self.assertIsNone(preview["after"]["pascal_price"])
+        self.assertEqual(preview["changes"], [{"field": "pascal_price", "before": 12.5, "after": None}])
 
     def test_apply_changes_reports_service_failure_without_destroying_review(self) -> None:
         app = InventoryEditCollector(Session())

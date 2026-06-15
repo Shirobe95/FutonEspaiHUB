@@ -10,6 +10,29 @@ from futonhub.ui.erp.shared_ui import BG, CARD, INDIGO, INDIGO_SOFT, InventoryIt
 from futonhub.ui.windowing import center_window
 
 
+INVENTORY_DETAIL_EDITABLE_FIELDS: tuple[tuple[str, str], ...] = (
+    ("Nombre", "name"),
+    ("Familia", "family"),
+    ("Subgrupo", "subgroup"),
+    ("Medidas", "size"),
+    ("Materiales", "materials"),
+    ("M3 unidad", "cubic_meters"),
+    ("RotaciÃ³n C", "rotation_c"),
+    ("Bultos", "packages"),
+    ("Precio proveedor", "primary_supplier_price"),
+    ("Precio Pascal", "pascal_price"),
+    ("Notas internas", "notes"),
+)
+
+INVENTORY_DETAIL_READONLY_RESERVED_FIELDS: tuple[tuple[str, str], ...] = (
+    ("Estado comercial", "commercial_status"),
+    ("HECA reference", "heca_reference"),
+    ("Woo SKU", "woo_sku"),
+    ("Stock tienda", "store_stock"),
+    ("Stock almacÃ©n", "warehouse_stock"),
+)
+
+
 class ErpInventoryEditMixin:
     def _inventory_editable_initial_values(self, item: InventoryItem) -> dict[str, str]:
         raw = item.raw or {}
@@ -31,6 +54,18 @@ class ErpInventoryEditMixin:
             "warehouse_stock": "" if raw.get("warehouse_stock") in (None, "") else str(raw.get("warehouse_stock")),
             "notes": str(raw.get("notes") or ""),
         }
+
+    def _inventory_detail_editable_rows(self) -> tuple[tuple[str, str], ...]:
+        return INVENTORY_DETAIL_EDITABLE_FIELDS
+
+    def _inventory_detail_readonly_reserved_fields(self) -> tuple[tuple[str, str], ...]:
+        return INVENTORY_DETAIL_READONLY_RESERVED_FIELDS
+
+    def _inventory_detail_readonly_reserved_rows(self, initial: dict[str, str]) -> list[tuple[str, str]]:
+        return [(label, initial.get(field) or "Sin definir") for label, field in INVENTORY_DETAIL_READONLY_RESERVED_FIELDS]
+
+    def _inventory_detail_editable_initial_values(self, initial: dict[str, str]) -> dict[str, str]:
+        return {field: initial.get(field, "") for _label, field in INVENTORY_DETAIL_EDITABLE_FIELDS}
 
     def _collect_inventory_detail_changes(self, initial: dict[str, str], vars_by_field: dict[str, tk.StringVar]) -> dict[str, tuple[str, str]]:
         changes: dict[str, tuple[str, str]] = {}
