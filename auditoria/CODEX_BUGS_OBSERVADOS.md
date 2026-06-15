@@ -33,3 +33,29 @@ Estado:
 - No corregido.
 - Requiere autorizacion separada si se decide arreglarlo.
 
+## DEUDA-TECNICA-002 - Codificacion/Unicode en textos con acentos
+
+Archivos observados:
+
+```text
+GestorWoo/src/futonhub/ui/erp/prototype.py
+GestorWoo/src/futonhub/ui/erp/dashboard.py
+GestorWoo/src/futonhub/ui/erp/inventory_list.py
+GestorWoo/src/futonhub/ui/erp/inventory_detail.py
+```
+
+Hallazgo:
+
+Hay textos de UI y documentacion interna con acentos o simbolos representados como secuencias mojibake, por ejemplo `atenciÃ³n`, `validaciÃ³n`, `artÃ­culo`, `â‚¬` y `â€¦`.
+
+Impacto posible:
+
+- La UI puede mostrar acentos y simbolos corruptos en algunas vistas.
+- Dificulta revisar cambios de texto sin mezclar refactorizacion con normalizacion de encoding.
+- Puede afectar Dashboard y otras vistas heredadas del monolito.
+
+Estado:
+
+- Documentado como deuda tecnica independiente durante el Corte 004B.
+- No corregido en este corte para no mezclar refactor estructural con cambios de textos/encoding.
+- Requiere autorizacion separada y pruebas visuales si se decide normalizar.
