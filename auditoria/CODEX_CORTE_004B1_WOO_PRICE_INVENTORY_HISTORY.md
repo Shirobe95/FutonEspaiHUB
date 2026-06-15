@@ -13,7 +13,9 @@ fix: persist Woo price events in complete inventory history
 El historial de Inventario pasa a recibir eventos de precio Woo verificados en `inventory_change_history`.
 No se sustituyen `audit_logs` ni `operation_snapshots`.
 
-Correccion posterior al smoke test manual: la afirmacion inicial de que no habia cambios de esquema ya no es valida para Supabase real. `inventory_change_history` existe en SQLite legacy y el codigo cloud la consume, pero no aparece creada por las migraciones Supabase del repositorio. El smoke test devolvio `PGRST205: Could not find the table 'public.inventory_change_history' in the schema cache`. Queda documentado en `auditoria/CODEX_DIAGNOSTICO_SCHEMA_INVENTORY_HISTORY_004B1.md`; no se ha ejecutado migracion.
+Correccion posterior al smoke test manual: la afirmacion inicial de que no habia cambios de esquema ya no era valida para Supabase real. `inventory_change_history` existia en SQLite legacy y el codigo cloud la consumia, pero no aparecia creada por las migraciones Supabase del repositorio. El smoke test devolvio `PGRST205: Could not find the table 'public.inventory_change_history' in the schema cache`. Quedo documentado en `auditoria/CODEX_DIAGNOSTICO_SCHEMA_INVENTORY_HISTORY_004B1.md`.
+
+Estado de cierre: migracion minima ejecutada y smoke test manual aprobado con SKU `0201014`.
 
 ## Simbolos tocados
 
@@ -56,6 +58,57 @@ Si Woo queda escrito/verificado pero falla `inventory_items` o `inventory_change
 - La escritura de historial ahora tolera nombres reales observados en el codigo legacy: `field_name`, `change_source`, `item_name`, ademas de los nombres cloud usados por el servicio.
 - Diagnostico posterior: la sincronizacion de `inventory_items.woo_price` ya se confirma correcta en publicacion y rollback reales; el bloqueo restante es exclusivamente de esquema/exposicion de `public.inventory_change_history` en Supabase.
 
+## Migracion ejecutada
+
+Tabla operativa creada/expuesta:
+
+```text
+public.inventory_change_history
+```
+
+Tipos reales usados en el contrato documentado del corte:
+
+- `id`: `uuid`, clave primaria, `default gen_random_uuid()`.
+- `item_id`: `bigint`, referencia a `public.inventory_items(item_id)`.
+- `item_name`: `text`.
+- `field`: `text`.
+- `field_name`: `text`.
+- `old_value`: `text`.
+- `new_value`: `text`.
+- `operation_id`: `text`.
+- `message`: `text`.
+- `notes`: `text`.
+- `source`: `text`.
+- `change_source`: `text`.
+- `action`: `text`.
+- `metadata`: `jsonb`, `default '{}'::jsonb`.
+- `created_at`: `timestamptz`, `default now()`.
+- `created_by`: `uuid`, referencia a `public.profiles(id)`.
+
+Indices/persistencia:
+
+- indice por `item_id, created_at desc`;
+- indice por campo normalizado `coalesce(field, field_name)`;
+- indice por `operation_id`;
+- unicidad parcial por `operation_id + item_id + coalesce(field, field_name, '')` para idempotencia.
+
+RLS/grants:
+
+- RLS habilitado en `public.inventory_change_history`.
+- `SELECT` para `authenticated`.
+- `INSERT` para `authenticated` con `public.is_admin()`.
+- `GRANT SELECT, INSERT ON public.inventory_change_history TO authenticated`.
+- Sin policies de `UPDATE` ni `DELETE`, manteniendo la tabla como append-only.
+
+Schema cache:
+
+- Recarga de PostgREST ejecutada tras crear/exponer la tabla.
+- El error `PGRST205` queda resuelto en el smoke test manual.
+
+Backfill:
+
+- No se ejecuto backfill historico en este cierre.
+
 ## Tests
 
 Comando previo:
@@ -81,7 +134,7 @@ Tests anadidos:
 Resultado final:
 
 ```text
-Ran 64 tests in 0.104s
+Ran 64 tests in 0.115s
 OK
 ```
 
@@ -100,3 +153,14 @@ OK
 - Confirmar segundo evento `woo_price` 138.00 -> 128.00.
 - Confirmar que el evento de publicacion sigue visible.
 - Confirmar que `audit_logs` y `operation_snapshots` siguen visibles desde Seguridad.
+
+Resultado manual aprobado:
+
+- Publicacion Woo correcta.
+- Web actualizada.
+- `inventory_items.woo_price` actualizado.
+- `Historial completo` cargado.
+- Graficas dibujadas correctamente.
+- Rollback correcto.
+- Segundo evento historico anadido.
+- Eventos anteriores conservados.
