@@ -11,7 +11,9 @@ fix: persist Woo price events in complete inventory history
 ## Alcance
 
 El historial de Inventario pasa a recibir eventos de precio Woo verificados en `inventory_change_history`.
-No se crean tablas nuevas, no se cambia el esquema y no se sustituyen `audit_logs` ni `operation_snapshots`.
+No se sustituyen `audit_logs` ni `operation_snapshots`.
+
+Correccion posterior al smoke test manual: la afirmacion inicial de que no habia cambios de esquema ya no es valida para Supabase real. `inventory_change_history` existe en SQLite legacy y el codigo cloud la consume, pero no aparece creada por las migraciones Supabase del repositorio. El smoke test devolvio `PGRST205: Could not find the table 'public.inventory_change_history' in the schema cache`. Queda documentado en `auditoria/CODEX_DIAGNOSTICO_SCHEMA_INVENTORY_HISTORY_004B1.md`; no se ha ejecutado migracion.
 
 ## Simbolos tocados
 
@@ -52,6 +54,7 @@ Si Woo queda escrito/verificado pero falla `inventory_items` o `inventory_change
 - El primer intento de 004B.1 actualizaba Woo y el espejo `products`/`product_variations`; no cerraba `inventory_items.woo_price`.
 - El helper de historial podia devolver fallo sin lanzar excepcion, por lo que la UI podia mostrar exito aunque Inventario/historial hubieran fallado.
 - La escritura de historial ahora tolera nombres reales observados en el codigo legacy: `field_name`, `change_source`, `item_name`, ademas de los nombres cloud usados por el servicio.
+- Diagnostico posterior: la sincronizacion de `inventory_items.woo_price` ya se confirma correcta en publicacion y rollback reales; el bloqueo restante es exclusivamente de esquema/exposicion de `public.inventory_change_history` en Supabase.
 
 ## Tests
 

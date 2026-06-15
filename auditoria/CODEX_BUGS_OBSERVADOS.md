@@ -81,3 +81,10 @@ Estado:
 
 - Corregido localmente mediante sincronizacion estricta de `inventory_items.woo_price` + `inventory_change_history`.
 - Pendiente de smoke manual controlado con una unica repeticion sobre `0201014`.
+
+Actualizacion 2026-06-15:
+
+- Smoke posterior confirma publicacion Woo correcta, web correcta, `inventory_items.woo_price` actualizado, rollback Woo correcto e Inventario restaurado.
+- El fallo restante se limita a escritura de historial.
+- Error real en publicacion y rollback: `PGRST205: Could not find the table 'public.inventory_change_history' in the schema cache`.
+- Diagnostico: `inventory_change_history` existe en SQLite legacy, pero no aparece creada por las migraciones Supabase del repositorio. No se ha ejecutado migracion.
