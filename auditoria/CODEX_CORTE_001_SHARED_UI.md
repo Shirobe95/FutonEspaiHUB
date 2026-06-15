@@ -8,6 +8,24 @@ Commit previsto:
 refactor: extract erp shared ui primitives
 ```
 
+Commit real:
+
+```text
+e00855ca4bc1fd69151b3ebe2a6b9a0867f85a8b
+```
+
+Hash padre:
+
+```text
+0adf26a1bfbc3899f8c499c5195da98c0ccbfb65
+```
+
+Estado de push:
+
+```text
+Pushed a origin/refactor/modularizacion-v1
+```
+
 ## Alcance
 
 Primer corte estructural autorizado:

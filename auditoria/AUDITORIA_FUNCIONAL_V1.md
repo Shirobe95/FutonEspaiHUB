@@ -7,6 +7,52 @@
 
 ---
 
+## Estado de consolidacion Codex - 2026-06-15
+
+Baseline funcional:
+
+```text
+v61.2 blackbox_verified
+```
+
+Checkpoint de partida en Git:
+
+```text
+v62.1 Codex Handoff
+main: 6946d4e9091208b61a3f43d28721fe7cb57c2a14
+```
+
+Estado estructural actual:
+
+```text
+Corte 004B completado localmente
+Corte funcional 004B: 6a1aa15b3e5ef5f984b49547b03919dac2433877
+Rama: refactor/modularizacion-v1
+Estado push: ahead 4 respecto a origin/refactor/modularizacion-v1
+```
+
+Suite automatizada actual:
+
+```text
+python -m unittest discover -s GestorWoo\tests -v
+Ran 53 tests in 0.079s
+OK
+```
+
+Evolucion de modulos extraidos:
+
+| Corte | Archivo | Responsabilidad |
+|---|---|---|
+| 001 | `shared_ui.py` | constantes visuales, dataclasses UI temporales, helpers UI compartidos y overlay |
+| 002 | `shell.py` | `NAV_ITEMS`, shell, sidebar, topbar, cabecera, cambio de vista y resaltado |
+| 003 | `dashboard.py` | vista Dashboard, KPIs, tarjetas, recoleccion y transformacion de datos del Dashboard |
+| 004A | `inventory_list.py` | listado de Inventario, busqueda, refresco, seleccion y carga de filas |
+| 004B | `inventory_detail.py` | panel de detalle de Inventario e historial de precio/stock |
+
+`prototype.py` sigue siendo el adaptador principal y conserva los modulos funcionales no extraidos. No se han modificado servicios, esquemas, reglas comerciales ni entrypoint oficial durante estos cortes.
+
+---
+
 ## 1. Escala de estado
 
 | Estado | Significado |
@@ -36,7 +82,8 @@
 - Persistencia verificada de audit log y snapshot antes de declarar éxito.
 - Rollback real del precio Woo desde snapshot.
 - Edición de campos internos de Inventario sin escritura automática en Woo.
-- Tests automatizados existentes: **11/11 pasan**.
+- Baseline v61.2: tests automatizados existentes **11/11 pasan**.
+- Rama actual tras Corte 004B: **53 tests pasan**.
 
 ### Módulos que no deben declararse completos todavía
 
@@ -611,7 +658,7 @@ Calcular coste individual con las fórmulas de negocio y compartir fuentes de da
 
 ## 4.1 Una UI enorme concentra demasiadas responsabilidades
 
-`GestorWoo/src/futonhub/ui/erp/prototype.py` supera ampliamente las 9.000 líneas y contiene Dashboard, Inventario, Precios, Pedidos, Woo, Proveedores, Informes, Configuración y Seguridad.
+`GestorWoo/src/futonhub/ui/erp/prototype.py` empezo esta fase con aproximadamente 9.260 lineas. Tras Corte 004B mide 7.495 lineas y conserva Precios, Pedidos, Woo, Proveedores, Informes, Configuracion, Seguridad y partes de Inventario todavia no extraidas.
 
 **Consecuencia:** alto riesgo de regresiones, difícil test unitario, conflictos Git y refactors peligrosos.
 
@@ -716,7 +763,8 @@ A partir de este checkpoint:
 - UI ERP actual.
 - Scripts SQL Supabase incluidos.
 - Documentación histórica del proyecto.
-- Suite automatizada: `11 passed`.
+- Suite automatizada baseline v61.2: `11 passed`.
+- Suite automatizada rama actual tras Corte 004B: `53 passed`.
 - Pruebas manuales confirmadas durante el desarrollo:
   - sincronización Woo y cierre de enlaces;
   - 1.116 relaciones de componentes resueltas;

@@ -239,3 +239,65 @@ Resumen:
 - Tests existentes iniciales: 11.
 - Tests de caracterizacion anadidos: 29.
 - Total actual: 40.
+
+## Resumen acumulativo tras Corte 004B
+
+Fecha: 2026-06-15
+
+Comando ejecutado:
+
+```powershell
+python -m unittest discover -s GestorWoo\tests -v
+```
+
+Resultado:
+
+```text
+Ran 53 tests in 0.089s
+OK
+```
+
+Desglose acumulado:
+
+| Bloque | Tests | Total acumulado |
+|---|---:|---:|
+| Suite inicial del checkpoint | 11 | 11 |
+| Caracterizacion inicial: entrypoint, Woo, persistencia, rollback y packs | 29 | 40 |
+| Dashboard | 3 | 43 |
+| Inventario listado | 6 | 49 |
+| Inventario detalle/historial | 4 | 53 |
+
+Tests Dashboard:
+
+```text
+GestorWoo/tests/test_characterization_dashboard.py
+```
+
+- Sin sesion cloud no llama servicios y muestra sistemas offline.
+- Agrega pedidos, propuestas, actividad reciente y errores de hoy.
+- Reporta errores de un servicio sin bloquear las demas secciones.
+
+Tests Inventario listado:
+
+```text
+GestorWoo/tests/test_characterization_inventory_list.py
+GestorWoo/tests/test_characterization_entrypoint.py
+```
+
+- Busqueda vacia sin `allow_empty` se bloquea localmente.
+- Sin sesion cloud no consulta servicios.
+- Busqueda tipo codigo usa resultados rankeados del servidor.
+- Busqueda textual mezcla resultados del servidor con busqueda local sin acentos.
+- Refresco vacio permitido carga ventana por defecto.
+- `_show_view("inventory")` se normaliza a `inventario`.
+
+Tests Inventario detalle/historial:
+
+```text
+GestorWoo/tests/test_characterization_inventory_detail.py
+```
+
+- Filas de detalle conservan campos del item seleccionado y posicion de contenido pack ya calculado.
+- Historial separa filas de precio y stock.
+- Carga de historial usa `fetch_inventory_item_history(session, item_id, limit=120)`.
+- Sin sesion Supabase renderiza error sin llamar al servicio.

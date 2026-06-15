@@ -24,7 +24,35 @@ La UI ERP real se concentra actualmente en:
 GestorWoo/src/futonhub/ui/erp/prototype.py
 ```
 
-Este archivo tiene aproximadamente 9.260 líneas y contiene navegación, vistas, modales, orquestación y parte de la lógica de presentación.
+Al inicio de la fase, este archivo tenia aproximadamente 9.260 lineas y concentraba navegacion, vistas, modales, orquestacion y parte de la logica de presentacion.
+
+## Estado estructural actual tras Corte 004B
+
+`prototype.py` tenia aproximadamente 9.260 lineas al inicio de la fase. Tras los cortes 001-004B, mide 7495 lineas y sigue siendo el adaptador principal.
+
+Archivos extraidos actualmente:
+
+```text
+GestorWoo/src/futonhub/ui/erp/shared_ui.py
+GestorWoo/src/futonhub/ui/erp/shell.py
+GestorWoo/src/futonhub/ui/erp/dashboard.py
+GestorWoo/src/futonhub/ui/erp/inventory_list.py
+GestorWoo/src/futonhub/ui/erp/inventory_detail.py
+```
+
+Responsabilidades que permanecen en `prototype.py`:
+
+- `FutonHubErpPrototype` y `run_erp_prototype`.
+- Login y sesion.
+- Adaptacion de mixins extraidos.
+- Inventario no extraido: edicion, stock, creacion, exportacion, packs/componentes y conexion con Cambio de Precios.
+- WooCommerce.
+- Cambio de Precios.
+- Pedidos.
+- Precio Proveedores.
+- Informes / Exportaciones.
+- Configuracion.
+- Seguridad / Logs / Snapshots / Rollback.
 
 ---
 
@@ -92,13 +120,21 @@ Supabase / WooCommerce / archivos locales
 
 ### 3.2 Dashboard
 
+**Estado estructural Corte 003**
+
+- Vista extraida a `GestorWoo/src/futonhub/ui/erp/dashboard.py`.
+- `prototype.py` conserva el adaptador y hereda `ErpDashboardMixin`.
+- `_show_view("dashboard")` sigue siendo el punto de invocacion desde `shell.py`.
+
 **UI**
-- `prototype.py`
+- `dashboard.py`
   - `_build_dashboard`
   - `_dashboard_collect_data`
   - `_dashboard_show_attention`
   - `_dashboard_activity_card`
   - `_dashboard_system_card`
+- `prototype.py`
+  - adaptador principal y herencia de `ErpDashboardMixin`
 
 **Servicios consumidos**
 - pedidos, propuestas y seguridad/logs.
@@ -111,16 +147,32 @@ Supabase / WooCommerce / archivos locales
 
 ### 3.3 Inventario
 
+**Estado estructural Corte 004B**
+
+- Listado extraido a `GestorWoo/src/futonhub/ui/erp/inventory_list.py`.
+- Detalle e historial extraidos a `GestorWoo/src/futonhub/ui/erp/inventory_detail.py`.
+- `prototype.py` conserva el adaptador y hereda `ErpInventoryListMixin` y `ErpInventoryDetailMixin`.
+- Permanecen en `prototype.py`: creacion, exportacion, edicion, stock, packs/componentes y conexion con Cambio de Precios.
+
 **UI**
-- `prototype.py`
+- `inventory_list.py`
   - `_build_inventory`
   - `_refresh_inventory`
+  - `_finish_inventory_refresh`
+- `inventory_detail.py`
+  - `_inventory_detail_rows`
+  - `_render_inventory_detail`
+  - `_load_inventory_history`
+  - `_render_inventory_history`
+  - `_render_inventory_history_error`
+  - `_render_inventory_history_card`
+- `prototype.py`
+  - adaptador principal y herencia de `ErpInventoryListMixin` y `ErpInventoryDetailMixin`
   - `_open_create_inventory_item_modal`
   - `_open_inventory_detail_window`
   - `_open_inventory_stock_preview_modal`
   - `_open_inventory_changes_review`
   - `_apply_inventory_detail_changes`
-  - `_render_inventory_history`
   - `_export_inventory_visible`
   - `_render_inventory_pack_inline_box`
   - `_open_inventory_pack_contents_popup`

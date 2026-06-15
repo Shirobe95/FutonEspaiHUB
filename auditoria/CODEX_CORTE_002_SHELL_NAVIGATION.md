@@ -8,6 +8,24 @@ Commit previsto:
 refactor: extract erp shell and navigation
 ```
 
+Commit real:
+
+```text
+f1a7134ac4d9fb8dce36dbd2bd58d5b8a4b22d29
+```
+
+Hash padre:
+
+```text
+e00855ca4bc1fd69151b3ebe2a6b9a0867f85a8b
+```
+
+Estado de push:
+
+```text
+Pushed a origin/refactor/modularizacion-v1
+```
+
 ## Alcance
 
 Segundo corte estructural autorizado:
