@@ -18,9 +18,9 @@ def _json_safe(value: Any) -> Any:
 
 
 INVENTORY_SELECT_COLUMNS = (
-    'item_id,name,family,subgroup,size,materials,cubic_meters,store_stock,warehouse_stock,'
-    'hub_item_code,item_record_type,base_item_code,heca_reference,woo_item_kind,woo_id,woo_parent_id,woo_name,woo_sku,woo_price,woo_categories,woo_link_status,'
-    'order_calculated_price,weighted_average_cost,supplier_order_qty,supplier_order_provider,notes,updated_at'
+    'item_id,name,family,subgroup,size,materials,cubic_meters,rotation_c,packages,store_stock,warehouse_stock,'
+    'hub_item_code,item_record_type,base_item_code,heca_reference,commercial_status,woo_item_kind,woo_id,woo_parent_id,woo_name,woo_sku,woo_price,woo_categories,woo_link_status,'
+    'order_calculated_price,weighted_average_cost,primary_supplier_price,pascal_price,supplier_order_qty,supplier_order_provider,notes,updated_at'
 )
 
 INVENTORY_EDITABLE_FIELDS = {

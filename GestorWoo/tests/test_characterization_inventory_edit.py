@@ -186,6 +186,48 @@ class InventoryEditTests(unittest.TestCase):
 
         self.assertEqual(changes, {"name": ("Futon prueba", "Futon prueba XL")})
 
+    def test_collect_changes_does_not_report_loaded_numeric_values_as_false_changes(self) -> None:
+        app = InventoryEditCollector()
+        initial = app._inventory_editable_initial_values(
+            inventory_item(
+                rotation_c=2,
+                primary_supplier_price=15,
+                pascal_price=12,
+            )
+        )
+        editable_initial = app._inventory_detail_editable_initial_values(initial)
+        vars_by_field = {field: Var(value) for field, value in editable_initial.items()}
+
+        changes = app._collect_inventory_detail_changes(editable_initial, vars_by_field)
+
+        self.assertEqual(changes, {})
+
+    def test_collect_changes_detects_missing_raw_numeric_values_as_changes(self) -> None:
+        app = InventoryEditCollector()
+        initial = app._inventory_editable_initial_values(
+            inventory_item(
+                rotation_c="",
+                primary_supplier_price="",
+                pascal_price="",
+            )
+        )
+        editable_initial = app._inventory_detail_editable_initial_values(initial)
+        vars_by_field = {field: Var(value) for field, value in editable_initial.items()}
+        vars_by_field["rotation_c"] = Var("2")
+        vars_by_field["primary_supplier_price"] = Var("15")
+        vars_by_field["pascal_price"] = Var("12")
+
+        changes = app._collect_inventory_detail_changes(editable_initial, vars_by_field)
+
+        self.assertEqual(
+            changes,
+            {
+                "rotation_c": ("", "2"),
+                "primary_supplier_price": ("", "15"),
+                "pascal_price": ("", "12"),
+            },
+        )
+
     def test_collect_changes_treats_blank_field_as_change_when_previous_value_exists(self) -> None:
         app = InventoryEditCollector()
         initial = {"notes": "nota anterior"}
