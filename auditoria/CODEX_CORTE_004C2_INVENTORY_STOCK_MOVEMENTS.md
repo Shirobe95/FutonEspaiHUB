@@ -2,10 +2,29 @@
 
 Fecha: 2026-06-15
 
-Commit previsto:
+Commit de codigo:
 
 ```text
+aea7c1f52845fb93e8346ae65040b8386d87c1c8
 refactor: extract inventory stock movements
+```
+
+Hash padre:
+
+```text
+35920249c8fee7a3407a97ae8ad17580b30a12ef
+```
+
+Estado de push:
+
+```text
+Pushed a origin/refactor/modularizacion-v1
+```
+
+Estado del corte:
+
+```text
+Cerrado y aprobado
 ```
 
 ## Alcance
@@ -36,6 +55,7 @@ GestorWoo/src/futonhub/ui/erp/inventory_stock.py
 - El servicio existente conserva `operation_id`, snapshot y audit log.
 - WooCommerce no se toca.
 - Tras aplicar se refresca Inventario mediante `_after_inventory_item_updated`.
+- No se hicieron cambios funcionales posteriores al smoke manual aprobado.
 
 ## Exclusiones
 
@@ -70,11 +90,11 @@ Tests anadidos:
 Suite final:
 
 ```text
-Ran 80 tests in 0.114s
+Ran 80 tests in 0.127s
 OK
 ```
 
-## Checklist manual pendiente
+## Checklist manual aprobado
 
 - Abrir ERP mediante `Abrir ERP.bat`.
 - Login.
@@ -91,3 +111,17 @@ OK
 - Confirmar WooCommerce intacto.
 - Restaurar valor original con otro movimiento controlado.
 - Cerrar sin traceback.
+
+Resultado manual aprobado:
+
+- Motivo obligatorio verificado.
+- Valores negativos bloqueados.
+- Cambio correcto de stock.
+- Stock tienda y stock almacen independientes.
+- Persistencia correcta.
+- Historial actualizado.
+- Audit log creado.
+- Snapshot creado.
+- WooCommerce intacto.
+- Restauracion de valores correcta.
+- Cierre sin traceback.
