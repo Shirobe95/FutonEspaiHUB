@@ -3974,6 +3974,8 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 status = "Error"
                 final_unit = 0.0
                 line_cost = 0.0
+                pvp_unit = 0.0
+                pvp_line = 0.0
                 pending += 1
             else:
                 if is_heimei:
@@ -4016,10 +4018,9 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                         "coste_almacenaje_iva": coste_almacenaje_iva,
                         "coste_picking_iva": coste_picking_iva,
                     }
-                if rent_percent > 0 and rent_percent < 100:
-                    final_unit = round(final_unit / (1 - rent_percent / 100), 2)
-                    line_details["precio_coste_final_con_rentabilidad"] = final_unit
+                pvp_unit = round(final_unit * (1 + rent_percent / 100), 2)
                 line_cost = round(final_unit * qty, 2)
+                pvp_line = round(pvp_unit * qty, 2)
                 status = "Calculado"
                 ok += 1
                 total_cost += line_cost
@@ -4046,6 +4047,8 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 "precio_coste_final": final_unit,
                 "final_cost": line_cost,
                 "line_cost": line_cost,
+                "pvp_unit": pvp_unit,
+                "pvp_line": pvp_line,
                 "stock_total_actual": stock_total_actual,
                 "weighted_average_cost_actual": weighted_current,
                 "precio_ponderado_lote": precio_ponderado_lote,
@@ -4302,8 +4305,9 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 "Coste sin almacenaje",
                 "Almacenaje + IVA",
                 "Picking + IVA",
-                "Rentabilidad %",
                 "Coste Final Articulo",
+                "Rentabilidad %",
+                "P.V.P.",
                 "Precio ponderado lote",
                 "Coste Total Cantidad",
             ]
@@ -4330,8 +4334,9 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 "Coste sin almacenaje": 170,
                 "Almacenaje + IVA": 145,
                 "Picking + IVA": 130,
-                "Rentabilidad %": 125,
                 "Coste Final Articulo": 160,
+                "Rentabilidad %": 125,
+                "P.V.P.": 130,
                 "Precio ponderado lote": 170,
                 "Coste Total Cantidad": 165,
             }
@@ -4353,8 +4358,9 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 "Coste final con descarga",
                 "Almacenaje + IVA",
                 "Picking + IVA",
-                "Rentabilidad %",
                 "Coste Final Articulo",
+                "Rentabilidad %",
+                "P.V.P.",
                 "Precio ponderado lote",
                 "Coste Total Cantidad",
             ]
@@ -4375,8 +4381,9 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 "Coste final con descarga": 185,
                 "Almacenaje + IVA": 145,
                 "Picking + IVA": 130,
-                "Rentabilidad %": 125,
                 "Coste Final Articulo": 160,
+                "Rentabilidad %": 125,
+                "P.V.P.": 130,
                 "Precio ponderado lote": 170,
                 "Coste Total Cantidad": 165,
             }
@@ -4655,6 +4662,11 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             coste_total_cantidad = source.get("line_cost") or source.get("final_cost")
             coste_unitario_final = source.get("precio_coste_final") or source.get("unit_cost")
             rentabilidad = source.get("rentabilidad_percent")
+            pvp_unit = source.get("pvp_unit")
+            if pvp_unit in (None, ""):
+                base_cost = self._money_float(coste_unitario_final, 0.0)
+                rent = self._money_float(rentabilidad, 0.0)
+                pvp_unit = round(base_cost * (1 + rent / 100), 2) if base_cost else 0.0
             common = (
                 item.code,
                 item.name,
@@ -4683,8 +4695,9 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                         eur(calc_details.get("coste_sin_almacenaje")),
                         eur(calc_details.get("coste_almacenaje_iva")),
                         eur(calc_details.get("coste_picking_iva")),
-                        num(rentabilidad),
                         eur(coste_unitario_final),
+                        num(rentabilidad),
+                        eur(pvp_unit),
                         eur(precio_ponderado_lote),
                         eur(coste_total_cantidad, default=("Pendiente" if item.final_cost == "Bloqueado" else item.final_cost)),
                     )
@@ -4701,8 +4714,9 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                         eur(calc_details.get("coste_descarga")),
                         eur(calc_details.get("coste_almacenaje_iva")),
                         eur(calc_details.get("coste_picking_iva")),
-                        num(rentabilidad),
                         eur(coste_unitario_final),
+                        num(rentabilidad),
+                        eur(pvp_unit),
                         eur(precio_ponderado_lote),
                         eur(coste_total_cantidad, default=("Pendiente" if item.final_cost == "Bloqueado" else item.final_cost)),
                     )
@@ -5080,8 +5094,9 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             "Coste descarga",
             "Almacenaje IVA",
             "Picking IVA",
-            "Rentabilidad %",
             "Coste Final Artículo",
+            "Rentabilidad %",
+            "P.V.P.",
             "Precio ponderado lote",
             "Coste Total Cantidad",
             "Estado",
@@ -5099,6 +5114,11 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             calc_inputs = source.get("calculation_inputs") if isinstance(source.get("calculation_inputs"), dict) else {}
             calc_details = source.get("calculation_details") if isinstance(source.get("calculation_details"), dict) else {}
             reasons = source.get("calculation_reasons") or []
+            pvp_export_unit = source.get("pvp_unit")
+            if pvp_export_unit in (None, ""):
+                base_cost = self._money_float(source.get("precio_coste_final") or source.get("unit_cost"), 0.0)
+                rent = self._money_float(source.get("rentabilidad_percent"), 0.0)
+                pvp_export_unit = round(base_cost * (1 + rent / 100), 2) if base_cost else None
 
             ws_lines.append(
                 [
@@ -5123,8 +5143,9 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                     self._excel_number(calc_details.get("coste_descarga")),
                     self._excel_number(calc_details.get("coste_almacenaje_iva")),
                     self._excel_number(calc_details.get("coste_picking_iva")),
-                    self._excel_number(source.get("rentabilidad_percent")),
                     self._excel_number(source.get("precio_coste_final") or source.get("unit_cost")),
+                    self._excel_number(source.get("rentabilidad_percent")),
+                    self._excel_number(pvp_export_unit),
                     self._excel_number(source.get("precio_ponderado_lote")),
                     self._excel_number(source.get("line_cost") or source.get("final_cost")),
                     item.status,
@@ -5144,25 +5165,25 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                     for key, value in data.items():
                         ws_detail.append((item.code, item.name, group_name, key, self._audit_value(value)))
 
-        money_cols = (8, 9, 16, 17, 18, 19, 20, 21, 23, 24, 25)
-        dollar_cols = (6, 7)
-        percent_cols = (11, 12, 13, 14, 15, 22)
+        money_cols = (6, 8, 9, 16, 17, 18, 19, 20, 21, 22, 24, 25, 26)
+        dollar_cols = (7,)
+        percent_cols = (11, 12, 13, 14, 15, 23)
         self._apply_report_sheet_style(ws_lines, freeze="A2", money_cols=money_cols, percent_cols=percent_cols, dollar_cols=dollar_cols)
         self._apply_report_sheet_style(ws_detail, freeze="A2")
 
         # Columnes especiales
         ws_lines.column_dimensions["B"].width = 38
-        ws_lines.column_dimensions["X"].width = 34
-        ws_lines.column_dimensions["Y"].width = 28
-        ws_lines.column_dimensions["Z"].width = 24
+        ws_lines.column_dimensions["Y"].width = 34
+        ws_lines.column_dimensions["Z"].width = 28
+        ws_lines.column_dimensions["AA"].width = 24
 
         # Totales al final de líneas
         total_row = ws_lines.max_row + 2
-        ws_lines.cell(row=total_row, column=20, value="TOTALES")
-        ws_lines.cell(row=total_row, column=21, value=avg_unit_cost)
-        ws_lines.cell(row=total_row, column=22, value="Referencia")
-        ws_lines.cell(row=total_row, column=23, value=total_line_cost)
-        for col in range(20, 24):
+        ws_lines.cell(row=total_row, column=21, value="TOTALES")
+        ws_lines.cell(row=total_row, column=22, value=avg_unit_cost)
+        ws_lines.cell(row=total_row, column=23, value="Referencia")
+        ws_lines.cell(row=total_row, column=26, value=total_line_cost)
+        for col in range(21, 27):
             cell = ws_lines.cell(row=total_row, column=col)
             cell.font = Font(bold=True, color="FFFFFF")
             cell.fill = PatternFill("solid", fgColor="0F172A")
@@ -5172,8 +5193,8 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 top=Side(style="thin", color="CBD5E1"),
                 bottom=Side(style="thin", color="CBD5E1"),
             )
-        ws_lines.cell(row=total_row, column=21).number_format = '#,##0.00 €'
-        ws_lines.cell(row=total_row, column=23).number_format = '#,##0.00 €'
+        ws_lines.cell(row=total_row, column=22).number_format = '#,##0.00 €'
+        ws_lines.cell(row=total_row, column=26).number_format = '#,##0.00 €'
 
         # Resaltar estados
         red_fill = PatternFill("solid", fgColor="FEE2E2")
