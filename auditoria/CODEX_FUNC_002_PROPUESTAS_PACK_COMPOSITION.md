@@ -5,7 +5,7 @@ Fecha: 2026-06-17
 Estado:
 
 ```text
-Implementado con FUNC-002B. Pendiente de smoke manual.
+Implementado con FUNC-002C. Pendiente de smoke manual.
 ```
 
 ## Objetivo
@@ -24,12 +24,15 @@ FUNC-002B ajusta los packs Woo a composicion compacta en una sola linea:
 2x0201001xTatami 80 | 1x0728003xFuton Algodon
 ```
 
+FUNC-002C corrige el enriquecimiento de nombres cuando los componentes llegan sin `component_name` y evita que la composicion se solape con los botones de las lineas anadidas.
+
 ## Alcance
 
 Archivos funcionales:
 
 ```text
 GestorWoo/src/futonhub/ui/erp/prototype.py
+GestorWoo/src/futonhub/cloud/services/inventory.py
 ```
 
 Tests nuevos:
@@ -44,6 +47,7 @@ GestorWoo/tests/test_characterization_price_proposal_pack_composition.py
 - `ID`, `Precio`, SKU, Woo ID y logica de publicacion no cambian.
 - No se hacen consultas por fila.
 - No se modifican servicios, Supabase, RLS, RPCs ni esquema en FUNC-002B.
+- FUNC-002C modifica solo el enriquecimiento de lectura de nombres en el servicio de inventario; no cambia escrituras, Supabase, RLS, RPCs ni esquema.
 - No se modifica WooCommerce.
 
 ## Implementacion
@@ -73,6 +77,10 @@ FUNC-002B aumenta el ancho de la columna `Nombre` en la tabla de seleccion y el 
 
 La busqueda de propuestas reutiliza la busqueda rankeada existente de Inventario para que buscar un componente, por ejemplo `0201001`, devuelva el articulo normal y los packs que contienen ese componente. No se anaden consultas por fila desde la UI.
 
+FUNC-002C reemplaza la resolucion anterior de nombres por componente por resolucion en bloque contra `inventory_items`, usando cache por codigo y consultas batch sobre `heca_reference`, `hub_item_code`, `woo_sku` e `item_id`.
+
+En lineas ya anadidas a propuesta, la tabla conserva el nombre compacto en `ProposalLine.name`, pero la UI lo presenta en varias lineas reemplazando ` | ` por saltos de linea. Los botones `Modificar` y `Borrar` quedan en una zona propia.
+
 ## Simbolos tocados
 
 ```text
@@ -86,6 +94,9 @@ _price_display_name_for_inventory_item
 _prepare_price_edit_state
 _price_proposal_from_cloud_row
 _build_price_edit_workspace
+_fill_component_names_from_inventory
+_price_line_display_name
+_proposal_edit_line
 ```
 
 ## Tests
@@ -104,12 +115,15 @@ Cobertura automatizada:
 - propuesta cloud reutiliza `source_row.ui_line_name`;
 - composicion compacta cacheada se reutiliza;
 - busqueda por componente devuelve articulo y packs que lo contienen;
-- busqueda por ID de pack sigue funcionando.
+- busqueda por ID de pack sigue funcionando;
+- componentes sin `component_name` resuelven nombres en bloque desde inventario;
+- no se usa la busqueda rankeada por componente durante la resolucion batch de nombres;
+- linea anadida presenta la composicion en varias lineas para evitar solape con botones.
 
 Resultado automatizado:
 
 ```text
-Ran 110 tests
+Ran 112 tests
 OK
 ```
 
@@ -131,6 +145,12 @@ OK
 5e6009928717e1cd8b3574327ffca2575a1e6a2f
 ```
 
+## Commit funcional FUNC-002C
+
+```text
+05adb5e9fc1e90ccc22841125ef8af2610ab9487
+```
+
 ## Smoke manual
 
 Pendiente.
@@ -145,7 +165,9 @@ Checklist propuesto:
 - Verificar agrupacion de componentes repetidos.
 - Verificar orden por ID de componente.
 - Buscar un componente, por ejemplo `0201001`, y confirmar que aparecen el articulo normal y los packs que lo contienen.
+- Confirmar que esos packs muestran nombres de componentes, no solo cantidad e ID.
 - Buscar por ID de pack y confirmar que sigue apareciendo.
+- Anadido un pack a la propuesta, confirmar que todos los componentes quedan visibles y los botones no pisan el texto.
 - Verificar fallback tecnico solo si no hay composicion.
 - Guardar una propuesta y recargarla.
 - Confirmar que `ProposalLine.name` mantiene la composicion legible.
