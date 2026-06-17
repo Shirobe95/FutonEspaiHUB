@@ -22,6 +22,7 @@ Abrir ERP.bat -> GestorWoo/gestorwoo.py erp-prototype -> gestorwoo.cli -> futonh
 | 004C2 inventory stock movements | Motivo obligatorio, negativos bloqueados, cambio correcto de stock, tienda y almacen independientes, persistencia, historial, audit log, snapshot, restauracion y cierre | Aprobado | 2026-06-15 | `aea7c1f52845fb93e8346ae65040b8386d87c1c8` | Usuario confirma smoke test manual aprobado mediante `Abrir ERP.bat` | WooCommerce intacto; sin cambios funcionales posteriores al smoke |
 | 004D1 inventory item creation | Creacion de items, validaciones, persistencia de `rotation_c`, `packages`, `primary_supplier_price`, `pascal_price` y `commercial_status`, refresco, detalle completo, edicion posterior, sin falsos cambios y cierre | Aprobado | 2026-06-16 | `d2c005d056d6698511c1e1aea211a680449e475b` | Usuario confirma smoke test manual aprobado mediante `Abrir ERP.bat` tras correccion de proyeccion de lectura | WooCommerce intacto; sin cambios en escrituras, RLS ni esquema |
 | FUNC-001 supplier order cost and P.V.P. | Pedidos separa coste real, rentabilidad y P.V.P.; UI y exportaciones reales de Ekomat/Heimei; coste total por cantidad basado en coste real; recepcion e inventario no usan `pvp_*` | Aprobado | 2026-06-16 | `3d0f08bd7a28115cca182a8da4578f59cab55258` | Usuario confirma smoke manual aprobado en UI y exportaciones reales | Sin cambios en esquema, RLS, RPCs ni pedidos historicos |
+| FUNC-002 price proposal pack composition | Propuestas de precios muestran composicion legible de packs Woo en `Nombre`; articulos normales mantienen nombre; sin consultas por fila ni cambios Woo | Pendiente | 2026-06-17 | `785989cc234e7d1e95a24a1adb98f07d5c215026` | Pendiente de smoke manual mediante `Abrir ERP.bat` | Fallback tecnico indica incidencia de datos si falta composicion enriquecida |
 
 ## Suite automatizada asociada
 
@@ -34,7 +35,7 @@ python -m unittest discover -s GestorWoo\tests -v
 Resultado actual:
 
 ```text
-Ran 98 tests
+Ran 107 tests
 OK
 ```
 
