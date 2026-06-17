@@ -1138,6 +1138,111 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             return "\n".join(f"- {token} x{counts[token]}" for token in order)
         return "; ".join(f"{token} x{counts[token]}" for token in order)
 
+    def _price_inventory_item_is_pack(self, item: InventoryItem | None) -> bool:
+        if item is None:
+            return False
+        raw = item.raw or {}
+        record_type = str(raw.get("item_record_type") or raw.get("hub_search_record_type") or "").strip()
+        if record_type in {"woo_pack", "manual_pack"}:
+            return True
+        is_pack = raw.get("is_pack")
+        if is_pack is True or str(is_pack or "").strip().lower() in {"1", "true", "yes", "si", "sí"}:
+            return True
+        return item.name.lower().startswith("pack woo")
+
+    def _price_pack_component_quantity(self, value: Any) -> float:
+        if value in (None, ""):
+            return 1.0
+        try:
+            return float(str(value).replace(",", "."))
+        except Exception:
+            return 1.0
+
+    def _price_format_pack_component_quantity(self, value: float) -> str:
+        try:
+            number = float(value)
+        except Exception:
+            return str(value)
+        if number.is_integer():
+            return str(int(number))
+        return f"{number:.6f}".rstrip("0").rstrip(".")
+
+    def _price_pack_component_from_text(self, text: str) -> dict[str, Any] | None:
+        cleaned = text.strip().lstrip("-").strip()
+        if not cleaned:
+            return None
+        patterns = [
+            r"^(?P<qty>\d+(?:[\.,]\d+)?)\s*×\s*(?P<code>\S+)(?:\s*[·-]\s*(?P<name>.*))?$",
+            r"^(?P<code>\S+)\s*[xX×]\s*(?P<qty>\d+(?:[\.,]\d+)?)(?:\s*[·-]\s*(?P<name>.*))?$",
+        ]
+        for pattern in patterns:
+            match = re.match(pattern, cleaned)
+            if not match:
+                continue
+            code = str(match.group("code") or "").strip()
+            if not code:
+                return None
+            return {
+                "component_item_code": code,
+                "component_name": str(match.group("name") or "").strip(),
+                "quantity": self._price_pack_component_quantity(match.group("qty")),
+            }
+        return None
+
+    def _price_pack_components_from_raw(self, raw: dict[str, Any]) -> list[dict[str, Any]]:
+        raw_components = raw.get("hub_pack_components")
+        components: list[dict[str, Any]] = []
+        if isinstance(raw_components, list):
+            components.extend(row for row in raw_components if isinstance(row, dict))
+        if not components:
+            text = str(raw.get("hub_pack_components_multiline") or raw.get("hub_pack_components_text") or "").strip()
+            separators = "\n" if "\n" in text else ";"
+            for part in text.split(separators):
+                parsed = self._price_pack_component_from_text(part)
+                if parsed:
+                    components.append(parsed)
+
+        grouped: dict[str, dict[str, Any]] = {}
+        for component in components:
+            code = str(
+                component.get("component_item_code")
+                or component.get("item_id")
+                or component.get("code")
+                or ""
+            ).strip()
+            if not code:
+                continue
+            name = str(component.get("component_name") or component.get("name") or "").strip()
+            quantity = self._price_pack_component_quantity(component.get("quantity"))
+            if code not in grouped:
+                grouped[code] = {"component_item_code": code, "component_name": name, "quantity": 0.0}
+            grouped[code]["quantity"] = float(grouped[code]["quantity"]) + quantity
+            if name and not str(grouped[code].get("component_name") or "").strip():
+                grouped[code]["component_name"] = name
+        return [grouped[code] for code in sorted(grouped)]
+
+    def _price_pack_components_display_name(self, item: InventoryItem | None) -> str:
+        if item is None:
+            return ""
+        components = self._price_pack_components_from_raw(item.raw or {})
+        if not components:
+            return item.name
+        lines: list[str] = []
+        for component in components:
+            quantity = self._price_format_pack_component_quantity(float(component.get("quantity") or 0))
+            code = str(component.get("component_item_code") or "").strip()
+            name = str(component.get("component_name") or "").strip()
+            if name:
+                lines.append(f"{quantity} × {code} · {name}")
+            else:
+                lines.append(f"{quantity} × {code}")
+        return "\n".join(lines) if lines else item.name
+
+    def _price_display_name_for_inventory_item(self, item: InventoryItem) -> str:
+        if not self._price_inventory_item_is_pack(item):
+            return item.name
+        return self._price_pack_components_display_name(item)
+
     def _inventory_item_type_text(self, item: InventoryItem) -> str:
         raw = item.raw or {}
         record_type = str(raw.get("item_record_type") or raw.get("hub_search_record_type") or "simple").strip() or "simple"
@@ -1643,7 +1748,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         self._price_edit_lines = list(proposal.lines) if proposal else []
         if self._proposal_source_item is not None and all(line.code != self._proposal_source_item.code for line in self._price_edit_lines):
             item = self._proposal_source_item
-            self._price_edit_lines.insert(0, ProposalLine(item.code, item.name, item.price, item.price, "Pendiente", "flat"))
+            self._price_edit_lines.insert(0, ProposalLine(item.code, self._price_display_name_for_inventory_item(item), item.price, item.price, "Pendiente", "flat"))
             source = self._price_source_from_inventory_item(item)
             if source:
                 self._price_line_sources[item.code] = source
@@ -1907,9 +2012,10 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         status = self._price_status_label_from_cloud(row.get("status"))
         source_row = row.get("source_row") if isinstance(row.get("source_row"), dict) else {}
         display_name = str(source_row.get("ui_proposal_name") or row.get("proposal_name") or row.get("title") or row.get("name") or f"Propuesta {row.get('id') or '-'}")
+        line_name = str(source_row.get("ui_line_name") or row.get("name") or "Producto sin nombre")
         line = ProposalLine(
             code=f"{row.get('item_kind') or '-'}:{row.get('item_woo_id') or row.get('local_id') or '-'}",
-            name=str(row.get("name") or "Producto sin nombre"),
+            name=line_name,
             old_price=self._format_price_value(old_price),
             new_price=self._format_price_value(new_price),
             change=change,
@@ -2327,7 +2433,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             notice.pack(fill=tk.X, pady=(0, 12))
 
         available_items = list(self._price_available_items or self._inventory_items)
-        item_rows = [(item.code, item.name, item.price) for item in available_items]
+        item_rows = [(item.code, self._price_display_name_for_inventory_item(item), item.price) for item in available_items]
         if not item_rows and not self._price_items_loading:
             self._price_items_error = self._price_items_error or "No hay items reales cargados para anadir a propuestas. Usa Buscar o Recargar."
         variations_host = tk.Frame(left, bg=BG)
