@@ -5,7 +5,7 @@ Fecha: 2026-06-17
 Estado:
 
 ```text
-Implementado con FUNC-002C. Pendiente de smoke manual.
+Implementado con FUNC-002D. Pendiente de smoke manual.
 ```
 
 ## Objetivo
@@ -25,6 +25,8 @@ FUNC-002B ajusta los packs Woo a composicion compacta en una sola linea:
 ```
 
 FUNC-002C corrige el enriquecimiento de nombres cuando los componentes llegan sin `component_name` y evita que la composicion se solape con los botones de las lineas anadidas.
+
+FUNC-002D corrige la equivalencia de codigos numericos con y sin ceros iniciales durante busqueda, comparacion y cache.
 
 ## Alcance
 
@@ -81,6 +83,16 @@ FUNC-002C reemplaza la resolucion anterior de nombres por componente por resoluc
 
 En lineas ya anadidas a propuesta, la tabla conserva el nombre compacto en `ProposalLine.name`, pero la UI lo presenta en varias lineas reemplazando ` | ` por saltos de linea. Los botones `Modificar` y `Borrar` quedan en una zona propia.
 
+FUNC-002D anade normalizacion interna solo para codigos exclusivamente numericos:
+
+```text
+0201001 -> 201001
+201001 -> 201001
+0000 -> 0
+```
+
+Los codigos alfanumericos no se modifican. El codigo mostrado al usuario sigue siendo el codigo original del componente; la normalizacion se usa solo para buscar, comparar y cachear nombres.
+
 ## Simbolos tocados
 
 ```text
@@ -95,6 +107,7 @@ _prepare_price_edit_state
 _price_proposal_from_cloud_row
 _build_price_edit_workspace
 _fill_component_names_from_inventory
+_normalize_inventory_numeric_code
 _price_line_display_name
 _proposal_edit_line
 ```
@@ -118,12 +131,17 @@ Cobertura automatizada:
 - busqueda por ID de pack sigue funcionando;
 - componentes sin `component_name` resuelven nombres en bloque desde inventario;
 - no se usa la busqueda rankeada por componente durante la resolucion batch de nombres;
-- linea anadida presenta la composicion en varias lineas para evitar solape con botones.
+- linea anadida presenta la composicion en varias lineas para evitar solape con botones;
+- `0201001` resuelve inventario guardado como `201001`;
+- `201001` resuelve inventario guardado como `0201001`;
+- busqueda por codigo normalizado devuelve articulo y packs con nombres;
+- codigos alfanumericos permanecen intactos;
+- `0000` se normaliza de forma segura.
 
 Resultado automatizado:
 
 ```text
-Ran 112 tests
+Ran 115 tests
 OK
 ```
 
@@ -151,6 +169,12 @@ OK
 05adb5e9fc1e90ccc22841125ef8af2610ab9487
 ```
 
+## Commit funcional FUNC-002D
+
+```text
+6a5323bab50bf231bfcdb562315cc1390c3e1fc2
+```
+
 ## Smoke manual
 
 Pendiente.
@@ -165,6 +189,7 @@ Checklist propuesto:
 - Verificar agrupacion de componentes repetidos.
 - Verificar orden por ID de componente.
 - Buscar un componente, por ejemplo `0201001`, y confirmar que aparecen el articulo normal y los packs que lo contienen.
+- Buscar tambien el mismo componente sin cero inicial, por ejemplo `201001`, y confirmar que aparecen articulo normal y packs.
 - Confirmar que esos packs muestran nombres de componentes, no solo cantidad e ID.
 - Buscar por ID de pack y confirmar que sigue apareciendo.
 - Anadido un pack a la propuesta, confirmar que todos los componentes quedan visibles y los botones no pisan el texto.
