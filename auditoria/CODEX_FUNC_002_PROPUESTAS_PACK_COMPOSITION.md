@@ -5,7 +5,7 @@ Fecha: 2026-06-17
 Estado:
 
 ```text
-Implementado con FUNC-002D. Pendiente de smoke manual.
+Implementado con FUNC-002E. Pendiente de smoke manual.
 ```
 
 ## Objetivo
@@ -27,6 +27,8 @@ FUNC-002B ajusta los packs Woo a composicion compacta en una sola linea:
 FUNC-002C corrige el enriquecimiento de nombres cuando los componentes llegan sin `component_name` y evita que la composicion se solape con los botones de las lineas anadidas.
 
 FUNC-002D corrige la equivalencia de codigos numericos con y sin ceros iniciales durante busqueda, comparacion y cache.
+
+FUNC-002E corrige el corte temprano de la ruta rankeada: si buscar `201001` devuelve el articulo normal, igualmente se fusionan los packs cuyo componente esta guardado como `0201001`.
 
 ## Alcance
 
@@ -93,6 +95,26 @@ FUNC-002D anade normalizacion interna solo para codigos exclusivamente numericos
 
 Los codigos alfanumericos no se modifican. El codigo mostrado al usuario sigue siendo el codigo original del componente; la normalizacion se usa solo para buscar, comparar y cachear nombres.
 
+Diagnostico FUNC-002E:
+
+```text
+Dato observado en smoke:
+- inventory_items.item_id = 201001
+- inventory_items.heca_reference = 201001 o equivalente sin cero
+- inventory_item_components.component_item_code = 0201001
+
+Punto de perdida:
+- la vista rankeada respondia para 201001 con el articulo normal;
+- el servicio retornaba en esa rama sin ejecutar la busqueda complementaria de packs por componente normalizado;
+- la cache no registraba simultaneamente valor original y canonico para todas las claves.
+```
+
+Correccion FUNC-002E:
+
+- `_inventory_code_cache_keys` registra clave original y clave canonica.
+- La ruta rankeada tambien fusiona padres de componentes comparando con `_normalize_inventory_numeric_code`.
+- El codigo mostrado sigue usando `component_item_code` original, por ejemplo `0201001`.
+
 ## Simbolos tocados
 
 ```text
@@ -108,6 +130,7 @@ _price_proposal_from_cloud_row
 _build_price_edit_workspace
 _fill_component_names_from_inventory
 _normalize_inventory_numeric_code
+_inventory_code_cache_keys
 _price_line_display_name
 _proposal_edit_line
 ```
@@ -136,12 +159,14 @@ Cobertura automatizada:
 - `201001` resuelve inventario guardado como `0201001`;
 - busqueda por codigo normalizado devuelve articulo y packs con nombres;
 - codigos alfanumericos permanecen intactos;
-- `0000` se normaliza de forma segura.
+- `0000` se normaliza de forma segura;
+- si la busqueda rankeada por `201001` devuelve solo el articulo normal, tambien se fusionan packs con componente `0201001`;
+- la evidencia de tests captura llamadas a `v_inventory_hub_search_ranked`, `inventory_item_components` e `inventory_items`.
 
 Resultado automatizado:
 
 ```text
-Ran 115 tests
+Ran 116 tests
 OK
 ```
 
@@ -173,6 +198,12 @@ OK
 
 ```text
 6a5323bab50bf231bfcdb562315cc1390c3e1fc2
+```
+
+## Commit funcional FUNC-002E
+
+```text
+5ba422f8c7c7ca1c79702f7c254be1c75b1639a6
 ```
 
 ## Smoke manual
