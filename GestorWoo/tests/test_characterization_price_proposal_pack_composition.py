@@ -395,6 +395,59 @@ class PriceProposalPackCompositionTests(unittest.TestCase):
             "2x0201001xTatami 80 | 1x0728003xFuton Algodon",
         )
 
+    def test_ranked_search_by_item_id_also_merges_packs_with_leading_zero_component(self) -> None:
+        data = {
+            "v_inventory_hub_search_ranked": [
+                {
+                    "search_token_norm": "201001",
+                    "result_item_id": 201001,
+                    "result_item_code": "201001",
+                    "result_name": "Tatami 80",
+                    "result_record_type": "simple",
+                    "match_priority": 1,
+                }
+            ],
+            "inventory_items": [
+                {"item_id": 201001, "name": "Tatami 80", "item_record_type": "simple", "heca_reference": "201001"},
+                {"item_id": 728003, "name": "Futon Algodon", "item_record_type": "simple", "heca_reference": "0728003"},
+                {
+                    "item_id": 1111191,
+                    "name": "PackWoo1111191",
+                    "item_record_type": "woo_pack",
+                    "hub_item_code": "WOO-PACK-1111191",
+                },
+            ],
+            "inventory_item_components": [
+                {
+                    "parent_item_code": "WOO-PACK-1111191",
+                    "component_item_code": "0201001",
+                    "component_name": "",
+                    "quantity": 2,
+                    "relation_type": "component",
+                },
+                {
+                    "parent_item_code": "WOO-PACK-1111191",
+                    "component_item_code": "0728003",
+                    "component_name": "",
+                    "quantity": 1,
+                    "relation_type": "component",
+                },
+            ],
+        }
+        session = Session(data)
+
+        rows = search_cloud_inventory_items(session, "201001", limit=10)
+
+        self.assertEqual([row["item_id"] for row in rows], [201001, 1111191])
+        self.assertEqual(rows[1]["hub_pack_components"][0]["component_item_code"], "0201001")
+        self.assertEqual(rows[1]["hub_pack_components"][0]["component_name"], "Tatami 80")
+        self.assertEqual(
+            self.app._price_display_name_for_inventory_item(self.app._inventory_item_from_cloud_row(rows[1])),
+            "2x0201001xTatami 80 | 1x0728003xFuton Algodon",
+        )
+        self.assertTrue(any(call[0] == "v_inventory_hub_search_ranked" for call in data["__calls__"]))
+        self.assertTrue(any(call[0] == "inventory_item_components" for call in data["__calls__"]))
+
     def test_added_line_display_breaks_compact_composition_into_visible_lines(self) -> None:
         name = "2x0201001xTatami 80 | 1x0728003xFuton Algodon"
 

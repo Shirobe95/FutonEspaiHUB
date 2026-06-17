@@ -69,6 +69,13 @@ def _normalize_inventory_numeric_code(value: Any) -> str:
     return text
 
 
+def _inventory_code_cache_keys(value: Any) -> set[str]:
+    text = str(value or '').strip()
+    if not text:
+        return set()
+    return {text.lower(), _normalize_inventory_numeric_code(text).lower()}
+
+
 def _format_pack_component_line(component: dict[str, Any]) -> str:
     code = component.get('component_item_code') or '-'
     qty = _format_relation_quantity(component.get('quantity') or 1)
@@ -133,12 +140,11 @@ def _fill_component_names_from_inventory(session, components: list[dict[str, Any
         ).strip()
 
     def add_to_cache(cache: dict[str, str], key: Any, row: dict[str, Any]) -> None:
-        normalized = normalize(key)
-        if not normalized or cache.get(normalized):
-            return
         name = visible_name(row)
-        if name:
-            cache[normalized] = name
+        if not name:
+            return
+        for cache_key in _inventory_code_cache_keys(key):
+            cache.setdefault(cache_key, name)
 
     def fetch_by(column: str, values: list[Any]) -> list[dict[str, Any]]:
         if not values:
@@ -483,6 +489,45 @@ def search_cloud_inventory_items(session, query: str, limit: int = 25, *, enrich
                 row['hub_search_match_type'] = ranked.get('best_token_type')
                 row['hub_search_match_priority'] = ranked.get('match_priority')
                 rows.append(row)
+            if q.isdigit() or (q.startswith('-') and q[1:].isdigit()):
+                normalized_component = _normalize_inventory_numeric_code(q)
+                try:
+                    component_resp = (
+                        session.client.table('inventory_item_components')
+                        .select('parent_item_code,component_item_code,component_name,quantity,relation_type')
+                        .ilike('component_item_code', f'%{normalized_component}')
+                        .eq('relation_type', 'component')
+                        .limit(limit)
+                        .execute()
+                    )
+                    component_rows = [
+                        dict(row)
+                        for row in (getattr(component_resp, 'data', None) or [])
+                        if _normalize_inventory_numeric_code(row.get('component_item_code')) == normalized_component
+                    ]
+                    parent_codes = sorted({str(row.get('parent_item_code') or '').strip() for row in component_rows if row.get('parent_item_code')})
+                    for col in ('hub_item_code', 'heca_reference'):
+                        if not parent_codes:
+                            break
+                        try:
+                            parent_resp = session.client.table('inventory_items').select(INVENTORY_SELECT_COLUMNS).in_(col, parent_codes).limit(limit).execute()
+                        except Exception:
+                            continue
+                        for parent in getattr(parent_resp, 'data', None) or []:
+                            item_id = parent.get('item_id')
+                            try:
+                                key = int(item_id)
+                            except Exception:
+                                key = hash(str(parent))
+                            if key in seen:
+                                continue
+                            seen.add(key)
+                            parent = dict(parent)
+                            parent.setdefault('item_record_type', parent.get('item_record_type') or 'simple')
+                            parent.setdefault('hub_item_code', parent.get('hub_item_code') or parent.get('heca_reference') or str(parent.get('item_id') or ''))
+                            rows.append(parent)
+                except Exception:
+                    pass
             return _enrich_rows_with_component_summary(session, rows[:limit]) if enrich_components else rows[:limit]
     except Exception:
         # Si la vista no está creada o RLS la bloquea, seguimos con el buscador clásico.
