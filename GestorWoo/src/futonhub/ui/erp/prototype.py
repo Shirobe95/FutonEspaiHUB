@@ -1254,6 +1254,9 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             return item.name
         return self._price_pack_components_display_name(item)
 
+    def _price_line_display_name(self, name: str) -> str:
+        return str(name or "").replace(" | ", "\n")
+
     def _inventory_item_type_text(self, item: InventoryItem) -> str:
         raw = item.raw or {}
         record_type = str(raw.get("item_record_type") or raw.get("hub_search_record_type") or "simple").strip() or "simple"
@@ -2876,22 +2879,26 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
 
         top = tk.Frame(frame, bg=SOFT)
         top.grid(row=0, column=0, sticky="ew", padx=12, pady=(10, 6))
-        top.columnconfigure(1, weight=1)
-        tk.Label(top, text=line.code, bg=SOFT, fg=MUTED, font=("Segoe UI", 8, "bold"), width=12, anchor=tk.W).grid(row=0, column=0, sticky="w")
+        top.columnconfigure(0, weight=1)
+        top.columnconfigure(1, weight=0)
+        text_area = tk.Frame(top, bg=SOFT)
+        text_area.grid(row=0, column=0, sticky="ew", padx=(0, 12))
+        text_area.columnconfigure(1, weight=1)
+        tk.Label(text_area, text=line.code, bg=SOFT, fg=MUTED, font=("Segoe UI", 8, "bold"), width=12, anchor=tk.W).grid(row=0, column=0, sticky="nw")
         tk.Label(
-            top,
-            text=line.name,
+            text_area,
+            text=self._price_line_display_name(line.name),
             bg=SOFT,
             fg=TEXT,
             font=("Segoe UI", 10, "bold"),
             anchor=tk.W,
             justify=tk.LEFT,
-            wraplength=440,
+            wraplength=620,
         ).grid(row=0, column=1, sticky="ew", padx=8)
         actions = tk.Frame(top, bg=SOFT)
-        actions.grid(row=0, column=2, sticky="e")
-        self._button(actions, "Modificar", command=lambda: self._price_select_line_for_edit(line)).pack(side=tk.LEFT, padx=(0, 6))
-        self._button(actions, "Borrar", command=lambda: self._price_delete_line(line)).pack(side=tk.LEFT)
+        actions.grid(row=0, column=1, sticky="ne")
+        self._button(actions, "Modificar", command=lambda: self._price_select_line_for_edit(line)).pack(fill=tk.X, pady=(0, 6))
+        self._button(actions, "Borrar", command=lambda: self._price_delete_line(line)).pack(fill=tk.X)
 
         bottom = tk.Frame(frame, bg=SOFT)
         bottom.grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 10))

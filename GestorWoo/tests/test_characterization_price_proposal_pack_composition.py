@@ -9,6 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from futonhub.cloud.services.inventory import search_cloud_inventory_items  # noqa: E402
+from futonhub.cloud.services import inventory  # noqa: E402
 from futonhub.ui.erp.prototype import FutonHubErpPrototype, InventoryItem  # noqa: E402
 from futonhub.ui.erp.shared_ui import ProposalLine  # noqa: E402
 
@@ -24,6 +25,7 @@ class Query:
         self.data_by_table = data_by_table
         self.filters: list[tuple[str, object]] = []
         self.in_filters: list[tuple[str, tuple[object, ...]]] = []
+        self.data_by_table.setdefault("__calls__", []).append((self.table_name, self.filters, self.in_filters))
 
     def select(self, *_args, **_kwargs):
         return self
@@ -258,6 +260,7 @@ class PriceProposalPackCompositionTests(unittest.TestCase):
                 ],
                 "inventory_items": [
                     {"item_id": 201001, "name": "Tatami 80", "item_record_type": "simple", "heca_reference": "0201001"},
+                    {"item_id": 728003, "name": "Futon Algodon", "item_record_type": "simple", "heca_reference": "0728003"},
                     {
                         "item_id": 1111191,
                         "name": "PackWoo1111191",
@@ -269,14 +272,14 @@ class PriceProposalPackCompositionTests(unittest.TestCase):
                     {
                         "parent_item_code": "WOO-PACK-1111191",
                         "component_item_code": "0201001",
-                        "component_name": "Tatami 80",
+                        "component_name": "",
                         "quantity": 2,
                         "relation_type": "component",
                     },
                     {
                         "parent_item_code": "WOO-PACK-1111191",
                         "component_item_code": "0728003",
-                        "component_name": "Futon Algodon",
+                        "component_name": "",
                         "quantity": 1,
                         "relation_type": "component",
                     },
@@ -288,7 +291,42 @@ class PriceProposalPackCompositionTests(unittest.TestCase):
 
         self.assertEqual([row["item_id"] for row in rows], [201001, 1111191])
         self.assertEqual(rows[1]["hub_pack_components"][0]["component_item_code"], "0201001")
-        self.assertIn("0201001", rows[1]["hub_pack_components_text"])
+        self.assertEqual(rows[1]["hub_pack_components"][0]["component_name"], "Tatami 80")
+        self.assertEqual(rows[1]["hub_pack_components"][1]["component_name"], "Futon Algodon")
+        self.assertEqual(
+            self.app._price_display_name_for_inventory_item(self.app._inventory_item_from_cloud_row(rows[1])),
+            "2x0201001xTatami 80 | 1x0728003xFuton Algodon",
+        )
+
+    def test_missing_component_names_are_resolved_in_bulk_without_component_searches(self) -> None:
+        data = {
+            "inventory_items": [
+                {"item_id": 201001, "name": "Tatami 80", "heca_reference": "0201001"},
+                {"item_id": 728003, "name": "Futon Algodon", "heca_reference": "0728003"},
+            ]
+        }
+        session = Session(data)
+        components = [
+            {"component_item_code": "0201001", "component_name": "", "quantity": 2},
+            {"component_item_code": "0728003", "component_name": "", "quantity": 1},
+            {"component_item_code": "9999999", "component_name": "", "quantity": 1},
+        ]
+
+        enriched = inventory._fill_component_names_from_inventory(session, components)
+
+        self.assertEqual(enriched[0]["component_name"], "Tatami 80")
+        self.assertEqual(enriched[1]["component_name"], "Futon Algodon")
+        self.assertEqual(enriched[2]["component_name"], "")
+        self.assertEqual(enriched[2]["component_name_lookup_source"], "inventory_bulk_no_result")
+        self.assertFalse(any(call[0] == "v_inventory_hub_search_ranked" for call in data["__calls__"]))
+
+    def test_added_line_display_breaks_compact_composition_into_visible_lines(self) -> None:
+        name = "2x0201001xTatami 80 | 1x0728003xFuton Algodon"
+
+        self.assertEqual(
+            self.app._price_line_display_name(name),
+            "2x0201001xTatami 80\n1x0728003xFuton Algodon",
+        )
 
     def test_pack_id_search_still_returns_pack(self) -> None:
         session = Session(

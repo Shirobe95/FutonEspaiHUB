@@ -111,60 +111,69 @@ def _fill_component_names_from_inventory(session, components: list[dict[str, Any
     def is_missing(value: Any) -> bool:
         return normalize(value) in missing_values
 
+    codes: list[str] = []
+    for component in components:
+        code_raw = str(component.get("component_item_code") or "").strip()
+        if code_raw and is_missing(component.get("component_name")) and code_raw not in codes:
+            codes.append(code_raw)
+
+    def visible_name(row: dict[str, Any]) -> str:
+        return str(
+            row.get('name')
+            or row.get('woo_name')
+            or row.get('hub_search_result_name')
+            or ''
+        ).strip()
+
+    def add_to_cache(cache: dict[str, str], key: Any, row: dict[str, Any]) -> None:
+        normalized = normalize(key)
+        if not normalized or cache.get(normalized):
+            return
+        name = visible_name(row)
+        if name:
+            cache[normalized] = name
+
+    def fetch_by(column: str, values: list[Any]) -> list[dict[str, Any]]:
+        if not values:
+            return []
+        try:
+            resp = (
+                session.client.table('inventory_items')
+                .select(INVENTORY_SELECT_COLUMNS)
+                .in_(column, values)
+                .execute()
+            )
+            return [dict(row) for row in (getattr(resp, 'data', None) or [])]
+        except Exception:
+            return []
+
     cache: dict[str, str] = {}
+    for row in fetch_by('heca_reference', codes):
+        add_to_cache(cache, row.get('heca_reference'), row)
+    for row in fetch_by('hub_item_code', codes):
+        add_to_cache(cache, row.get('hub_item_code'), row)
+    for row in fetch_by('woo_sku', codes):
+        add_to_cache(cache, row.get('woo_sku'), row)
+
+    numeric_codes: list[int] = []
+    for code in codes:
+        try:
+            numeric_codes.append(int(code))
+        except Exception:
+            continue
+    for row in fetch_by('item_id', numeric_codes):
+        for key in ('item_id', 'heca_reference', 'hub_item_code', 'woo_sku'):
+            add_to_cache(cache, row.get(key), row)
 
     for component in components:
         code_raw = str(component.get("component_item_code") or "").strip()
         code = normalize(code_raw)
         if not code or not is_missing(component.get("component_name")):
             continue
-
-        if code not in cache:
-            resolved_name = ""
-            try:
-                rows = search_cloud_inventory_items(
-                    session,
-                    code_raw,
-                    limit=50,
-                    enrich_components=False,
-                )
-
-                def row_codes(row: dict[str, Any]) -> set[str]:
-                    values = {
-                        normalize(row.get("hub_search_code")),
-                        normalize(row.get("hub_item_code")),
-                        normalize(row.get("heca_reference")),
-                        normalize(row.get("woo_sku")),
-                    }
-                    item_id = normalize(row.get("item_id"))
-                    if item_id:
-                        values.add(item_id)
-                    return {value for value in values if value}
-
-                def visible_name(row: dict[str, Any]) -> str:
-                    return str(
-                        row.get('name')
-                        or row.get('woo_name')
-                        or row.get('hub_search_result_name')
-                        or ''
-                    ).strip()
-
-                exact = next(
-                    (row for row in rows if code in row_codes(row) and visible_name(row)),
-                    None,
-                )
-                if exact is None:
-                    exact = next((row for row in rows if visible_name(row)), None)
-                if exact:
-                    resolved_name = visible_name(exact)
-            except Exception as exc:
-                component["component_name_lookup_error"] = str(exc)
-            cache[code] = resolved_name
-
         resolved = cache.get(code, "")
         component["component_name"] = resolved
         component["component_name_status"] = "resolved" if resolved else "not_found"
-        component["component_name_lookup_source"] = "inventory_search_function" if resolved else "inventory_search_no_result"
+        component["component_name_lookup_source"] = "inventory_bulk_lookup" if resolved else "inventory_bulk_no_result"
 
     return components
 
