@@ -8,8 +8,60 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
+from futonhub.cloud.services.inventory import search_cloud_inventory_items  # noqa: E402
 from futonhub.ui.erp.prototype import FutonHubErpPrototype, InventoryItem  # noqa: E402
 from futonhub.ui.erp.shared_ui import ProposalLine  # noqa: E402
+
+
+class Response:
+    def __init__(self, data=None) -> None:
+        self.data = data or []
+
+
+class Query:
+    def __init__(self, table_name: str, data_by_table: dict[str, list[dict]]) -> None:
+        self.table_name = table_name
+        self.data_by_table = data_by_table
+        self.filters: list[tuple[str, object]] = []
+        self.in_filters: list[tuple[str, tuple[object, ...]]] = []
+
+    def select(self, *_args, **_kwargs):
+        return self
+
+    def eq(self, column: str, value: object):
+        self.filters.append((column, value))
+        return self
+
+    def in_(self, column: str, values):
+        self.in_filters.append((column, tuple(values)))
+        return self
+
+    def order(self, *_args, **_kwargs):
+        return self
+
+    def limit(self, *_args, **_kwargs):
+        return self
+
+    def execute(self):
+        rows = [dict(row) for row in self.data_by_table.get(self.table_name, [])]
+        for column, value in self.filters:
+            rows = [row for row in rows if row.get(column) == value]
+        for column, values in self.in_filters:
+            rows = [row for row in rows if row.get(column) in values]
+        return Response(rows)
+
+
+class Client:
+    def __init__(self, data_by_table: dict[str, list[dict]]) -> None:
+        self.data_by_table = data_by_table
+
+    def table(self, table_name: str) -> Query:
+        return Query(table_name, self.data_by_table)
+
+
+class Session:
+    def __init__(self, data_by_table: dict[str, list[dict]]) -> None:
+        self.client = Client(data_by_table)
 
 
 def inventory_item(code: str, name: str, price: str = "20.00", raw: dict | None = None) -> InventoryItem:
@@ -40,7 +92,7 @@ class PriceProposalPackCompositionTests(unittest.TestCase):
 
         self.assertEqual(self.app._price_display_name_for_inventory_item(item), "Tatami normal")
 
-    def test_pack_with_components_shows_readable_multiline_composition(self) -> None:
+    def test_pack_with_components_shows_readable_compact_composition(self) -> None:
         item = inventory_item(
             "1111191",
             "PackWoo1111191",
@@ -55,7 +107,7 @@ class PriceProposalPackCompositionTests(unittest.TestCase):
 
         self.assertEqual(
             self.app._price_display_name_for_inventory_item(item),
-            "2 × 0201001 · Tatami\n1 × 0728003 · Futon",
+            "2x0201001xTatami | 1x0728003xFuton",
         )
 
     def test_repeated_components_are_grouped_and_sorted_by_component_code(self) -> None:
@@ -74,7 +126,7 @@ class PriceProposalPackCompositionTests(unittest.TestCase):
 
         self.assertEqual(
             self.app._price_display_name_for_inventory_item(item),
-            "5 × 0201001 · Tatami\n1 × 0728003 · Futon",
+            "5x0201001xTatami | 1x0728003xFuton",
         )
 
     def test_integer_and_decimal_quantities_do_not_show_unnecessary_decimals(self) -> None:
@@ -92,7 +144,7 @@ class PriceProposalPackCompositionTests(unittest.TestCase):
 
         self.assertEqual(
             self.app._price_display_name_for_inventory_item(item),
-            "1.5 × 0201001 · Tatami\n2 × 0728003 · Futon",
+            "1.5x0201001xTatami | 2x0728003xFuton",
         )
 
     def test_component_without_name_omits_separator_and_name(self) -> None:
@@ -107,7 +159,7 @@ class PriceProposalPackCompositionTests(unittest.TestCase):
             },
         )
 
-        self.assertEqual(self.app._price_display_name_for_inventory_item(item), "2 × 0201001")
+        self.assertEqual(self.app._price_display_name_for_inventory_item(item), "2x0201001")
 
     def test_pack_without_composition_uses_technical_name_fallback(self) -> None:
         item = inventory_item("1111191", "PackWoo1111191", raw={"item_record_type": "woo_pack"})
@@ -126,7 +178,7 @@ class PriceProposalPackCompositionTests(unittest.TestCase):
 
         self.assertEqual(
             self.app._price_display_name_for_inventory_item(item),
-            "2 × 0201001 · Tatami\n1 × 0728003 · Futon",
+            "2x0201001xTatami | 1x0728003xFuton",
         )
 
     def test_add_rows_preserves_proposal_line_name_id_and_price(self) -> None:
@@ -136,7 +188,7 @@ class PriceProposalPackCompositionTests(unittest.TestCase):
         self.app._inventory_items = []
         self.app._show_view = lambda _view: None
 
-        name = "2 × 0201001 · Tatami\n1 × 0728003 · Futon"
+        name = "2x0201001xTatami | 1x0728003xFuton"
         self.app._price_add_rows_to_proposal([("1111191", name, "20.00")], "10", "")
 
         self.assertEqual(
@@ -155,15 +207,117 @@ class PriceProposalPackCompositionTests(unittest.TestCase):
                 "new_price": 22,
                 "status": "pending",
                 "source_row": {
-                    "ui_line_name": "2 × 0201001 · Tatami\n1 × 0728003 · Futon",
+                    "ui_line_name": "2x0201001xTatami | 1x0728003xFuton",
                     "ui_proposal_name": "Pack test",
                 },
             }
         )
 
         self.assertEqual(proposal.lines[0].code, "product:1111191")
-        self.assertEqual(proposal.lines[0].name, "2 × 0201001 · Tatami\n1 × 0728003 · Futon")
+        self.assertEqual(proposal.lines[0].name, "2x0201001xTatami | 1x0728003xFuton")
         self.assertEqual(proposal.lines[0].new_price, "22.00")
+
+    def test_compact_cached_text_is_reused(self) -> None:
+        item = inventory_item(
+            "1111191",
+            "PackWoo1111191",
+            raw={
+                "item_record_type": "woo_pack",
+                "hub_pack_components_text": "2x0201001xTatami | 1x0728003xFuton",
+            },
+        )
+
+        self.assertEqual(
+            self.app._price_display_name_for_inventory_item(item),
+            "2x0201001xTatami | 1x0728003xFuton",
+        )
+
+    def test_component_search_returns_simple_item_and_packs_containing_component(self) -> None:
+        session = Session(
+            {
+                "v_inventory_hub_search_ranked": [
+                    {
+                        "search_token_norm": "0201001",
+                        "result_item_id": 201001,
+                        "result_item_code": "0201001",
+                        "result_name": "Tatami 80",
+                        "result_record_type": "simple",
+                        "match_priority": 1,
+                    },
+                    {
+                        "search_token_norm": "0201001",
+                        "result_item_id": 1111191,
+                        "result_item_code": "WOO-PACK-1111191",
+                        "result_name": "PackWoo1111191",
+                        "result_record_type": "woo_pack",
+                        "related_item_code": "0201001",
+                        "related_name": "Tatami 80",
+                        "relation_quantity": 2,
+                        "match_priority": 2,
+                    },
+                ],
+                "inventory_items": [
+                    {"item_id": 201001, "name": "Tatami 80", "item_record_type": "simple", "heca_reference": "0201001"},
+                    {
+                        "item_id": 1111191,
+                        "name": "PackWoo1111191",
+                        "item_record_type": "woo_pack",
+                        "hub_item_code": "WOO-PACK-1111191",
+                    },
+                ],
+                "inventory_item_components": [
+                    {
+                        "parent_item_code": "WOO-PACK-1111191",
+                        "component_item_code": "0201001",
+                        "component_name": "Tatami 80",
+                        "quantity": 2,
+                        "relation_type": "component",
+                    },
+                    {
+                        "parent_item_code": "WOO-PACK-1111191",
+                        "component_item_code": "0728003",
+                        "component_name": "Futon Algodon",
+                        "quantity": 1,
+                        "relation_type": "component",
+                    },
+                ],
+            }
+        )
+
+        rows = search_cloud_inventory_items(session, "0201001", limit=10)
+
+        self.assertEqual([row["item_id"] for row in rows], [201001, 1111191])
+        self.assertEqual(rows[1]["hub_pack_components"][0]["component_item_code"], "0201001")
+        self.assertIn("0201001", rows[1]["hub_pack_components_text"])
+
+    def test_pack_id_search_still_returns_pack(self) -> None:
+        session = Session(
+            {
+                "v_inventory_hub_search_ranked": [
+                    {
+                        "search_token_norm": "woo-pack-1111191",
+                        "result_item_id": 1111191,
+                        "result_item_code": "WOO-PACK-1111191",
+                        "result_name": "PackWoo1111191",
+                        "result_record_type": "woo_pack",
+                        "match_priority": 1,
+                    }
+                ],
+                "inventory_items": [
+                    {
+                        "item_id": 1111191,
+                        "name": "PackWoo1111191",
+                        "item_record_type": "woo_pack",
+                        "hub_item_code": "WOO-PACK-1111191",
+                    }
+                ],
+                "inventory_item_components": [],
+            }
+        )
+
+        rows = search_cloud_inventory_items(session, "WOO-PACK-1111191", limit=10)
+
+        self.assertEqual([row["item_id"] for row in rows], [1111191])
 
 
 if __name__ == "__main__":

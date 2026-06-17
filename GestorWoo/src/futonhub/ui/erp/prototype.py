@@ -1171,6 +1171,17 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         cleaned = text.strip().lstrip("-").strip()
         if not cleaned:
             return None
+        compact = re.match(
+            r"^(?P<qty>\d+(?:[\.,]\d+)?)\s*x\s*(?P<code>\d{4,}|[A-Za-z][^\sx|]*)(?:\s*x\s*(?P<name>.*))?$",
+            cleaned,
+            re.IGNORECASE,
+        )
+        if compact:
+            return {
+                "component_item_code": str(compact.group("code") or "").strip(),
+                "component_name": str(compact.group("name") or "").strip(),
+                "quantity": self._price_pack_component_quantity(compact.group("qty")),
+            }
         patterns = [
             r"^(?P<qty>\d+(?:[\.,]\d+)?)\s*×\s*(?P<code>\S+)(?:\s*[·-]\s*(?P<name>.*))?$",
             r"^(?P<code>\S+)\s*[xX×]\s*(?P<qty>\d+(?:[\.,]\d+)?)(?:\s*[·-]\s*(?P<name>.*))?$",
@@ -1196,7 +1207,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             components.extend(row for row in raw_components if isinstance(row, dict))
         if not components:
             text = str(raw.get("hub_pack_components_multiline") or raw.get("hub_pack_components_text") or "").strip()
-            separators = "\n" if "\n" in text else ";"
+            separators = "\n" if "\n" in text else "|" if "|" in text else ";"
             for part in text.split(separators):
                 parsed = self._price_pack_component_from_text(part)
                 if parsed:
@@ -1233,10 +1244,10 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             code = str(component.get("component_item_code") or "").strip()
             name = str(component.get("component_name") or "").strip()
             if name:
-                lines.append(f"{quantity} × {code} · {name}")
+                lines.append(f"{quantity}x{code}x{name}")
             else:
-                lines.append(f"{quantity} × {code}")
-        return "\n".join(lines) if lines else item.name
+                lines.append(f"{quantity}x{code}")
+        return " | ".join(lines) if lines else item.name
 
     def _price_display_name_for_inventory_item(self, item: InventoryItem) -> str:
         if not self._price_inventory_item_is_pack(item):
@@ -2617,7 +2628,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         card.pack(fill=tk.BOTH, expand=True, pady=(0, 12))
         tk.Label(card, text=title, bg=CARD, fg=TEXT, font=("Segoe UI", 14, "bold")).pack(anchor=tk.W, padx=16, pady=(16, 8))
         tree = ttk.Treeview(card, columns=["ID", "Nombre", "Precio"], show="headings", height=4)
-        widths = {"ID": 78, "Nombre": 360, "Precio": 78}
+        widths = {"ID": 78, "Nombre": 520, "Precio": 78}
         stretches = {"ID": False, "Nombre": True, "Precio": False}
         for column in ["ID", "Nombre", "Precio"]:
             tree.heading(column, text=column, anchor=tk.CENTER)
@@ -2875,7 +2886,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             font=("Segoe UI", 10, "bold"),
             anchor=tk.W,
             justify=tk.LEFT,
-            wraplength=260,
+            wraplength=440,
         ).grid(row=0, column=1, sticky="ew", padx=8)
         actions = tk.Frame(top, bg=SOFT)
         actions.grid(row=0, column=2, sticky="e")
