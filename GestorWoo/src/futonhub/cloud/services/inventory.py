@@ -62,6 +62,13 @@ def _format_relation_quantity(value: Any) -> str:
         return str(value or '1')
 
 
+def _normalize_inventory_numeric_code(value: Any) -> str:
+    text = str(value or '').strip()
+    if text.isdigit():
+        return text.lstrip('0') or '0'
+    return text
+
+
 def _format_pack_component_line(component: dict[str, Any]) -> str:
     code = component.get('component_item_code') or '-'
     qty = _format_relation_quantity(component.get('quantity') or 1)
@@ -106,7 +113,7 @@ def _fill_component_names_from_inventory(session, components: list[dict[str, Any
     }
 
     def normalize(value: Any) -> str:
-        return str(value or "").strip().lower()
+        return _normalize_inventory_numeric_code(value).lower()
 
     def is_missing(value: Any) -> bool:
         return normalize(value) in missing_values
@@ -148,11 +155,12 @@ def _fill_component_names_from_inventory(session, components: list[dict[str, Any
             return []
 
     cache: dict[str, str] = {}
-    for row in fetch_by('heca_reference', codes):
+    lookup_codes = sorted({code for raw in codes for code in (raw, _normalize_inventory_numeric_code(raw)) if code})
+    for row in fetch_by('heca_reference', lookup_codes):
         add_to_cache(cache, row.get('heca_reference'), row)
-    for row in fetch_by('hub_item_code', codes):
+    for row in fetch_by('hub_item_code', lookup_codes):
         add_to_cache(cache, row.get('hub_item_code'), row)
-    for row in fetch_by('woo_sku', codes):
+    for row in fetch_by('woo_sku', lookup_codes):
         add_to_cache(cache, row.get('woo_sku'), row)
 
     numeric_codes: list[int] = []
@@ -506,6 +514,32 @@ def search_cloud_inventory_items(session, query: str, limit: int = 25, *, enrich
             try:
                 resp = session.client.table('inventory_items').select(cols).eq(col, n).limit(limit).execute()
                 add(getattr(resp, 'data', None))
+            except Exception:
+                pass
+        normalized_component = _normalize_inventory_numeric_code(q)
+        if normalized_component:
+            try:
+                resp = (
+                    session.client.table('inventory_item_components')
+                    .select('parent_item_code,component_item_code,component_name,quantity,relation_type')
+                    .ilike('component_item_code', f'%{normalized_component}')
+                    .eq('relation_type', 'component')
+                    .limit(limit)
+                    .execute()
+                )
+                component_rows = [
+                    dict(row)
+                    for row in (getattr(resp, 'data', None) or [])
+                    if _normalize_inventory_numeric_code(row.get('component_item_code')) == normalized_component
+                ]
+                parent_codes = sorted({str(row.get('parent_item_code') or '').strip() for row in component_rows if row.get('parent_item_code')})
+                if parent_codes:
+                    for col in ('hub_item_code', 'heca_reference'):
+                        try:
+                            parent_resp = session.client.table('inventory_items').select(cols).in_(col, parent_codes).limit(limit).execute()
+                            add(getattr(parent_resp, 'data', None))
+                        except Exception:
+                            pass
             except Exception:
                 pass
     # Búsqueda textual por campos principales. Varias queries para evitar depender de or_ con escaping.
