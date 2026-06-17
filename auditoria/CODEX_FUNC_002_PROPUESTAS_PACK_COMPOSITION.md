@@ -5,7 +5,7 @@ Fecha: 2026-06-17
 Estado:
 
 ```text
-Implementado. Pendiente de smoke manual.
+Implementado con FUNC-002B. Pendiente de smoke manual.
 ```
 
 ## Objetivo
@@ -18,11 +18,10 @@ Los articulos normales mantienen:
 ID | Nombre | Precio
 ```
 
-Los packs Woo muestran una linea por componente:
+FUNC-002B ajusta los packs Woo a composicion compacta en una sola linea:
 
 ```text
-2 × 0201001 · Tatami
-1 × 0728003 · Futon
+2x0201001xTatami 80 | 1x0728003xFuton Algodon
 ```
 
 ## Alcance
@@ -44,7 +43,7 @@ GestorWoo/tests/test_characterization_price_proposal_pack_composition.py
 - Articulos normales mantienen su nombre actual.
 - `ID`, `Precio`, SKU, Woo ID y logica de publicacion no cambian.
 - No se hacen consultas por fila.
-- No se modifican servicios, Supabase, RLS, RPCs ni esquema.
+- No se modifican servicios, Supabase, RLS, RPCs ni esquema en FUNC-002B.
 - No se modifica WooCommerce.
 
 ## Implementacion
@@ -62,11 +61,17 @@ La composicion de packs se agrupa por `component_item_code`, suma cantidades rep
 Formato:
 
 ```text
-{cantidad} × {ID} · {nombre}
-{cantidad} × {ID}
+{cantidad}x{ID}x{nombre}
+{cantidad}x{ID}
 ```
 
+Los componentes se separan con `|`.
+
 Si no existe composicion enriquecida, se mantiene el nombre tecnico como fallback. Ese fallback queda considerado incidencia de datos pendiente de revisar manualmente.
+
+FUNC-002B aumenta el ancho de la columna `Nombre` en la tabla de seleccion y el area disponible para el nombre de las lineas ya anadidas a la propuesta.
+
+La busqueda de propuestas reutiliza la busqueda rankeada existente de Inventario para que buscar un componente, por ejemplo `0201001`, devuelva el articulo normal y los packs que contienen ese componente. No se anaden consultas por fila desde la UI.
 
 ## Simbolos tocados
 
@@ -96,12 +101,15 @@ Cobertura automatizada:
 - pack sin composicion usa fallback tecnico;
 - composicion cacheada en texto se reutiliza sin consultas;
 - `ProposalLine` conserva nombre, ID y precio;
-- propuesta cloud reutiliza `source_row.ui_line_name`.
+- propuesta cloud reutiliza `source_row.ui_line_name`;
+- composicion compacta cacheada se reutiliza;
+- busqueda por componente devuelve articulo y packs que lo contienen;
+- busqueda por ID de pack sigue funcionando.
 
 Resultado automatizado:
 
 ```text
-Ran 107 tests
+Ran 110 tests
 OK
 ```
 
@@ -117,6 +125,12 @@ OK
 785989cc234e7d1e95a24a1adb98f07d5c215026
 ```
 
+## Commit funcional FUNC-002B
+
+```text
+5e6009928717e1cd8b3574327ffca2575a1e6a2f
+```
+
 ## Smoke manual
 
 Pendiente.
@@ -126,9 +140,12 @@ Checklist propuesto:
 - Abrir ERP con `Abrir ERP.bat`.
 - Ir a propuestas de precios.
 - Confirmar que un articulo normal mantiene `ID | Nombre | Precio`.
-- Confirmar que un pack Woo muestra composicion multilinea en `Nombre`.
+- Confirmar que un pack Woo muestra composicion compacta en `Nombre`.
+- Confirmar formato `{cantidad}x{ID}x{nombre}` separado por `|`.
 - Verificar agrupacion de componentes repetidos.
 - Verificar orden por ID de componente.
+- Buscar un componente, por ejemplo `0201001`, y confirmar que aparecen el articulo normal y los packs que lo contienen.
+- Buscar por ID de pack y confirmar que sigue apareciendo.
 - Verificar fallback tecnico solo si no hay composicion.
 - Guardar una propuesta y recargarla.
 - Confirmar que `ProposalLine.name` mantiene la composicion legible.
