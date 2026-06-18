@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import inspect
 import unittest
 from pathlib import Path
 
@@ -134,8 +135,9 @@ class PriceProposalPackCompositionTests(unittest.TestCase):
 
         self.assertEqual(
             self.app._price_display_name_for_inventory_item(item),
-            "2x0201001xTatami | 1x0728003xFuton",
+            "2xTatami | 1xFuton",
         )
+        self.assertEqual(item.raw["hub_pack_components"][0]["component_item_code"], "0728003")
 
     def test_repeated_components_are_grouped_and_sorted_by_component_code(self) -> None:
         item = inventory_item(
@@ -153,7 +155,7 @@ class PriceProposalPackCompositionTests(unittest.TestCase):
 
         self.assertEqual(
             self.app._price_display_name_for_inventory_item(item),
-            "5x0201001xTatami | 1x0728003xFuton",
+            "5xTatami | 1xFuton",
         )
 
     def test_integer_and_decimal_quantities_do_not_show_unnecessary_decimals(self) -> None:
@@ -171,7 +173,7 @@ class PriceProposalPackCompositionTests(unittest.TestCase):
 
         self.assertEqual(
             self.app._price_display_name_for_inventory_item(item),
-            "1.5x0201001xTatami | 2x0728003xFuton",
+            "1.5xTatami | 2xFuton",
         )
 
     def test_component_without_name_omits_separator_and_name(self) -> None:
@@ -205,7 +207,7 @@ class PriceProposalPackCompositionTests(unittest.TestCase):
 
         self.assertEqual(
             self.app._price_display_name_for_inventory_item(item),
-            "2x0201001xTatami | 1x0728003xFuton",
+            "2xTatami | 1xFuton",
         )
 
     def test_add_rows_preserves_proposal_line_name_id_and_price(self) -> None:
@@ -256,7 +258,7 @@ class PriceProposalPackCompositionTests(unittest.TestCase):
 
         self.assertEqual(
             self.app._price_display_name_for_inventory_item(item),
-            "2x0201001xTatami | 1x0728003xFuton",
+            "2xTatami | 1xFuton",
         )
 
     def test_component_search_returns_simple_item_and_packs_containing_component(self) -> None:
@@ -320,7 +322,7 @@ class PriceProposalPackCompositionTests(unittest.TestCase):
         self.assertEqual(rows[1]["hub_pack_components"][1]["component_name"], "Futon Algodon")
         self.assertEqual(
             self.app._price_display_name_for_inventory_item(self.app._inventory_item_from_cloud_row(rows[1])),
-            "2x0201001xTatami 80 | 1x0728003xFuton Algodon",
+            "2xTatami 80 | 1xFuton Algodon",
         )
 
     def test_missing_component_names_are_resolved_in_bulk_without_component_searches(self) -> None:
@@ -466,7 +468,7 @@ class PriceProposalPackCompositionTests(unittest.TestCase):
             )
             self.assertEqual(
                 self.app._price_display_name_for_inventory_item(self.app._inventory_item_from_cloud_row(pack)),
-                "2x0201001xTatami, 80 x 200 x 5,5 cm. | 1x0728003xFuton Algodon",
+                "2xTatami, 80 x 200 x 5,5 cm. | 1xFuton Algodon",
             )
 
         inventory_calls = [call for call in data["__calls__"] if call[0] == "inventory_items"]
@@ -534,7 +536,7 @@ class PriceProposalPackCompositionTests(unittest.TestCase):
         self.assertEqual([row["item_id"] for row in rows], [201001, 1111191])
         self.assertEqual(
             self.app._price_display_name_for_inventory_item(self.app._inventory_item_from_cloud_row(rows[1])),
-            "2x0201001xTatami 80 | 1x0728003xFuton Algodon",
+            "2xTatami 80 | 1xFuton Algodon",
         )
 
     def test_ranked_search_by_item_id_also_merges_packs_with_leading_zero_component(self) -> None:
@@ -585,7 +587,7 @@ class PriceProposalPackCompositionTests(unittest.TestCase):
         self.assertEqual(rows[1]["hub_pack_components"][0]["component_name"], "Tatami 80")
         self.assertEqual(
             self.app._price_display_name_for_inventory_item(self.app._inventory_item_from_cloud_row(rows[1])),
-            "2x0201001xTatami 80 | 1x0728003xFuton Algodon",
+            "2xTatami 80 | 1xFuton Algodon",
         )
         self.assertTrue(any(call[0] == "v_inventory_hub_search_ranked" for call in data["__calls__"]))
         self.assertTrue(any(call[0] == "inventory_item_components" for call in data["__calls__"]))
@@ -595,8 +597,94 @@ class PriceProposalPackCompositionTests(unittest.TestCase):
 
         self.assertEqual(
             self.app._price_line_display_name(name),
-            "2x0201001xTatami 80\n1x0728003xFuton Algodon",
+            "2xTatami 80\n1xFuton Algodon",
         )
+
+    def test_long_pick_table_rows_use_multiline_text_and_taller_rows(self) -> None:
+        rows = [
+            (
+                "WOO-PACK-1",
+                "2xTatami 80x200x5,5 | 1xFuton algodon 150x200x14 | 2xCojin",
+                "100.00",
+            )
+        ]
+
+        self.assertEqual(
+            self.app._price_pick_table_display_name(rows[0][1]),
+            "2xTatami 80x200x5,5\n1xFuton algodon 150x200x14\n2xCojin",
+        )
+        self.assertGreaterEqual(self.app._price_pick_table_rowheight(rows), 68)
+
+    def test_proposal_detail_places_actions_below_component_text(self) -> None:
+        source = inspect.getsource(FutonHubErpPrototype._proposal_edit_line)
+
+        self.assertIn('actions.grid(row=1, column=0', source)
+        self.assertIn('text=self._price_line_display_name(line.name)', source)
+
+    def test_equivalent_numeric_searches_return_same_unique_stable_set(self) -> None:
+        data = {
+            "v_inventory_hub_search_ranked": [
+                {
+                    "search_token_norm": "0201001",
+                    "result_item_id": 900000003721,
+                    "result_item_code": "WOO-PACK-3721",
+                    "result_name": "Pack Woo 3721",
+                    "result_record_type": "woo_pack",
+                    "match_priority": 2,
+                },
+                {
+                    "search_token_norm": "0201001",
+                    "result_item_id": 201001,
+                    "result_item_code": "0201001",
+                    "result_name": "Tatami 80",
+                    "result_record_type": "simple",
+                    "match_priority": 1,
+                },
+                {
+                    "search_token_norm": "201001",
+                    "result_item_id": 201001,
+                    "result_item_code": "0201001",
+                    "result_name": "Tatami 80",
+                    "result_record_type": "simple",
+                    "match_priority": 1,
+                },
+            ],
+            "inventory_items": [
+                {
+                    "item_id": 900000003721,
+                    "name": "Pack Woo 3721",
+                    "item_record_type": "woo_pack",
+                    "hub_item_code": "WOO-PACK-3721",
+                    "woo_sku": "0201001|0728001",
+                },
+                {
+                    "item_id": 201001,
+                    "name": "Tatami 80",
+                    "item_record_type": "simple",
+                    "hub_item_code": "0201001",
+                    "woo_sku": "0201001",
+                },
+                {
+                    "item_id": 900000003720,
+                    "name": "Pack Woo 3720",
+                    "item_record_type": "woo_pack",
+                    "hub_item_code": "WOO-PACK-3720",
+                    "woo_sku": "0201001|0201001|0728003",
+                },
+            ],
+            "inventory_item_components": [],
+        }
+
+        with_zero = search_cloud_inventory_items(Session(data), "0201001", limit=10)
+        without_zero = search_cloud_inventory_items(Session(data), "201001", limit=10)
+        ids_with_zero = [row["item_id"] for row in with_zero]
+        ids_without_zero = [row["item_id"] for row in without_zero]
+
+        self.assertEqual(set(ids_with_zero), set(ids_without_zero))
+        self.assertEqual(len(ids_with_zero), len(ids_without_zero))
+        self.assertEqual(len(ids_with_zero), len(set(ids_with_zero)))
+        self.assertEqual(ids_with_zero, ids_without_zero)
+        self.assertEqual(ids_with_zero, [201001, 900000003720, 900000003721])
 
     def test_pack_id_search_still_returns_pack(self) -> None:
         session = Session(

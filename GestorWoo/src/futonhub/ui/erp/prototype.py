@@ -1244,7 +1244,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             code = str(component.get("component_item_code") or "").strip()
             name = str(component.get("component_name") or "").strip()
             if name:
-                lines.append(f"{quantity}x{code}x{name}")
+                lines.append(f"{quantity}x{name}")
             else:
                 lines.append(f"{quantity}x{code}")
         return " | ".join(lines) if lines else item.name
@@ -1255,7 +1255,30 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         return self._price_pack_components_display_name(item)
 
     def _price_line_display_name(self, name: str) -> str:
-        return str(name or "").replace(" | ", "\n")
+        visible: list[str] = []
+        for part in str(name or "").replace("\n", " | ").split(" | "):
+            cleaned = part.strip()
+            if not cleaned:
+                continue
+            component = self._price_pack_component_from_text(cleaned)
+            if component:
+                quantity = self._price_format_pack_component_quantity(float(component.get("quantity") or 0))
+                component_name = str(component.get("component_name") or "").strip()
+                component_code = str(component.get("component_item_code") or "").strip()
+                visible.append(f"{quantity}x{component_name or component_code}")
+            else:
+                visible.append(cleaned)
+        return "\n".join(visible)
+
+    def _price_pick_table_display_name(self, name: str) -> str:
+        return self._price_line_display_name(name)
+
+    def _price_pick_table_rowheight(self, rows: list[tuple[str, str, str]]) -> int:
+        max_lines = max(
+            (self._price_pick_table_display_name(row[1]).count("\n") + 1 for row in rows),
+            default=1,
+        )
+        return max(28, min(max_lines, 6) * 20 + 8)
 
     def _inventory_item_type_text(self, item: InventoryItem) -> str:
         raw = item.raw or {}
@@ -2400,7 +2423,17 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         frame.columnconfigure(0, weight=1)
         text = tk.Frame(frame, bg=SOFT)
         text.grid(row=0, column=0, sticky="ew", padx=12, pady=9)
-        tk.Label(text, text=f"{line.code} - {line.name}", bg=SOFT, fg=TEXT, font=("Segoe UI", 9, "bold"), anchor=tk.W, justify=tk.LEFT, wraplength=300).pack(anchor=tk.W, fill=tk.X)
+        tk.Label(text, text=line.code, bg=SOFT, fg=MUTED, font=("Segoe UI", 8, "bold"), anchor=tk.W).pack(anchor=tk.W, fill=tk.X)
+        tk.Label(
+            text,
+            text=self._price_line_display_name(line.name),
+            bg=SOFT,
+            fg=TEXT,
+            font=("Segoe UI", 9, "bold"),
+            anchor=tk.W,
+            justify=tk.LEFT,
+            wraplength=300,
+        ).pack(anchor=tk.W, fill=tk.X)
         tk.Label(text, text=f"{line.old_price} -> {line.new_price}", bg=SOFT, fg=MUTED, font=("Segoe UI", 9)).pack(anchor=tk.W)
         self._status_chip(frame, line.change, status).grid(row=0, column=1, sticky="e", padx=10)
         return frame
@@ -2417,8 +2450,8 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
 
         body = tk.Frame(parent, bg=BG)
         body.pack(fill=tk.BOTH, expand=True)
-        body.columnconfigure(0, weight=1)
-        body.columnconfigure(1, weight=1)
+        body.columnconfigure(0, weight=3)
+        body.columnconfigure(1, weight=2)
         body.rowconfigure(0, weight=1)
 
         left = tk.Frame(body, bg=BG)
@@ -2630,15 +2663,18 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         card = self._card(parent)
         card.pack(fill=tk.BOTH, expand=True, pady=(0, 12))
         tk.Label(card, text=title, bg=CARD, fg=TEXT, font=("Segoe UI", 14, "bold")).pack(anchor=tk.W, padx=16, pady=(16, 8))
-        tree = ttk.Treeview(card, columns=["ID", "Nombre", "Precio"], show="headings", height=4)
-        widths = {"ID": 78, "Nombre": 520, "Precio": 78}
+        style_name = f"Price{re.sub(r'[^A-Za-z0-9]', '', title) or 'Picker'}.Treeview"
+        ttk.Style(card).configure(style_name, rowheight=self._price_pick_table_rowheight(rows))
+        tree = ttk.Treeview(card, columns=["ID", "Nombre", "Precio"], show="headings", height=5, style=style_name)
+        widths = {"ID": 78, "Nombre": 620, "Precio": 78}
         stretches = {"ID": False, "Nombre": True, "Precio": False}
         for column in ["ID", "Nombre", "Precio"]:
             tree.heading(column, text=column, anchor=tk.CENTER)
             tree.column(column, width=widths[column], minwidth=widths[column], anchor=tk.CENTER, stretch=stretches[column])
         selected_iid = None
         for row in rows:
-            iid = tree.insert("", tk.END, values=row)
+            visible_row = (row[0], self._price_pick_table_display_name(row[1]), row[2])
+            iid = tree.insert("", tk.END, values=visible_row)
             if row[0] == self._price_edit_selected_code:
                 selected_iid = iid
                 tree.selection_set(iid)
@@ -2880,9 +2916,8 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         top = tk.Frame(frame, bg=SOFT)
         top.grid(row=0, column=0, sticky="ew", padx=12, pady=(10, 6))
         top.columnconfigure(0, weight=1)
-        top.columnconfigure(1, weight=0)
         text_area = tk.Frame(top, bg=SOFT)
-        text_area.grid(row=0, column=0, sticky="ew", padx=(0, 12))
+        text_area.grid(row=0, column=0, sticky="ew")
         text_area.columnconfigure(1, weight=1)
         tk.Label(text_area, text=line.code, bg=SOFT, fg=MUTED, font=("Segoe UI", 8, "bold"), width=12, anchor=tk.W).grid(row=0, column=0, sticky="nw")
         tk.Label(
@@ -2893,12 +2928,15 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             font=("Segoe UI", 10, "bold"),
             anchor=tk.W,
             justify=tk.LEFT,
-            wraplength=620,
+            wraplength=420,
         ).grid(row=0, column=1, sticky="ew", padx=8)
+
         actions = tk.Frame(top, bg=SOFT)
-        actions.grid(row=0, column=1, sticky="ne")
-        self._button(actions, "Modificar", command=lambda: self._price_select_line_for_edit(line)).pack(fill=tk.X, pady=(0, 6))
-        self._button(actions, "Borrar", command=lambda: self._price_delete_line(line)).pack(fill=tk.X)
+        actions.grid(row=1, column=0, sticky="ew", pady=(8, 0))
+        actions.columnconfigure(0, weight=1)
+        actions.columnconfigure(1, weight=1)
+        self._button(actions, "Modificar", command=lambda: self._price_select_line_for_edit(line)).grid(row=0, column=0, sticky="ew", padx=(0, 6))
+        self._button(actions, "Borrar", command=lambda: self._price_delete_line(line)).grid(row=0, column=1, sticky="ew", padx=(6, 0))
 
         bottom = tk.Frame(frame, bg=SOFT)
         bottom.grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 10))

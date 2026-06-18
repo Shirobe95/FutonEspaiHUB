@@ -545,6 +545,28 @@ def _find_inventory_pack_rows_by_woo_sku_token(session, query: Any, limit: int) 
     return matches
 
 
+def _inventory_search_result_sort_key(row: dict[str, Any]) -> tuple[int, int, str]:
+    record_type = str(row.get('hub_search_record_type') or row.get('item_record_type') or 'simple').strip()
+    kind_priority = 1 if record_type in {'woo_pack', 'manual_pack'} else 0
+    try:
+        item_id = int(row.get('item_id'))
+    except Exception:
+        item_id = 2**63 - 1
+    code = str(row.get('hub_search_code') or row.get('hub_item_code') or row.get('heca_reference') or '').lower()
+    return kind_priority, item_id, code
+
+
+def _finalize_inventory_search_rows(
+    session,
+    rows: list[dict[str, Any]],
+    limit: int,
+    *,
+    enrich_components: bool,
+) -> list[dict[str, Any]]:
+    ordered = sorted(rows, key=_inventory_search_result_sort_key)[:limit]
+    return _enrich_rows_with_component_summary(session, ordered) if enrich_components else ordered
+
+
 def search_cloud_inventory_items(session, query: str, limit: int = 25, *, enrich_components: bool = True) -> list[dict[str, Any]]:
     """Busca items reales de inventory_items en Supabase.
 
@@ -645,7 +667,12 @@ def search_cloud_inventory_items(session, query: str, limit: int = 25, *, enrich
                     parent.setdefault('hub_search_code', parent.get('hub_item_code') or parent.get('heca_reference'))
                     parent.setdefault('hub_search_record_type', parent.get('item_record_type') or 'woo_pack')
                     rows.append(parent)
-            return _enrich_rows_with_component_summary(session, rows[:limit]) if enrich_components else rows[:limit]
+            return _finalize_inventory_search_rows(
+                session,
+                rows,
+                limit,
+                enrich_components=enrich_components,
+            )
     except Exception:
         # Si la vista no está creada o RLS la bloquea, seguimos con el buscador clásico.
         pass
@@ -689,7 +716,12 @@ def search_cloud_inventory_items(session, query: str, limit: int = 25, *, enrich
             add(getattr(resp, 'data', None))
         except Exception:
             continue
-    return _enrich_rows_with_component_summary(session, rows[:limit]) if enrich_components else rows[:limit]
+    return _finalize_inventory_search_rows(
+        session,
+        rows,
+        limit,
+        enrich_components=enrich_components,
+    )
 
 def format_cloud_inventory_search(rows: list[dict[str, Any]]) -> str:
     lines = [
