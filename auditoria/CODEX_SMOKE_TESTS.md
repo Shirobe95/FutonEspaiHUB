@@ -23,6 +23,7 @@ Abrir ERP.bat -> GestorWoo/gestorwoo.py erp-prototype -> gestorwoo.cli -> futonh
 | 004D1 inventory item creation | Creacion de items, validaciones, persistencia de `rotation_c`, `packages`, `primary_supplier_price`, `pascal_price` y `commercial_status`, refresco, detalle completo, edicion posterior, sin falsos cambios y cierre | Aprobado | 2026-06-16 | `d2c005d056d6698511c1e1aea211a680449e475b` | Usuario confirma smoke test manual aprobado mediante `Abrir ERP.bat` tras correccion de proyeccion de lectura | WooCommerce intacto; sin cambios en escrituras, RLS ni esquema |
 | FUNC-001 supplier order cost and P.V.P. | Pedidos separa coste real, rentabilidad y P.V.P.; UI y exportaciones reales de Ekomat/Heimei; coste total por cantidad basado en coste real; recepcion e inventario no usan `pvp_*` | Aprobado | 2026-06-16 | `3d0f08bd7a28115cca182a8da4578f59cab55258` | Usuario confirma smoke manual aprobado en UI y exportaciones reales | Sin cambios en esquema, RLS, RPCs ni pedidos historicos |
 | FUNC-002I price proposal pack composition | Busqueda global oculta solo en Cambio de Precios; Items usa lista scrollable con filas compactas para simples y multilinea para packs; viewport limitado; controles y Variaciones permanecen visibles | Pendiente | 2026-06-18 | FUNC-002H `824b5b9faf0475b94c2b145076dfe90c9bce23d8` / FUNC-002I `b510998b7032ac6de71ff9aff54073e94504e783` | Pendiente de smoke manual mediante `Abrir ERP.bat` | Confirmar alturas reales, scroll, controles inferiores, variaciones, seleccion, doble clic y Anadir |
+| FUNC-003 supplier order individual profitability | Formula de margen de venta; rentabilidad global o individual por linea; Coste Final siempre recalculado desde costes reales; Ponderado independiente; persistencia, recarga, historicos y exportacion cubiertos | Pendiente | 2026-06-18 | `2cb5939` | Pendiente de smoke manual mediante `Abrir ERP.bat` | Confirmar guardar/recargar, cambio global sin sobrescribir individuales, recálculo por cambios de costes, vuelta a global, exportacion y recepcion |
 
 ## Suite automatizada asociada
 
@@ -32,10 +33,10 @@ Comando:
 python -m unittest discover -s GestorWoo\tests -v
 ```
 
-Resultado actual:
+Resultado actual tras FUNC-003:
 
 ```text
-Ran 127 tests
+Ran 138 tests
 OK
 ```
 
