@@ -5,7 +5,7 @@ Fecha: 2026-06-18
 Estado:
 
 ```text
-Implementado con FUNC-002G. Pendiente de smoke manual.
+Implementado con FUNC-002H. Pendiente de smoke manual.
 ```
 
 ## Objetivo
@@ -31,6 +31,8 @@ FUNC-002D corrige la equivalencia de codigos numericos con y sin ceros iniciales
 FUNC-002E corrige el corte temprano de la ruta rankeada: si buscar `201001` devuelve el articulo normal, igualmente se fusionan los packs cuyo componente esta guardado como `0201001`.
 
 FUNC-002G usa los tokens reales de `woo_sku` como fuente estructurada cuando no existen relaciones, resuelve nombres en bloque y elimina el limite silencioso de los primeros 500 packs.
+
+FUNC-002H simplifica la composicion visible, evita cortes/solapes y aplica un orden final comun a las busquedas equivalentes.
 
 ## Alcance
 
@@ -146,6 +148,36 @@ Revision de rendimiento:
 - `inventory_item_components` se conserva como fallback compatible, tambien paginado y resuelto en batch;
 - no se hacen consultas por fila.
 
+## FUNC-002H
+
+Solucion visual:
+
+- la composicion visible usa `{cantidad}x{nombre}`;
+- los IDs de componentes permanecen en `hub_pack_components`;
+- el ID del articulo o pack permanece en `ProposalLine.code`;
+- articulos normales conservan su nombre;
+- la tabla de resultados usa `Nombre` mas ancho, saltos de linea por componente y altura de fila calculada;
+- los estilos de altura de items y variaciones son independientes;
+- el detalle lateral muestra un componente por linea;
+- `Modificar` y `Borrar` se renderizan debajo del texto, en una zona propia.
+
+Ejemplo visible:
+
+```text
+2xTatami 80x200x5,5 | 1xFuton algodon 150x200x14
+```
+
+Comparacion de busqueda:
+
+- se comparan conjuntos para `0201001` y `201001`, no el orden de origen;
+- ambas formas devuelven los mismos IDs y la misma cantidad;
+- se verifica ausencia de duplicados;
+- la finalizacion aplica el mismo orden estable en ambas rutas;
+- criterio: articulos normales primero; despues packs; dentro de cada grupo por `item_id` y codigo como desempate;
+- no se modifico la logica de coincidencia de FUNC-002G.
+
+La comparacion automatizada ejecuta el servicio con respuestas rankeadas asimetricas para ambas formas. La comparacion contra datos vivos requiere login interactivo y queda pendiente en el smoke manual.
+
 ## Simbolos tocados
 
 ```text
@@ -193,12 +225,19 @@ Cobertura automatizada:
 - `0000` se normaliza de forma segura;
 - si la busqueda rankeada por `201001` devuelve solo el articulo normal, tambien se fusionan packs con componente `0201001`;
 - la evidencia de tests captura llamadas a `v_inventory_hub_search_ranked`, `inventory_item_components` e `inventory_items`.
+- composicion visible usa cantidad y nombre sin ID;
+- IDs internos de componentes y `ProposalLine.code` permanecen;
+- filas largas se convierten en multilinea con altura suficiente;
+- detalle lateral separa texto y botones;
+- `0201001` y `201001` producen el mismo conjunto, cardinalidad y orden final;
+- resultados sin duplicados;
+- articulos normales sin cambios.
 
 Resultado automatizado:
 
 ```text
-Tests del corte: Ran 26 tests
-Suite completa: Ran 119 tests
+Tests del corte: Ran 29 tests
+Suite completa: Ran 122 tests
 OK
 ```
 
@@ -244,6 +283,12 @@ OK
 5bc2503122147f16c201c6b56205d38b488314be
 ```
 
+## Commit funcional FUNC-002H
+
+```text
+824b5b9faf0475b94c2b145076dfe90c9bce23d8
+```
+
 ## Smoke manual
 
 Pendiente.
@@ -254,14 +299,17 @@ Checklist propuesto:
 - Ir a propuestas de precios.
 - Confirmar que un articulo normal mantiene `ID | Nombre | Precio`.
 - Confirmar que un pack Woo muestra composicion compacta en `Nombre`.
-- Confirmar formato `{cantidad}x{ID}x{nombre}` separado por `|`.
+- Confirmar formato visible `{cantidad}x{nombre}` separado por `|`.
+- Confirmar que la tabla muestra cada componente completo, con salto de linea cuando sea necesario.
 - Verificar agrupacion de componentes repetidos.
 - Verificar orden por ID de componente.
 - Buscar un componente, por ejemplo `0201001`, y confirmar que aparecen el articulo normal y los packs que lo contienen.
 - Buscar tambien el mismo componente sin cero inicial, por ejemplo `201001`, y confirmar que aparecen articulo normal y packs.
-- Confirmar que esos packs muestran nombres de componentes, no solo cantidad e ID.
+- Comparar ambos listados y confirmar mismos IDs, misma cantidad y mismo orden final.
+- Confirmar que esos packs muestran cantidad y nombres completos, sin IDs dentro de la composicion visible.
 - Buscar por ID de pack y confirmar que sigue apareciendo.
 - Anadido un pack a la propuesta, confirmar que todos los componentes quedan visibles y los botones no pisan el texto.
+- Confirmar en el detalle lateral un componente por linea y botones en una zona inferior independiente.
 - Verificar fallback tecnico solo si no hay composicion.
 - Guardar una propuesta y recargarla.
 - Confirmar que `ProposalLine.name` mantiene la composicion legible.
@@ -273,5 +321,6 @@ Checklist propuesto:
 - Packs sin composicion enriquecida seguiran mostrando el nombre tecnico.
 - La busqueda `ILIKE` puede devolver candidatos parciales, pero siempre se validan tokens completos antes de aceptar un pack.
 - La paginacion puede requerir varias lecturas si existen mas de 500 candidatos parciales; no omite resultados por ese motivo.
-- El orden usado es por `component_item_code`, no por orden comercial de Woo.
-- El smoke manual sigue pendiente, por lo que FUNC-002G no esta cerrado.
+- El orden interno de componentes sigue siendo por `component_item_code`, no por orden comercial de Woo.
+- La igualdad contra datos vivos requiere login interactivo y sigue pendiente de smoke.
+- El smoke manual sigue pendiente, por lo que FUNC-002H no esta cerrado.
