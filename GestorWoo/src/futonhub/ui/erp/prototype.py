@@ -4136,6 +4136,61 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 return number
         return 0.0
 
+    def _parse_rentabilidad_percent(self, value: Any, *, label: str = "Rentabilidad") -> float:
+        text = str(value if value is not None else "").strip().replace("%", "").replace(",", ".")
+        if not text:
+            return 0.0
+        try:
+            percent = float(text)
+        except Exception as exc:
+            raise ValueError(f"{label} debe ser un numero entre 0 y menos de 100.") from exc
+        if percent < 0:
+            raise ValueError(f"{label} no puede ser negativa.")
+        if percent >= 100:
+            raise ValueError(f"{label} debe ser menor que 100.")
+        return percent
+
+    def _supplier_order_pvp(self, final_cost: Any, rentabilidad_percent: Any) -> float:
+        cost = self._money_float(final_cost, 0.0)
+        rentabilidad = self._parse_rentabilidad_percent(rentabilidad_percent)
+        if cost <= 0:
+            return 0.0
+        return round(cost / (1 - rentabilidad / 100), 2)
+
+    def _supplier_order_effective_rentabilidad(self, source: dict[str, Any], global_percent: float) -> tuple[float, str]:
+        use_global = source.get("use_global_rentability")
+        individual = source.get("rentabilidad_individual_percent")
+        if use_global is False and individual not in (None, ""):
+            return self._parse_rentabilidad_percent(individual, label="Rentabilidad individual"), "individual"
+        return global_percent, "global"
+
+    def _supplier_order_update_line_rentabilidad(
+        self,
+        source: dict[str, Any],
+        *,
+        use_global: bool,
+        global_percent: float,
+        individual_percent: Any = None,
+        quantity: int = 0,
+    ) -> dict[str, Any]:
+        updated = dict(source)
+        if use_global:
+            updated.pop("rentabilidad_individual_percent", None)
+            effective = self._parse_rentabilidad_percent(global_percent)
+            rentabilidad_source = "global"
+        else:
+            effective = self._parse_rentabilidad_percent(individual_percent, label="Rentabilidad individual")
+            updated["rentabilidad_individual_percent"] = effective
+            rentabilidad_source = "individual"
+        updated["rentabilidad_percent"] = effective
+        updated["rentabilidad_source"] = rentabilidad_source
+        updated["use_global_rentability"] = use_global
+        final_unit = self._money_float(updated.get("precio_coste_final") or updated.get("unit_cost"), 0.0)
+        if final_unit > 0:
+            updated["pvp_unit"] = self._supplier_order_pvp(final_unit, effective)
+            updated["pvp_line"] = round(updated["pvp_unit"] * max(0, int(quantity or 0)), 2)
+        return updated
+
 
     def _current_business_constant_values(self) -> dict[str, float]:
         """Return calculation constants from Supabase/cache/defaults as numbers."""
@@ -4175,7 +4230,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             for item in items
         ]
         constants = self._current_business_constant_values()
-        rent_percent = self._money_float(values.get("Rentabilidad %"))
+        rent_percent = self._parse_rentabilidad_percent(values.get("Rentabilidad %"))
 
         # Conteos para fórmula general. M3 total del camión y productos que cuentan.
         total_m3 = sum(self._money_float((raw_lines[i] if i < len(raw_lines) else {}).get("m3_total") or item.m3) for i, item in enumerate(items))
@@ -4214,6 +4269,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 "pc_financiacion": constants["PC_GASTOS_FINANCIACION"],
                 "pc_suma": pc_suma,
                 "constants": constants,
+                "rentabilidad_percent": rent_percent,
             }
         else:
             coste_transporte = self._money_float(values.get("Coste transporte + IVA"))
@@ -4234,6 +4290,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 "ct_m3": ct_m3,
                 "cd_prod_iva": cd_prod_iva,
                 "constants": constants,
+                "rentabilidad_percent": rent_percent,
             }
 
         calculated: list[OrderItem] = []
@@ -4243,6 +4300,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         total_cost = 0.0
         for index, item in enumerate(items):
             source = dict(raw_lines[index] if index < len(raw_lines) and isinstance(raw_lines[index], dict) else {})
+            effective_rent_percent, rentabilidad_source = self._supplier_order_effective_rentabilidad(source, rent_percent)
             qty = max(0, int(item.quantity or 0))
             m3_total_line = self._money_float(source.get("m3_total") or item.m3)
             m3_unit = self._money_float(source.get("m3_und")) or (m3_total_line / qty if qty else 0.0)
@@ -4314,7 +4372,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                         "coste_almacenaje_iva": coste_almacenaje_iva,
                         "coste_picking_iva": coste_picking_iva,
                     }
-                pvp_unit = round(final_unit * (1 + rent_percent / 100), 2)
+                pvp_unit = self._supplier_order_pvp(final_unit, effective_rent_percent)
                 line_cost = round(final_unit * qty, 2)
                 pvp_line = round(pvp_unit * qty, 2)
                 status = "Calculado"
@@ -4351,7 +4409,10 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 "calculation_inputs": calc_inputs,
                 "calculation_details": line_details,
                 "calculation_reasons": reasons,
-                "rentabilidad_percent": rent_percent,
+                "rentabilidad_percent": effective_rent_percent,
+                "rentabilidad_global_percent": rent_percent,
+                "rentabilidad_source": rentabilidad_source,
+                "use_global_rentability": rentabilidad_source == "global",
                 "cuenta_para_descarga": "Sí" if self._order_line_counts_for_download(item, source) else "No",
                 "cuenta_reparto_descarga": self._order_line_counts_for_download(item, source),
                 "cuenta_pedido": "Sí" if self._order_line_counts_for_download(item, source) else "No",
@@ -4580,7 +4641,11 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         if mode == "heimei":
             columns = [
                 "ID",
-                "Producto / Medida",
+                "Nombre",
+                "Coste Final",
+                "Rentabilidad",
+                "P.V.P.",
+                "Ponderado",
                 "Color",
                 "Und.",
                 "Cuenta para descarga",
@@ -4601,15 +4666,15 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 "Coste sin almacenaje",
                 "Almacenaje + IVA",
                 "Picking + IVA",
-                "Coste Final Articulo",
-                "Rentabilidad %",
-                "P.V.P.",
-                "Precio ponderado lote",
                 "Coste Total Cantidad",
             ]
             widths = {
                 "ID": 95,
-                "Producto / Medida": 260,
+                "Nombre": 260,
+                "Coste Final": 130,
+                "Rentabilidad": 115,
+                "P.V.P.": 130,
+                "Ponderado": 130,
                 "Color": 105,
                 "Und.": 70,
                 "Cuenta para descarga": 145,
@@ -4630,16 +4695,16 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 "Coste sin almacenaje": 170,
                 "Almacenaje + IVA": 145,
                 "Picking + IVA": 130,
-                "Coste Final Articulo": 160,
-                "Rentabilidad %": 125,
-                "P.V.P.": 130,
-                "Precio ponderado lote": 170,
                 "Coste Total Cantidad": 165,
             }
         else:
             columns = [
                 "ID",
-                "Producto / Medida",
+                "Nombre",
+                "Coste Final",
+                "Rentabilidad",
+                "P.V.P.",
+                "Ponderado",
                 "Color",
                 "Und.",
                 "Cuenta para descarga",
@@ -4654,15 +4719,15 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 "Coste final con descarga",
                 "Almacenaje + IVA",
                 "Picking + IVA",
-                "Coste Final Articulo",
-                "Rentabilidad %",
-                "P.V.P.",
-                "Precio ponderado lote",
                 "Coste Total Cantidad",
             ]
             widths = {
                 "ID": 95,
-                "Producto / Medida": 260,
+                "Nombre": 260,
+                "Coste Final": 130,
+                "Rentabilidad": 115,
+                "P.V.P.": 130,
+                "Ponderado": 130,
                 "Color": 105,
                 "Und.": 70,
                 "Cuenta para descarga": 145,
@@ -4677,10 +4742,6 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 "Coste final con descarga": 185,
                 "Almacenaje + IVA": 145,
                 "Picking + IVA": 130,
-                "Coste Final Articulo": 160,
-                "Rentabilidad %": 125,
-                "P.V.P.": 130,
-                "Precio ponderado lote": 170,
                 "Coste Total Cantidad": 165,
             }
         tree = ttk.Treeview(frame, columns=columns, show="headings", height=12)
@@ -4778,8 +4839,79 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             entry.pack(fill=tk.X, ipady=8)
             entries[label] = entry
 
+        calc_inputs = source.get("calculation_inputs") if isinstance(source.get("calculation_inputs"), dict) else {}
+        global_rentabilidad = self._money_float(
+            source.get("rentabilidad_global_percent")
+            if source.get("rentabilidad_global_percent") not in (None, "")
+            else calc_inputs.get("rentabilidad_percent")
+            if calc_inputs.get("rentabilidad_percent") not in (None, "")
+            else source.get("rentabilidad_percent"),
+            0.0,
+        )
+        has_individual = source.get("rentabilidad_individual_percent") not in (None, "") and source.get("use_global_rentability") is False
+        use_global_rentability_var = tk.BooleanVar(value=not has_individual)
+        individual_rentabilidad_var = tk.StringVar(
+            value=str(source.get("rentabilidad_individual_percent") if has_individual else global_rentabilidad)
+        )
+        pvp_preview_var = tk.StringVar()
+        calculated_final_cost = self._money_float(source.get("precio_coste_final") or source.get("unit_cost"), 0.0)
+
+        rent_field = tk.Frame(form, bg=CARD)
+        rent_field.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(0, 12))
+        rent_field.columnconfigure(1, weight=1)
+        tk.Label(rent_field, text="RENTABILIDAD", bg=CARD, fg=MUTED, font=("Segoe UI", 8, "bold"), anchor=tk.W).grid(row=0, column=0, sticky="w", columnspan=2, pady=(0, 5))
+        tk.Label(
+            rent_field,
+            text=f"Coste Final calculado: {self._format_eur(calculated_final_cost) if calculated_final_cost > 0 else 'Pendiente'}",
+            bg=CARD,
+            fg=MUTED,
+            font=("Segoe UI", 8, "bold"),
+        ).grid(row=0, column=2, sticky="e", pady=(0, 5))
+        rent_entry = tk.Entry(
+            rent_field,
+            textvariable=individual_rentabilidad_var,
+            bg=CARD,
+            fg="#334155",
+            relief=tk.FLAT,
+            highlightbackground=LINE,
+            highlightcolor=INDIGO,
+            highlightthickness=1,
+            font=("Segoe UI", 10),
+        )
+        rent_entry.grid(row=1, column=0, sticky="ew", ipady=7, padx=(0, 10))
+        tk.Checkbutton(
+            rent_field,
+            text=f"Usar rentabilidad global ({self._format_optional_decimal(global_rentabilidad, default='0')}%)",
+            variable=use_global_rentability_var,
+            bg=CARD,
+            fg=TEXT,
+            activebackground=CARD,
+            selectcolor=CARD,
+        ).grid(row=1, column=1, sticky="w")
+        tk.Label(rent_field, textvariable=pvp_preview_var, bg=INDIGO_SOFT, fg=INDIGO, font=("Segoe UI", 9, "bold"), padx=10, pady=7).grid(row=1, column=2, sticky="e")
+
+        def refresh_pvp_preview(*_args: object) -> None:
+            try:
+                rent = global_rentabilidad if use_global_rentability_var.get() else self._parse_rentabilidad_percent(
+                    individual_rentabilidad_var.get(),
+                    label="Rentabilidad individual",
+                )
+                pvp_preview_var.set(
+                    f"P.V.P.: {self._supplier_order_pvp(calculated_final_cost, rent):.2f} EUR"
+                    if calculated_final_cost > 0
+                    else "P.V.P.: pendiente"
+                )
+                rent_entry.configure(state=tk.DISABLED if use_global_rentability_var.get() else tk.NORMAL)
+            except ValueError:
+                pvp_preview_var.set("P.V.P.: rentabilidad invalida")
+                rent_entry.configure(state=tk.NORMAL)
+
+        use_global_rentability_var.trace_add("write", refresh_pvp_preview)
+        individual_rentabilidad_var.trace_add("write", refresh_pvp_preview)
+        refresh_pvp_preview()
+
         cuenta_field = tk.Frame(form, bg=CARD)
-        cuenta_field.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(0, 12))
+        cuenta_field.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(0, 12))
         tk.Label(cuenta_field, text="CUENTA PARA DESCARGA", bg=CARD, fg=MUTED, font=("Segoe UI", 8, "bold"), anchor=tk.W).pack(fill=tk.X, pady=(0, 5))
         cuenta_var = tk.StringVar(value=self._order_line_counts_for_download_label(item, source))
         cuenta_combo = ttk.Combobox(cuenta_field, values=("Sí", "No"), textvariable=cuenta_var, state="readonly", font=("Segoe UI", 10), width=12)
@@ -4835,6 +4967,19 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             rotation_c = self._money_float(entries["Rotación C"].get())
             packages = int(self._money_float(entries["Bultos"].get()))
             price_provider = self._money_float(entries["Precio proveedor"].get())
+            use_global_rentabilidad = bool(use_global_rentability_var.get())
+            try:
+                individual_rentabilidad = (
+                    None
+                    if use_global_rentabilidad
+                    else self._parse_rentabilidad_percent(
+                        individual_rentabilidad_var.get(),
+                        label="Rentabilidad individual",
+                    )
+                )
+            except ValueError as exc:
+                messagebox.showwarning("Pedidos", str(exc))
+                return
             cuenta = cuenta_var.get().strip() or "Sí"
             cuenta_bool = cuenta == "Sí"
             missing: list[str] = []
@@ -4882,12 +5027,19 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 "calculation_reasons": [],
                 "ui_completed_from_order_editor": True,
             })
+            updated_source = self._supplier_order_update_line_rentabilidad(
+                updated_source,
+                use_global=use_global_rentabilidad,
+                global_percent=global_rentabilidad,
+                individual_percent=individual_rentabilidad,
+                quantity=qty,
+            )
             updated_item = OrderItem(
                 code=item.code,
                 name=desc,
                 quantity=qty,
                 m3=self._format_optional_decimal(total_m3, default="Pendiente"),
-                final_cost="Pendiente",
+                final_cost=self._format_eur(updated_source.get("line_cost")) if updated_source.get("line_cost") else "Pendiente",
                 status="OK",
                 raw={"source_row": updated_source},
             )
@@ -4961,11 +5113,19 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             pvp_unit = source.get("pvp_unit")
             if pvp_unit in (None, ""):
                 base_cost = self._money_float(coste_unitario_final, 0.0)
-                rent = self._money_float(rentabilidad, 0.0)
-                pvp_unit = round(base_cost * (1 + rent / 100), 2) if base_cost else 0.0
-            common = (
+                try:
+                    pvp_unit = self._supplier_order_pvp(base_cost, rentabilidad) if base_cost else 0.0
+                except ValueError:
+                    pvp_unit = 0.0
+            leading = (
                 item.code,
                 item.name,
+                eur(coste_unitario_final),
+                num(rentabilidad),
+                eur(pvp_unit),
+                eur(precio_ponderado_lote),
+            )
+            common = (
                 str(source.get("color") or "-"),
                 str(item.quantity),
                 cuenta,
@@ -4975,7 +5135,8 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             )
             if mode == "heimei":
                 rows.append(
-                    common
+                    leading
+                    + common
                     + (
                         usd(precio_base_num),
                         usd(calc_inputs.get("precio_dolares")),
@@ -4991,16 +5152,13 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                         eur(calc_details.get("coste_sin_almacenaje")),
                         eur(calc_details.get("coste_almacenaje_iva")),
                         eur(calc_details.get("coste_picking_iva")),
-                        eur(coste_unitario_final),
-                        num(rentabilidad),
-                        eur(pvp_unit),
-                        eur(precio_ponderado_lote),
                         eur(coste_total_cantidad, default=("Pendiente" if item.final_cost == "Bloqueado" else item.final_cost)),
                     )
                 )
             else:
                 rows.append(
-                    common
+                    leading
+                    + common
                     + (
                         eur(precio_base_num),
                         eur(calc_details.get("iva_re")),
@@ -5010,10 +5168,6 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                         eur(calc_details.get("coste_descarga")),
                         eur(calc_details.get("coste_almacenaje_iva")),
                         eur(calc_details.get("coste_picking_iva")),
-                        eur(coste_unitario_final),
-                        num(rentabilidad),
-                        eur(pvp_unit),
-                        eur(precio_ponderado_lote),
                         eur(coste_total_cantidad, default=("Pendiente" if item.final_cost == "Bloqueado" else item.final_cost)),
                     )
                 )
@@ -5413,8 +5567,10 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             pvp_export_unit = source.get("pvp_unit")
             if pvp_export_unit in (None, ""):
                 base_cost = self._money_float(source.get("precio_coste_final") or source.get("unit_cost"), 0.0)
-                rent = self._money_float(source.get("rentabilidad_percent"), 0.0)
-                pvp_export_unit = round(base_cost * (1 + rent / 100), 2) if base_cost else None
+                try:
+                    pvp_export_unit = self._supplier_order_pvp(base_cost, source.get("rentabilidad_percent")) if base_cost else None
+                except ValueError:
+                    pvp_export_unit = None
 
             ws_lines.append(
                 [

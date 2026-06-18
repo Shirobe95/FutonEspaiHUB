@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import inspect
+import json
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from openpyxl import load_workbook
@@ -39,6 +41,103 @@ class Session:
     user_id = "USER-1"
     email = "admin@example.com"
     role = "admin"
+
+
+class MemoryQuery:
+    def __init__(self, client: "MemoryClient", table: str) -> None:
+        self.client = client
+        self.table = table
+        self.action = "select"
+        self.payload = None
+        self.filters: list[tuple[str, str, object]] = []
+        self.limit_value: int | None = None
+
+    def select(self, _columns: str) -> "MemoryQuery":
+        self.action = "select"
+        return self
+
+    def insert(self, payload: object) -> "MemoryQuery":
+        self.action = "insert"
+        self.payload = payload
+        return self
+
+    def update(self, payload: dict[str, object]) -> "MemoryQuery":
+        self.action = "update"
+        self.payload = payload
+        return self
+
+    def delete(self) -> "MemoryQuery":
+        self.action = "delete"
+        return self
+
+    def eq(self, field: str, value: object) -> "MemoryQuery":
+        self.filters.append(("eq", field, value))
+        return self
+
+    def neq(self, field: str, value: object) -> "MemoryQuery":
+        self.filters.append(("neq", field, value))
+        return self
+
+    def order(self, _field: str, desc: bool = False) -> "MemoryQuery":
+        return self
+
+    def limit(self, value: int) -> "MemoryQuery":
+        self.limit_value = value
+        return self
+
+    def _matches(self, row: dict[str, object]) -> bool:
+        for operator, field, value in self.filters:
+            if operator == "eq" and str(row.get(field)) != str(value):
+                return False
+            if operator == "neq" and str(row.get(field)) == str(value):
+                return False
+        return True
+
+    def execute(self) -> SimpleNamespace:
+        rows = self.client.tables.setdefault(self.table, [])
+        if self.action == "select":
+            selected = [json.loads(json.dumps(row)) for row in rows if self._matches(row)]
+            if self.limit_value is not None:
+                selected = selected[: self.limit_value]
+            return SimpleNamespace(data=selected)
+        if self.action == "delete":
+            deleted = [row for row in rows if self._matches(row)]
+            self.client.tables[self.table] = [row for row in rows if not self._matches(row)]
+            return SimpleNamespace(data=json.loads(json.dumps(deleted)))
+        if self.action == "update":
+            updated = []
+            for row in rows:
+                if self._matches(row):
+                    row.update(json.loads(json.dumps(self.payload)))
+                    updated.append(json.loads(json.dumps(row)))
+            return SimpleNamespace(data=updated)
+        payloads = self.payload if isinstance(self.payload, list) else [self.payload]
+        inserted = []
+        for payload in payloads:
+            row = json.loads(json.dumps(payload))
+            if self.table == "supplier_orders":
+                row.setdefault("order_id", f"ORDER-{len(rows) + 1}")
+            else:
+                row.setdefault("id", len(rows) + 1)
+            rows.append(row)
+            inserted.append(json.loads(json.dumps(row)))
+        return SimpleNamespace(data=inserted)
+
+
+class MemoryClient:
+    def __init__(self) -> None:
+        self.tables: dict[str, list[dict[str, object]]] = {
+            "supplier_orders": [],
+            "supplier_order_items": [],
+        }
+
+    def table(self, name: str) -> MemoryQuery:
+        return MemoryQuery(self, name)
+
+
+class MemorySession(Session):
+    def __init__(self) -> None:
+        self.client = MemoryClient()
 
 
 def app() -> FutonHubErpPrototype:
@@ -104,8 +203,8 @@ class SupplierOrderCostTests(unittest.TestCase):
         self.assertEqual(source["line_cost"], 100.0)
         self.assertEqual(summary["total_cost"], 100.0)
         self.assertEqual(source["rentabilidad_percent"], 30.0)
-        self.assertEqual(source["pvp_unit"], 130.0)
-        self.assertEqual(source["pvp_line"], 130.0)
+        self.assertEqual(source["pvp_unit"], 142.86)
+        self.assertEqual(source["pvp_line"], 142.86)
 
     def test_zero_margin_keeps_pvp_equal_to_real_cost(self) -> None:
         ui = app()
@@ -143,14 +242,137 @@ class SupplierOrderCostTests(unittest.TestCase):
         self.assertEqual(source["unit_cost"], 100.0)
         self.assertEqual(source["line_cost"], 100.0)
         self.assertEqual(summary["total_cost"], 100.0)
-        self.assertEqual(source["pvp_unit"], 130.0)
-        self.assertEqual(source["pvp_line"], 130.0)
+        self.assertEqual(source["pvp_unit"], 142.86)
+        self.assertEqual(source["pvp_line"], 142.86)
 
-    def test_old_margin_formula_is_not_used_in_order_calculation(self) -> None:
+    def test_sales_margin_formula_is_used_in_order_calculation(self) -> None:
         source = inspect.getsource(FutonHubErpPrototype._calculate_supplier_order_in_memory)
 
-        self.assertNotIn("/ (1 - rent_percent / 100)", source)
-        self.assertIn("* (1 + rent_percent / 100)", source)
+        self.assertIn("_supplier_order_pvp(final_unit, effective_rent_percent)", source)
+        self.assertNotIn("* (1 + rent_percent / 100)", source)
+
+    def test_margin_validation_accepts_zero_and_blocks_100_or_negative(self) -> None:
+        ui = app()
+
+        self.assertEqual(ui._supplier_order_pvp(100, 0), 100.0)
+        with self.assertRaises(ValueError):
+            ui._supplier_order_pvp(100, 100)
+        with self.assertRaises(ValueError):
+            ui._supplier_order_pvp(100, -1)
+
+    def test_global_rentabilidad_is_used_when_line_has_no_individual_value(self) -> None:
+        ui = app()
+        items, _raw, _summary = ui._calculate_supplier_order_in_memory(
+            "ekomat",
+            {"Rentabilidad %": "30", "Coste transporte + IVA": "1"},
+            (general_item(),),
+            [],
+        )
+
+        source = items[0].raw["source_row"]
+        self.assertEqual(source["rentabilidad_percent"], 30.0)
+        self.assertEqual(source["rentabilidad_source"], "global")
+        self.assertTrue(source["use_global_rentability"])
+        self.assertEqual(source["pvp_unit"], 142.86)
+
+    def test_individual_rentabilidad_overrides_global_without_being_overwritten(self) -> None:
+        ui = app()
+        item = general_item()
+        source = dict(item.raw["source_row"])
+        source.update({"rentabilidad_individual_percent": 20, "use_global_rentability": False})
+        item = OrderItem(item.code, item.name, item.quantity, item.m3, item.final_cost, item.status, raw={"source_row": source})
+
+        items, _raw, _summary = ui._calculate_supplier_order_in_memory(
+            "ekomat",
+            {"Rentabilidad %": "30", "Coste transporte + IVA": "1"},
+            (item,),
+            [],
+        )
+
+        result = items[0].raw["source_row"]
+        self.assertEqual(result["rentabilidad_individual_percent"], 20)
+        self.assertEqual(result["rentabilidad_percent"], 20.0)
+        self.assertEqual(result["rentabilidad_source"], "individual")
+        self.assertFalse(result["use_global_rentability"])
+        self.assertEqual(result["pvp_unit"], 125.0)
+
+    def test_individual_rentabilidad_recalculates_from_new_real_cost(self) -> None:
+        ui = app()
+        item = general_item()
+        source = dict(item.raw["source_row"])
+        source.update({"rentabilidad_individual_percent": 30, "use_global_rentability": False})
+        item = OrderItem(item.code, item.name, item.quantity, item.m3, item.final_cost, item.status, raw={"source_row": source})
+
+        first, _raw, _summary = ui._calculate_supplier_order_in_memory(
+            "ekomat",
+            {"Rentabilidad %": "10", "Coste transporte + IVA": "1"},
+            (item,),
+            [],
+        )
+        second, _raw, _summary = ui._calculate_supplier_order_in_memory(
+            "ekomat",
+            {"Rentabilidad %": "60", "Coste transporte + IVA": "11"},
+            first,
+            [],
+        )
+
+        first_source = first[0].raw["source_row"]
+        result = second[0].raw["source_row"]
+        self.assertGreater(result["unit_cost"], first_source["unit_cost"])
+        self.assertEqual(result["rentabilidad_individual_percent"], 30)
+        self.assertEqual(result["rentabilidad_percent"], 30.0)
+        self.assertEqual(result["pvp_unit"], ui._supplier_order_pvp(result["unit_cost"], 30))
+
+    def test_editing_only_rentabilidad_keeps_real_cost_fields_unchanged(self) -> None:
+        ui = app()
+        original = {
+            "unit_cost": 100.0,
+            "precio_coste_final": 100.0,
+            "line_cost": 200.0,
+            "final_cost": 200.0,
+            "precio_ponderado_lote": 95.0,
+            "rentabilidad_percent": 30.0,
+            "pvp_unit": 142.86,
+            "pvp_line": 285.72,
+        }
+
+        updated = ui._supplier_order_update_line_rentabilidad(
+            original,
+            use_global=False,
+            global_percent=40,
+            individual_percent=20,
+            quantity=2,
+        )
+
+        for key in ("unit_cost", "precio_coste_final", "line_cost", "final_cost", "precio_ponderado_lote"):
+            self.assertEqual(updated[key], original[key])
+        self.assertEqual(updated["rentabilidad_individual_percent"], 20.0)
+        self.assertEqual(updated["pvp_unit"], 125.0)
+        self.assertEqual(updated["pvp_line"], 250.0)
+
+    def test_use_global_option_falls_back_to_global(self) -> None:
+        ui = app()
+
+        percent, source = ui._supplier_order_effective_rentabilidad(
+            {"rentabilidad_individual_percent": 20, "use_global_rentability": True},
+            30,
+        )
+
+        self.assertEqual((percent, source), (30, "global"))
+        updated = ui._supplier_order_update_line_rentabilidad(
+            {
+                "unit_cost": 100,
+                "line_cost": 100,
+                "rentabilidad_individual_percent": 20,
+                "use_global_rentability": False,
+            },
+            use_global=True,
+            global_percent=30,
+            quantity=1,
+        )
+        self.assertNotIn("rentabilidad_individual_percent", updated)
+        self.assertEqual(updated["rentabilidad_percent"], 30.0)
+        self.assertTrue(updated["use_global_rentability"])
 
     def test_calculation_rows_show_cost_margin_and_pvp_in_order(self) -> None:
         ui = app()
@@ -163,9 +385,7 @@ class SupplierOrderCostTests(unittest.TestCase):
 
         row = ui._calculation_rows(items, provider="ekomat")[0]
 
-        self.assertEqual(row[-5], "100.00 €")
-        self.assertEqual(row[-4], "30")
-        self.assertEqual(row[-3], "130.00 €")
+        self.assertEqual(row[:6], ("201014", "Futon prueba", "100.00 €", "30", "142.86 €", "100.00 €"))
 
     def test_legacy_rows_without_pvp_unit_get_display_fallback_only(self) -> None:
         ui = app()
@@ -191,9 +411,7 @@ class SupplierOrderCostTests(unittest.TestCase):
 
         row = ui._calculation_rows((item,), provider="ekomat")[0]
 
-        self.assertEqual(row[-5], "100.00 €")
-        self.assertEqual(row[-4], "30")
-        self.assertEqual(row[-3], "130.00 €")
+        self.assertEqual(row[:6], ("201014", "Futon antiguo", "100.00 €", "30", "142.86 €", "Pendiente"))
         self.assertNotIn("pvp_unit", item.raw["source_row"])
 
     def test_save_payload_keeps_real_cost_and_pvp_separate(self) -> None:
@@ -217,8 +435,155 @@ class SupplierOrderCostTests(unittest.TestCase):
         payload_item = update_calc.call_args.kwargs["items"][0]
         self.assertEqual(payload_item["unit_cost"], 100.0)
         self.assertEqual(payload_item["line_cost"], 100.0)
-        self.assertEqual(payload_item["source_row"]["pvp_unit"], 130.0)
-        self.assertEqual(payload_item["source_row"]["pvp_line"], 130.0)
+        self.assertEqual(payload_item["source_row"]["pvp_unit"], 142.86)
+        self.assertEqual(payload_item["source_row"]["pvp_line"], 142.86)
+        self.assertEqual(payload_item["source_row"]["rentabilidad_source"], "global")
+
+    def test_service_serialization_and_reload_preserve_individual_rentabilidad(self) -> None:
+        ui = app()
+        session = MemorySession()
+        session.client.tables["supplier_orders"].append(
+            {
+                "order_id": "ORDER-1",
+                "local_order_id": "PED-TEST",
+                "provider": "ekomat",
+                "order_file": "pedido.xlsx",
+                "status": "Borrador",
+                "total_items": 2,
+                "total_cost": 0,
+                "notes": "",
+                "created_at": "2026-06-18T08:00:00+00:00",
+                "updated_at": "2026-06-18T08:00:00+00:00",
+                "source_row": {"ui_order_name": "PED-TEST", "inputs": {"Rentabilidad %": "30"}},
+            }
+        )
+        individual = general_item()
+        individual_source = dict(individual.raw["source_row"])
+        individual_source.update({"rentabilidad_individual_percent": 20, "use_global_rentability": False})
+        individual = OrderItem(
+            individual.code,
+            individual.name,
+            individual.quantity,
+            individual.m3,
+            individual.final_cost,
+            individual.status,
+            raw={"source_row": individual_source},
+        )
+        global_item = general_item()
+        global_item = OrderItem(
+            "201015",
+            "Futon global",
+            global_item.quantity,
+            global_item.m3,
+            global_item.final_cost,
+            global_item.status,
+            raw=global_item.raw,
+        )
+        calculated, _raw, _summary = ui._calculate_supplier_order_in_memory(
+            "ekomat",
+            {"Rentabilidad %": "30", "Coste transporte + IVA": "1"},
+            (individual, global_item),
+            [],
+        )
+        payloads = []
+        for item in calculated:
+            source = item.raw["source_row"]
+            payloads.append(
+                {
+                    "code": item.code,
+                    "name": item.name,
+                    "quantity": item.quantity,
+                    "unit_cost": source["unit_cost"],
+                    "line_cost": source["line_cost"],
+                    "final_cost": source["line_cost"],
+                    "status": item.status,
+                    "source_row": source,
+                }
+            )
+
+        settings = SimpleNamespace(sync_role="admin", machine_name="TEST")
+        with (
+            patch.object(orders_service, "load_settings", return_value=settings),
+            patch.object(orders_service, "new_operation_id", return_value="ORDERCALC-TEST"),
+            patch.object(orders_service, "write_snapshot"),
+            patch.object(orders_service, "write_audit_event"),
+        ):
+            orders_service.update_supplier_order_calculation(
+                session,
+                order_id="ORDER-1",
+                provider="ekomat",
+                order_name="PED-TEST",
+                order_file="pedido.xlsx",
+                file_type="XLSX",
+                inputs={"Rentabilidad %": "30", "Coste transporte + IVA": "1"},
+                items=payloads,
+            )
+
+        ui._cloud_session = session
+        reloaded_orders = ui._load_supplier_orders_from_cloud()
+        self.assertEqual(len(reloaded_orders), 1)
+        self.assertEqual(len(reloaded_orders[0].items), 2)
+        reloaded_individual = reloaded_orders[0].items[0].raw["source_row"]
+        reloaded_global = reloaded_orders[0].items[1].raw["source_row"]
+        self.assertEqual(reloaded_individual["rentabilidad_individual_percent"], 20)
+        self.assertFalse(reloaded_individual["use_global_rentability"])
+        self.assertTrue(reloaded_global["use_global_rentability"])
+
+        recalculated, _raw, _summary = ui._calculate_supplier_order_in_memory(
+            "ekomat",
+            {"Rentabilidad %": "40", "Coste transporte + IVA": "11"},
+            reloaded_orders[0].items,
+            [],
+        )
+        individual_after = recalculated[0].raw["source_row"]
+        global_after = recalculated[1].raw["source_row"]
+        self.assertEqual(individual_after["rentabilidad_percent"], 20.0)
+        self.assertEqual(individual_after["rentabilidad_source"], "individual")
+        self.assertEqual(global_after["rentabilidad_percent"], 40.0)
+        self.assertEqual(global_after["rentabilidad_source"], "global")
+        self.assertEqual(
+            individual_after["pvp_unit"],
+            ui._supplier_order_pvp(individual_after["unit_cost"], 20),
+        )
+        self.assertEqual(
+            global_after["pvp_unit"],
+            ui._supplier_order_pvp(global_after["unit_cost"], 40),
+        )
+
+    def test_historical_serialized_line_without_new_fields_uses_global_rentabilidad(self) -> None:
+        ui = app()
+        historical_row = {
+            "id": 1,
+            "order_id": "ORDER-OLD",
+            "item_code": "201014",
+            "item_name": "Futon historico",
+            "quantity_ordered": 1,
+            "quantity_received": 0,
+            "unit_cost": 100,
+            "line_cost": 100,
+            "updated_at": "2025-01-01T00:00:00+00:00",
+            "source_row": {
+                **general_item().raw["source_row"],
+                "unit_cost": 100,
+                "line_cost": 100,
+                "precio_coste_final": 100,
+                "rentabilidad_percent": 15,
+            },
+        }
+
+        item = ui._supplier_order_item_from_cloud_row(json.loads(json.dumps(historical_row)))
+        recalculated, _raw, _summary = ui._calculate_supplier_order_in_memory(
+            "ekomat",
+            {"Rentabilidad %": "35", "Coste transporte + IVA": "1"},
+            (item,),
+            [],
+        )
+
+        source = recalculated[0].raw["source_row"]
+        self.assertEqual(source["rentabilidad_percent"], 35.0)
+        self.assertEqual(source["rentabilidad_source"], "global")
+        self.assertTrue(source["use_global_rentability"])
+        self.assertEqual(source["pvp_unit"], ui._supplier_order_pvp(source["unit_cost"], 35))
 
     def test_export_contains_cost_margin_and_pvp_columns(self) -> None:
         ui = app()
@@ -240,7 +605,43 @@ class SupplierOrderCostTests(unittest.TestCase):
             self.assertEqual(headers[cost_index : cost_index + 3], ["Coste Final Artículo", "Rentabilidad %", "P.V.P."])
             self.assertEqual(ws.cell(row=2, column=cost_index + 1).value, 100)
             self.assertEqual(ws.cell(row=2, column=cost_index + 2).value, 30)
-            self.assertEqual(ws.cell(row=2, column=cost_index + 3).value, 130)
+            self.assertEqual(ws.cell(row=2, column=cost_index + 3).value, 142.86)
+
+    def test_weighted_cost_does_not_depend_on_rentabilidad(self) -> None:
+        ui = app()
+        low, _raw, _summary = ui._calculate_supplier_order_in_memory(
+            "ekomat",
+            {"Rentabilidad %": "10", "Coste transporte + IVA": "1"},
+            (general_item(),),
+            [],
+        )
+        high, _raw, _summary = ui._calculate_supplier_order_in_memory(
+            "ekomat",
+            {"Rentabilidad %": "60", "Coste transporte + IVA": "1"},
+            (general_item(),),
+            [],
+        )
+
+        self.assertEqual(
+            low[0].raw["source_row"]["precio_ponderado_lote"],
+            high[0].raw["source_row"]["precio_ponderado_lote"],
+        )
+        self.assertNotEqual(low[0].raw["source_row"]["pvp_unit"], high[0].raw["source_row"]["pvp_unit"])
+
+    def test_editor_exposes_individual_and_global_rentability_controls(self) -> None:
+        source = inspect.getsource(FutonHubErpPrototype._open_order_item_missing_editor)
+
+        self.assertIn("rentabilidad_individual_percent", source)
+        self.assertIn("use_global_rentability_var", source)
+        self.assertIn("Usar rentabilidad global", source)
+        self.assertIn("Coste Final calculado", source)
+        self.assertIn("_supplier_order_update_line_rentabilidad", source)
+        self.assertNotIn('entries["Coste Final"]', source)
+
+    def test_new_column_order_starts_with_cost_margin_pvp_and_weighted(self) -> None:
+        source = inspect.getsource(FutonHubErpPrototype._calculation_tree)
+
+        self.assertIn('"ID",\n                "Nombre",\n                "Coste Final",\n                "Rentabilidad",\n                "P.V.P.",\n                "Ponderado"', source)
 
     def test_receive_flow_does_not_use_pvp_fields_for_costs(self) -> None:
         receive_source = inspect.getsource(orders_service.receive_supplier_order)
