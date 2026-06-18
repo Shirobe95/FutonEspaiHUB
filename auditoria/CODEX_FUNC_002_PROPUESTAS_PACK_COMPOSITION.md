@@ -1,11 +1,11 @@
 # FutonHUB - FUNC-002 Propuestas de precios composicion legible de packs
 
-Fecha: 2026-06-17
+Fecha: 2026-06-18
 
 Estado:
 
 ```text
-Implementado con FUNC-002E. Pendiente de smoke manual.
+Implementado con FUNC-002G. Pendiente de smoke manual.
 ```
 
 ## Objetivo
@@ -29,6 +29,8 @@ FUNC-002C corrige el enriquecimiento de nombres cuando los componentes llegan si
 FUNC-002D corrige la equivalencia de codigos numericos con y sin ceros iniciales durante busqueda, comparacion y cache.
 
 FUNC-002E corrige el corte temprano de la ruta rankeada: si buscar `201001` devuelve el articulo normal, igualmente se fusionan los packs cuyo componente esta guardado como `0201001`.
+
+FUNC-002G usa los tokens reales de `woo_sku` como fuente estructurada cuando no existen relaciones, resuelve nombres en bloque y elimina el limite silencioso de los primeros 500 packs.
 
 ## Alcance
 
@@ -115,6 +117,35 @@ Correccion FUNC-002E:
 - La ruta rankeada tambien fusiona padres de componentes comparando con `_normalize_inventory_numeric_code`.
 - El codigo mostrado sigue usando `component_item_code` original, por ejemplo `0201001`.
 
+## FUNC-002G
+
+Parte ya implementada antes del cierre:
+
+- agrupacion y presentacion compacta de componentes en propuestas;
+- normalizacion equivalente de codigos numericos con y sin ceros iniciales;
+- resolucion batch/cache de nombres;
+- mezcla de resultados rankeados con packs encontrados por componente.
+
+Ajuste completado en FUNC-002G:
+
+- `_components_from_woo_sku` convierte `0201001|0201001|0728003` en componentes estructurados;
+- agrupa tokens repetidos conservando el codigo original mostrado;
+- `hub_pack_components`, texto y multilinea se construyen desde `woo_sku` cuando no hay relaciones;
+- los nombres se resuelven en una unica fase batch para todos los componentes del resultado;
+- buscar `0201001` o `201001` devuelve los mismos packs;
+- la seleccion y la propuesta reciben cantidad, ID y nombre.
+
+Revision de rendimiento:
+
+- no se creo migracion, vista, RPC ni cambio de esquema;
+- la vista rankeada existente no garantiza ambas formas `0201001`/`201001`;
+- la busqueda complementaria usa `inventory_items.woo_sku ILIKE '%<codigo normalizado>%'` para reducir candidatos en servidor;
+- despues valida tokens completos normalizados en Python para evitar falsos positivos;
+- pagina mediante `range` en bloques de 500 ordenados por `item_id`;
+- no existe corte en los primeros 500 candidatos;
+- `inventory_item_components` se conserva como fallback compatible, tambien paginado y resuelto en batch;
+- no se hacen consultas por fila.
+
 ## Simbolos tocados
 
 ```text
@@ -166,7 +197,8 @@ Cobertura automatizada:
 Resultado automatizado:
 
 ```text
-Ran 116 tests
+Tests del corte: Ran 26 tests
+Suite completa: Ran 119 tests
 OK
 ```
 
@@ -206,6 +238,12 @@ OK
 5ba422f8c7c7ca1c79702f7c254be1c75b1639a6
 ```
 
+## Commit funcional FUNC-002G
+
+```text
+5bc2503122147f16c201c6b56205d38b488314be
+```
+
 ## Smoke manual
 
 Pendiente.
@@ -233,6 +271,7 @@ Checklist propuesto:
 ## Riesgos conocidos
 
 - Packs sin composicion enriquecida seguiran mostrando el nombre tecnico.
-- Si una fila solo trae `woo_sku` sin nombres, no se intenta resolver por consulta para cumplir la regla de no hacer consultas por fila.
+- La busqueda `ILIKE` puede devolver candidatos parciales, pero siempre se validan tokens completos antes de aceptar un pack.
+- La paginacion puede requerir varias lecturas si existen mas de 500 candidatos parciales; no omite resultados por ese motivo.
 - El orden usado es por `component_item_code`, no por orden comercial de Woo.
-- El smoke manual sigue pendiente, por lo que FUNC-002 no esta cerrado.
+- El smoke manual sigue pendiente, por lo que FUNC-002G no esta cerrado.
