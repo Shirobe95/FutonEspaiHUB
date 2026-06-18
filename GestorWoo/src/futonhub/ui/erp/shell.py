@@ -98,6 +98,7 @@ class ErpShellNavigationMixin:
 
         search = tk.Frame(topbar, bg=CARD, highlightbackground=LINE, highlightthickness=1)
         search.grid(row=0, column=0, sticky="ew", padx=20, pady=14)
+        self._global_search_area = search
         tk.Label(search, text="Buscar producto, proveedor, informe o incidencia...", bg=CARD, fg=MUTED, anchor=tk.W).pack(
             fill=tk.X,
             padx=14,
@@ -108,6 +109,21 @@ class ErpShellNavigationMixin:
         status.grid(row=0, column=1, padx=(0, 20), pady=14)
         self._status_area = status
         self._render_session_status()
+
+    def _global_search_visible_for_view(self, key: str) -> bool:
+        return key != "precios"
+
+    def _sync_global_search_visibility(self, key: str) -> None:
+        search = getattr(self, "_global_search_area", None)
+        if search is None:
+            return
+        if self._global_search_visible_for_view(key):
+            search.grid()
+        else:
+            search.grid_remove()
+        status = getattr(self, "_status_area", None)
+        if status is not None:
+            status.grid_configure(pady=6 if key == "precios" else 14)
 
     def _render_session_status(self) -> None:
         if self._status_area is None:
@@ -122,6 +138,7 @@ class ErpShellNavigationMixin:
         if key == "inventory":
             key = "inventario"
         self._current_key = key
+        self._sync_global_search_visibility(key)
         for item_key, button in self._nav_buttons.items():
             if item_key == key:
                 button.configure(bg=INDIGO, fg="white", activebackground=INDIGO, activeforeground="white")

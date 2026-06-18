@@ -1280,6 +1280,13 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         )
         return max(28, min(max_lines, 6) * 20 + 8)
 
+    def _price_item_result_line_count(self, name: str) -> int:
+        return max(1, min(self._price_pick_table_display_name(name).count("\n") + 1, 6))
+
+    def _price_items_viewport_height(self, rows: list[tuple[str, str, str]]) -> int:
+        estimated = sum(28 + (self._price_item_result_line_count(row[1]) - 1) * 19 for row in rows)
+        return max(72, min(estimated, 210))
+
     def _inventory_item_type_text(self, item: InventoryItem) -> str:
         raw = item.raw or {}
         record_type = str(raw.get("item_record_type") or raw.get("hub_search_record_type") or "simple").strip() or "simple"
@@ -2660,6 +2667,15 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         update_variations: bool = False,
         variation_parent: tk.Misc | None = None,
     ) -> None:
+        if title == "Items":
+            self._price_items_pick_list(
+                parent,
+                rows,
+                update_variations=update_variations,
+                variation_parent=variation_parent,
+            )
+            return
+
         card = self._card(parent)
         card.pack(fill=tk.BOTH, expand=True, pady=(0, 12))
         tk.Label(card, text=title, bg=CARD, fg=TEXT, font=("Segoe UI", 14, "bold")).pack(anchor=tk.W, padx=16, pady=(16, 8))
@@ -2730,6 +2746,124 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             "Anadir",
             command=lambda: self._price_add_rows_to_proposal(selected_rows(False), percent_entry.get(), exact_entry.get()),
         ).pack(side=tk.RIGHT, padx=(6, 0))
+
+    def _price_items_pick_list(
+        self,
+        parent: tk.Misc,
+        rows: list[tuple[str, str, str]],
+        *,
+        update_variations: bool,
+        variation_parent: tk.Misc | None,
+    ) -> None:
+        """Selector Items con altura variable por fila.
+
+        ttk.Treeview solo permite rowheight global por estilo. Esta lista localizada
+        usa widgets por resultado para que simples sean compactos y packs multilinea.
+        """
+        card = self._card(parent)
+        card.pack(fill=tk.X, pady=(0, 12))
+        tk.Label(card, text="Items", bg=CARD, fg=TEXT, font=("Segoe UI", 14, "bold")).pack(anchor=tk.W, padx=16, pady=(16, 8))
+
+        header = tk.Frame(card, bg=SOFT, highlightbackground=LINE, highlightthickness=1)
+        header.pack(fill=tk.X, padx=16)
+        header.columnconfigure(1, weight=1)
+        for column, text, width, anchor in (
+            (0, "ID", 12, tk.CENTER),
+            (1, "Nombre", 1, tk.W),
+            (2, "Precio", 10, tk.CENTER),
+        ):
+            tk.Label(
+                header,
+                text=text,
+                bg=SOFT,
+                fg=TEXT,
+                font=("Segoe UI", 9, "bold"),
+                width=width,
+                anchor=anchor,
+                padx=8,
+                pady=7,
+            ).grid(row=0, column=column, sticky="ew")
+
+        viewport_height = self._price_items_viewport_height(rows)
+        viewport = tk.Frame(card, bg=CARD, height=viewport_height)
+        viewport.pack(fill=tk.X, padx=16)
+        viewport.pack_propagate(False)
+        viewport.rowconfigure(0, weight=1)
+        viewport.columnconfigure(0, weight=1)
+        canvas = tk.Canvas(viewport, bg=CARD, highlightthickness=0, height=viewport_height)
+        scrollbar = ttk.Scrollbar(viewport, orient=tk.VERTICAL, command=canvas.yview)
+        list_host = tk.Frame(canvas, bg=CARD)
+        list_host.columnconfigure(0, weight=1)
+        list_window = canvas.create_window((0, 0), window=list_host, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.grid(row=0, column=0, sticky="nsew")
+        scrollbar.grid(row=0, column=1, sticky="ns")
+        list_host.bind("<Configure>", lambda _event: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.bind("<Configure>", lambda event: canvas.itemconfigure(list_window, width=event.width))
+        canvas.bind("<MouseWheel>", lambda event: canvas.yview_scroll(int(-1 * (event.delta / 120)), "units"))
+
+        selected_code = self._price_edit_selected_code if any(row[0] == self._price_edit_selected_code for row in rows) else (rows[0][0] if rows else "")
+        selected_var = tk.StringVar(value=selected_code)
+        row_widgets: dict[str, tk.Frame] = {}
+
+        def selected_rows() -> list[tuple[str, str, str]]:
+            selected = selected_var.get()
+            return [row for row in rows if row[0] == selected][:1]
+
+        def select_row(row: tuple[str, str, str]) -> None:
+            selected_var.set(row[0])
+            for code, widget in row_widgets.items():
+                row_bg = INDIGO_SOFT if code == row[0] else CARD
+                widget.configure(bg=row_bg)
+                for child in widget.winfo_children():
+                    child.configure(bg=row_bg)
+            if update_variations and row[0] != self._price_edit_selected_code:
+                self._price_edit_selected_code = row[0]
+                if variation_parent is not None:
+                    self._render_price_variations_picker(variation_parent)
+
+        if not rows:
+            tk.Label(list_host, text="Sin resultados", bg=CARD, fg=MUTED, anchor=tk.W, padx=10, pady=10).grid(row=0, column=0, sticky="ew")
+
+        for index, row in enumerate(rows):
+            visible_name = self._price_pick_table_display_name(row[1])
+            row_bg = INDIGO_SOFT if row[0] == selected_var.get() else CARD
+            item = tk.Frame(list_host, bg=row_bg, highlightbackground=LINE, highlightthickness=1, cursor="hand2")
+            item.grid(row=index, column=0, sticky="ew")
+            item.columnconfigure(1, weight=1)
+            tk.Label(item, text=row[0], bg=row_bg, fg=TEXT, width=12, anchor=tk.CENTER, padx=8, pady=5).grid(row=0, column=0, sticky="nsew")
+            tk.Label(
+                item,
+                text=visible_name,
+                bg=row_bg,
+                fg=TEXT,
+                anchor=tk.W,
+                justify=tk.LEFT,
+                padx=8,
+                pady=5,
+            ).grid(row=0, column=1, sticky="nsew")
+            tk.Label(item, text=row[2], bg=row_bg, fg=TEXT, width=10, anchor=tk.CENTER, padx=8, pady=5).grid(row=0, column=2, sticky="nsew")
+            row_widgets[row[0]] = item
+            for widget in (item, *item.winfo_children()):
+                widget.bind("<Button-1>", lambda _event, row=row: select_row(row), add="+")
+
+        footer = tk.Frame(card, bg=CARD)
+        footer.pack(fill=tk.X, padx=16, pady=(10, 16))
+        tk.Label(footer, text="Subida %", bg=CARD, fg=MUTED, font=("Segoe UI", 8, "bold")).pack(side=tk.LEFT, padx=(0, 6))
+        percent_entry = tk.Entry(footer, width=8, bg=CARD, fg=TEXT, relief=tk.FLAT, highlightbackground=LINE, highlightcolor=INDIGO, highlightthickness=1)
+        percent_entry.pack(side=tk.LEFT, ipady=7, padx=(0, 12))
+        tk.Label(footer, text="Valor", bg=CARD, fg=MUTED, font=("Segoe UI", 8, "bold")).pack(side=tk.LEFT, padx=(0, 6))
+        exact_entry = tk.Entry(footer, width=10, bg=CARD, fg=TEXT, relief=tk.FLAT, highlightbackground=LINE, highlightcolor=INDIGO, highlightthickness=1)
+        exact_entry.pack(side=tk.LEFT, ipady=7, padx=(0, 12))
+        tk.Frame(footer, bg=CARD).pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        def add_selected() -> None:
+            self._price_add_rows_to_proposal(selected_rows(), percent_entry.get(), exact_entry.get())
+
+        self._button(footer, "Anadir", command=add_selected).pack(side=tk.RIGHT, padx=(6, 0))
+        for item in row_widgets.values():
+            for widget in (item, *item.winfo_children()):
+                widget.bind("<Double-Button-1>", lambda _event: add_selected(), add="+")
 
     def _price_add_rows_to_proposal(self, rows: list[tuple[str, str, str]], percent_text: str, exact_text: str) -> None:
         if not rows:

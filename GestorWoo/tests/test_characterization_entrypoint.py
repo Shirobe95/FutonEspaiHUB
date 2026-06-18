@@ -84,6 +84,15 @@ class NavigationContractTests(unittest.TestCase):
 
         self.assertEqual(shell._current_key, "inventario")
 
+    def test_global_search_is_hidden_only_for_price_changes(self) -> None:
+        from futonhub.ui.erp.shell import ErpShellNavigationMixin
+
+        shell = object.__new__(ErpShellNavigationMixin)
+
+        self.assertFalse(shell._global_search_visible_for_view("precios"))
+        self.assertTrue(shell._global_search_visible_for_view("dashboard"))
+        self.assertTrue(shell._global_search_visible_for_view("inventario"))
+
 
 if __name__ == "__main__":
     unittest.main()

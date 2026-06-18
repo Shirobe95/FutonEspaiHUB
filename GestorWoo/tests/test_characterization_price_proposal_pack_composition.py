@@ -615,6 +615,44 @@ class PriceProposalPackCompositionTests(unittest.TestCase):
         )
         self.assertGreaterEqual(self.app._price_pick_table_rowheight(rows), 68)
 
+    def test_item_results_use_compact_simple_rows_and_multiline_pack_rows(self) -> None:
+        self.assertEqual(self.app._price_item_result_line_count("Tatami normal"), 1)
+        self.assertEqual(
+            self.app._price_item_result_line_count("2xTatami 80x200x5,5 | 1xFuton algodon 150x200x14"),
+            2,
+        )
+
+    def test_item_results_viewport_is_bounded_and_scrollable_controls_remain_outside(self) -> None:
+        rows = [
+            (str(index), "2xTatami | 1xFuton | 2xCojin", "100.00")
+            for index in range(20)
+        ]
+        source = inspect.getsource(FutonHubErpPrototype._price_items_pick_list)
+
+        self.assertEqual(self.app._price_items_viewport_height(rows), 210)
+        self.assertIn("tk.Canvas(viewport", source)
+        self.assertIn("ttk.Scrollbar(viewport", source)
+        self.assertIn('text="Subida %"', source)
+        self.assertIn('text="Valor"', source)
+        self.assertIn('"Anadir"', source)
+        self.assertLess(source.index("tk.Canvas(viewport"), source.index("footer = tk.Frame(card"))
+
+    def test_item_result_selection_double_click_and_add_preserve_original_row_values(self) -> None:
+        source = inspect.getsource(FutonHubErpPrototype._price_items_pick_list)
+        row = ("900000003720", "2xTatami | 1xFuton", "245.00")
+
+        self.assertIn('widget.bind("<Button-1>"', source)
+        self.assertIn('widget.bind("<Double-Button-1>"', source)
+        self.assertIn("self._price_add_rows_to_proposal(selected_rows()", source)
+        self.assertEqual(row, ("900000003720", "2xTatami | 1xFuton", "245.00"))
+
+    def test_only_items_use_variable_height_widget_list(self) -> None:
+        source = inspect.getsource(FutonHubErpPrototype._price_pick_table)
+
+        self.assertIn('if title == "Items":', source)
+        self.assertIn("self._price_items_pick_list(", source)
+        self.assertIn("ttk.Treeview", source)
+
     def test_proposal_detail_places_actions_below_component_text(self) -> None:
         source = inspect.getsource(FutonHubErpPrototype._proposal_edit_line)
 
