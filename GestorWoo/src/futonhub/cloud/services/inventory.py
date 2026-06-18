@@ -15,8 +15,6 @@ def _json_safe(value: Any) -> Any:
         return {"_raw": str(value)}
 
 
-
-
 INVENTORY_SELECT_COLUMNS = (
     'item_id,name,family,subgroup,size,materials,cubic_meters,rotation_c,packages,store_stock,warehouse_stock,'
     'hub_item_code,item_record_type,base_item_code,heca_reference,commercial_status,woo_item_kind,woo_id,woo_parent_id,woo_name,woo_sku,woo_price,woo_categories,woo_link_status,'
@@ -85,22 +83,35 @@ def _format_pack_component_line(component: dict[str, Any]) -> str:
     return f"{code} x{qty}"
 
 
-def _component_summary_from_woo_sku(woo_sku: Any) -> tuple[str, str]:
-    """Fallback visible para packs: resume tokens del SKU aunque falle la tabla de componentes."""
+def _components_from_woo_sku(woo_sku: Any, parent_item_code: Any = None) -> list[dict[str, Any]]:
     text = str(woo_sku or '').strip()
     if '|' not in text:
-        return '', ''
-    counts: dict[str, int] = {}
+        return []
+    grouped: dict[str, dict[str, Any]] = {}
     order: list[str] = []
     for raw in text.split('|'):
         token = raw.strip()
         if not token:
             continue
-        if token not in counts:
-            counts[token] = 0
-            order.append(token)
-        counts[token] += 1
-    parts = [f"{token} x{counts[token]}" for token in order]
+        key = _normalize_inventory_numeric_code(token).lower()
+        if key not in grouped:
+            grouped[key] = {
+                'parent_item_code': str(parent_item_code or '').strip(),
+                'component_item_code': token,
+                'component_name': '',
+                'quantity': 0,
+                'relation_type': 'component',
+                'token_type': 'woo_sku',
+            }
+            order.append(key)
+        grouped[key]['quantity'] = int(grouped[key]['quantity']) + 1
+    return [grouped[key] for key in order]
+
+
+def _component_summary_from_woo_sku(woo_sku: Any) -> tuple[str, str]:
+    """Fallback visible para packs: resume tokens del SKU aunque falle la tabla de componentes."""
+    components = _components_from_woo_sku(woo_sku)
+    parts = [_format_pack_component_line(component) for component in components]
     return '; '.join(parts), '\n'.join(f"- {part}" for part in parts)
 
 
@@ -209,7 +220,7 @@ def _enrich_rows_with_component_summary(session, rows: list[dict[str, Any]]) -> 
             codes.append(str(code))
     codes = sorted(set(codes))
 
-    components_by_parent: dict[str, list[dict[str, Any]]] = {}
+    relation_components_by_parent: dict[str, list[dict[str, Any]]] = {}
     if codes:
         try:
             resp = (
@@ -222,14 +233,37 @@ def _enrich_rows_with_component_summary(session, rows: list[dict[str, Any]]) -> 
                 .execute()
             )
             fetched_components = [dict(comp) for comp in (getattr(resp, 'data', None) or [])]
-            fetched_components = _fill_component_names_from_inventory(session, fetched_components)
             for comp in fetched_components:
                 parent = str(comp.get('parent_item_code') or '')
                 if not parent:
                     continue
-                components_by_parent.setdefault(parent, []).append(dict(comp))
+                relation_components_by_parent.setdefault(parent, []).append(comp)
         except Exception:
-            components_by_parent = {}
+            relation_components_by_parent = {}
+
+    components_by_parent: dict[str, list[dict[str, Any]]] = {}
+    component_source_by_parent: dict[str, str] = {}
+    for row in rows:
+        code = str(row.get('hub_search_code') or row.get('hub_item_code') or row.get('heca_reference') or '')
+        record_type = row.get('hub_search_record_type') or row.get('item_record_type')
+        if record_type not in {'woo_pack', 'manual_pack'}:
+            continue
+        components = relation_components_by_parent.get(code) or []
+        if components:
+            components_by_parent[code] = components
+            component_source_by_parent[code] = 'inventory_item_components'
+            continue
+        components = _components_from_woo_sku(row.get('woo_sku'), code)
+        if components:
+            components_by_parent[code] = components
+            component_source_by_parent[code] = 'woo_sku_fallback'
+
+    all_components = [
+        component
+        for parent_components in components_by_parent.values()
+        for component in parent_components
+    ]
+    _fill_component_names_from_inventory(session, all_components)
 
     for row in rows:
         code = str(row.get('hub_search_code') or row.get('hub_item_code') or row.get('heca_reference') or '')
@@ -241,6 +275,7 @@ def _enrich_rows_with_component_summary(session, rows: list[dict[str, Any]]) -> 
                 row['hub_pack_components'] = comps
                 row['hub_pack_components_text'] = '; '.join(parts)
                 row['hub_pack_components_multiline'] = '\n'.join(f"- {part}" for part in parts)
+                row['hub_pack_components_source'] = component_source_by_parent.get(code)
             else:
                 sku_text, sku_multiline = _component_summary_from_woo_sku(row.get('woo_sku'))
                 if sku_text:
@@ -336,14 +371,16 @@ def fetch_inventory_pack_components(session, parent_item_code: str, woo_sku: Any
             'lookup_error': lookup_error,
         }
 
-    sku_text, sku_multiline = _component_summary_from_woo_sku(woo_sku)
-    if sku_text:
+    sku_components = _components_from_woo_sku(woo_sku, parent)
+    if sku_components:
+        _fill_component_names_from_inventory(session, sku_components)
+        parts = [_format_pack_component_line(component) for component in sku_components]
         return {
             'source': 'woo_sku_fallback',
             'parent_item_code': parent,
-            'components': [],
-            'text': sku_text,
-            'multiline': sku_multiline,
+            'components': sku_components,
+            'text': '; '.join(parts),
+            'multiline': '\n'.join(f'- {part}' for part in parts),
             'lookup_error': lookup_error,
         }
     return {
@@ -400,6 +437,112 @@ def _coerce_optional_float(value: Any) -> float | None:
         if value == '':
             return None
     return float(value)
+
+
+def _find_inventory_pack_rows_by_woo_sku_token(session, query: Any, limit: int) -> list[dict[str, Any]]:
+    canonical = _normalize_inventory_numeric_code(query).lower()
+    if not canonical:
+        return []
+
+    # La vista rankeada no siempre contiene las dos formas numericas del token
+    # (0201001/201001). Reducimos candidatos en servidor por woo_sku y paginamos
+    # para no depender del limite por defecto de PostgREST ni omitir packs.
+    page_size = 500
+    offset = 0
+    matches: list[dict[str, Any]] = []
+    while len(matches) < limit:
+        try:
+            resp = (
+                session.client.table('inventory_items')
+                .select(INVENTORY_SELECT_COLUMNS)
+                .in_('item_record_type', ['woo_pack', 'manual_pack'])
+                .ilike('woo_sku', f'%{canonical}%')
+                .order('item_id', desc=False)
+                .range(offset, offset + page_size - 1)
+                .execute()
+            )
+        except Exception:
+            return matches
+
+        page = list(getattr(resp, 'data', None) or [])
+        for raw_row in page:
+            row = dict(raw_row)
+            tokens = [token.strip() for token in str(row.get('woo_sku') or '').split('|') if token.strip()]
+            if any(_normalize_inventory_numeric_code(token).lower() == canonical for token in tokens):
+                matches.append(row)
+                if len(matches) >= limit:
+                    break
+        if len(page) < page_size:
+            break
+        offset += page_size
+
+    if len(matches) >= limit:
+        return matches
+
+    # Compatibilidad con relaciones existentes. En los datos reales observados
+    # esta tabla puede estar vacia, pero si contiene relaciones las resolvemos
+    # tambien en bloque y con paginacion.
+    parent_codes: list[str] = []
+    offset = 0
+    while len(parent_codes) < limit:
+        try:
+            resp = (
+                session.client.table('inventory_item_components')
+                .select('parent_item_code,component_item_code')
+                .eq('relation_type', 'component')
+                .ilike('component_item_code', f'%{canonical}%')
+                .order('parent_item_code', desc=False)
+                .range(offset, offset + page_size - 1)
+                .execute()
+            )
+        except Exception:
+            break
+
+        page = list(getattr(resp, 'data', None) or [])
+        for relation in page:
+            component_code = relation.get('component_item_code')
+            parent_code = str(relation.get('parent_item_code') or '').strip()
+            if (
+                parent_code
+                and _normalize_inventory_numeric_code(component_code).lower() == canonical
+                and parent_code not in parent_codes
+            ):
+                parent_codes.append(parent_code)
+                if len(parent_codes) >= limit:
+                    break
+        if len(page) < page_size:
+            break
+        offset += page_size
+
+    if not parent_codes:
+        return matches
+
+    seen_ids = {row.get('item_id') for row in matches}
+    remaining = limit - len(matches)
+    for column in ('hub_item_code', 'heca_reference'):
+        if remaining <= 0:
+            break
+        try:
+            resp = (
+                session.client.table('inventory_items')
+                .select(INVENTORY_SELECT_COLUMNS)
+                .in_(column, parent_codes)
+                .limit(remaining)
+                .execute()
+            )
+        except Exception:
+            continue
+        for raw_row in getattr(resp, 'data', None) or []:
+            row = dict(raw_row)
+            item_id = row.get('item_id')
+            if item_id in seen_ids:
+                continue
+            seen_ids.add(item_id)
+            matches.append(row)
+            remaining -= 1
+            if remaining <= 0:
+                break
+    return matches
 
 
 def search_cloud_inventory_items(session, query: str, limit: int = 25, *, enrich_components: bool = True) -> list[dict[str, Any]]:
@@ -490,44 +633,18 @@ def search_cloud_inventory_items(session, query: str, limit: int = 25, *, enrich
                 row['hub_search_match_priority'] = ranked.get('match_priority')
                 rows.append(row)
             if q.isdigit() or (q.startswith('-') and q[1:].isdigit()):
-                normalized_component = _normalize_inventory_numeric_code(q)
-                try:
-                    component_resp = (
-                        session.client.table('inventory_item_components')
-                        .select('parent_item_code,component_item_code,component_name,quantity,relation_type')
-                        .ilike('component_item_code', f'%{normalized_component}')
-                        .eq('relation_type', 'component')
-                        .limit(limit)
-                        .execute()
-                    )
-                    component_rows = [
-                        dict(row)
-                        for row in (getattr(component_resp, 'data', None) or [])
-                        if _normalize_inventory_numeric_code(row.get('component_item_code')) == normalized_component
-                    ]
-                    parent_codes = sorted({str(row.get('parent_item_code') or '').strip() for row in component_rows if row.get('parent_item_code')})
-                    for col in ('hub_item_code', 'heca_reference'):
-                        if not parent_codes:
-                            break
-                        try:
-                            parent_resp = session.client.table('inventory_items').select(INVENTORY_SELECT_COLUMNS).in_(col, parent_codes).limit(limit).execute()
-                        except Exception:
-                            continue
-                        for parent in getattr(parent_resp, 'data', None) or []:
-                            item_id = parent.get('item_id')
-                            try:
-                                key = int(item_id)
-                            except Exception:
-                                key = hash(str(parent))
-                            if key in seen:
-                                continue
-                            seen.add(key)
-                            parent = dict(parent)
-                            parent.setdefault('item_record_type', parent.get('item_record_type') or 'simple')
-                            parent.setdefault('hub_item_code', parent.get('hub_item_code') or parent.get('heca_reference') or str(parent.get('item_id') or ''))
-                            rows.append(parent)
-                except Exception:
-                    pass
+                for parent in _find_inventory_pack_rows_by_woo_sku_token(session, q, limit):
+                    item_id = parent.get('item_id')
+                    try:
+                        key = int(item_id)
+                    except Exception:
+                        key = hash(str(parent))
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    parent.setdefault('hub_search_code', parent.get('hub_item_code') or parent.get('heca_reference'))
+                    parent.setdefault('hub_search_record_type', parent.get('item_record_type') or 'woo_pack')
+                    rows.append(parent)
             return _enrich_rows_with_component_summary(session, rows[:limit]) if enrich_components else rows[:limit]
     except Exception:
         # Si la vista no está creada o RLS la bloquea, seguimos con el buscador clásico.
@@ -561,32 +678,7 @@ def search_cloud_inventory_items(session, query: str, limit: int = 25, *, enrich
                 add(getattr(resp, 'data', None))
             except Exception:
                 pass
-        normalized_component = _normalize_inventory_numeric_code(q)
-        if normalized_component:
-            try:
-                resp = (
-                    session.client.table('inventory_item_components')
-                    .select('parent_item_code,component_item_code,component_name,quantity,relation_type')
-                    .ilike('component_item_code', f'%{normalized_component}')
-                    .eq('relation_type', 'component')
-                    .limit(limit)
-                    .execute()
-                )
-                component_rows = [
-                    dict(row)
-                    for row in (getattr(resp, 'data', None) or [])
-                    if _normalize_inventory_numeric_code(row.get('component_item_code')) == normalized_component
-                ]
-                parent_codes = sorted({str(row.get('parent_item_code') or '').strip() for row in component_rows if row.get('parent_item_code')})
-                if parent_codes:
-                    for col in ('hub_item_code', 'heca_reference'):
-                        try:
-                            parent_resp = session.client.table('inventory_items').select(cols).in_(col, parent_codes).limit(limit).execute()
-                            add(getattr(parent_resp, 'data', None))
-                        except Exception:
-                            pass
-            except Exception:
-                pass
+        add(_find_inventory_pack_rows_by_woo_sku_token(session, q, limit))
     # Búsqueda textual por campos principales. Varias queries para evitar depender de or_ con escaping.
     pattern = f'%{q}%'
     for col in ('name', 'woo_name', 'woo_sku', 'heca_reference', 'hub_item_code', 'base_item_code'):

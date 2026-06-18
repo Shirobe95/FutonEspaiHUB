@@ -139,7 +139,10 @@ class PackComponentServiceTests(unittest.TestCase):
         )
 
         self.assertEqual(result["source"], "woo_sku_fallback")
-        self.assertEqual(result["components"], [])
+        self.assertEqual(
+            [(row["component_item_code"], row["quantity"]) for row in result["components"]],
+            [("0201014", 2), ("0302001", 1)],
+        )
         self.assertEqual(result["text"], "0201014 x2; 0302001 x1")
         self.assertEqual(result["multiline"], "- 0201014 x2\n- 0302001 x1")
 

@@ -26,6 +26,8 @@ class Query:
         self.filters: list[tuple[str, object]] = []
         self.in_filters: list[tuple[str, tuple[object, ...]]] = []
         self.ilike_filters: list[tuple[str, str]] = []
+        self.limit_value: int | None = None
+        self.range_value: tuple[int, int] | None = None
         self.data_by_table.setdefault("__calls__", []).append((self.table_name, self.filters, self.in_filters))
 
     def select(self, *_args, **_kwargs):
@@ -47,6 +49,11 @@ class Query:
         return self
 
     def limit(self, *_args, **_kwargs):
+        self.limit_value = int(_args[0])
+        return self
+
+    def range(self, start: int, end: int):
+        self.range_value = (start, end)
         return self
 
     def execute(self):
@@ -63,6 +70,11 @@ class Query:
                 rows = [row for row in rows if needle in str(row.get(column) or "").lower()]
             else:
                 rows = [row for row in rows if str(row.get(column) or "").lower().startswith(needle)]
+        if self.range_value is not None:
+            start, end = self.range_value
+            rows = rows[start : end + 1]
+        elif self.limit_value is not None:
+            rows = rows[: self.limit_value]
         return Response(rows)
 
 
@@ -353,6 +365,136 @@ class PriceProposalPackCompositionTests(unittest.TestCase):
         self.assertEqual(inventory._normalize_inventory_numeric_code("201001"), "201001")
         self.assertEqual(inventory._normalize_inventory_numeric_code("0000"), "0")
         self.assertEqual(inventory._normalize_inventory_numeric_code("AB0201001"), "AB0201001")
+
+    def test_compound_woo_sku_builds_grouped_structured_components(self) -> None:
+        components = inventory._components_from_woo_sku(
+            "0201001|0201001|0728003",
+            "WOO-PACK-3720",
+        )
+
+        self.assertEqual(
+            components,
+            [
+                {
+                    "parent_item_code": "WOO-PACK-3720",
+                    "component_item_code": "0201001",
+                    "component_name": "",
+                    "quantity": 2,
+                    "relation_type": "component",
+                    "token_type": "woo_sku",
+                },
+                {
+                    "parent_item_code": "WOO-PACK-3720",
+                    "component_item_code": "0728003",
+                    "component_name": "",
+                    "quantity": 1,
+                    "relation_type": "component",
+                    "token_type": "woo_sku",
+                },
+            ],
+        )
+
+    def test_real_shape_woo_sku_fallback_returns_same_named_pack_for_both_code_forms(self) -> None:
+        data = {
+            "v_inventory_hub_search_ranked": [
+                {
+                    "search_token_norm": "0201001",
+                    "result_item_id": 201001,
+                    "result_item_code": "0201001",
+                    "result_name": "Tatami, 80 x 200 x 5,5 cm.",
+                    "result_record_type": "simple",
+                    "match_priority": 1,
+                },
+                {
+                    "search_token_norm": "0201001",
+                    "result_item_id": 900000003720,
+                    "result_item_code": "WOO-PACK-3720",
+                    "result_name": "Pack Woo 3720",
+                    "result_record_type": "woo_pack",
+                    "match_priority": 2,
+                },
+                {
+                    "search_token_norm": "201001",
+                    "result_item_id": 201001,
+                    "result_item_code": "0201001",
+                    "result_name": "Tatami, 80 x 200 x 5,5 cm.",
+                    "result_record_type": "simple",
+                    "match_priority": 1,
+                },
+            ],
+            "inventory_items": [
+                {
+                    "item_id": 201001,
+                    "name": "Tatami, 80 x 200 x 5,5 cm.",
+                    "item_record_type": "simple",
+                    "heca_reference": "0201001",
+                    "hub_item_code": "0201001",
+                    "woo_sku": "0201001",
+                },
+                {
+                    "item_id": 728003,
+                    "name": "Futon Algodon",
+                    "item_record_type": "simple",
+                    "heca_reference": "0728003",
+                    "hub_item_code": "0728003",
+                    "woo_sku": "0728003",
+                },
+                {
+                    "item_id": 900000003720,
+                    "name": "Pack Woo 3720",
+                    "item_record_type": "woo_pack",
+                    "hub_item_code": "WOO-PACK-3720",
+                    "woo_sku": "0201001|0201001|0728003",
+                },
+            ],
+            "inventory_item_components": [],
+        }
+
+        rows_with_zero = search_cloud_inventory_items(Session(data), "0201001", limit=10)
+        rows_without_zero = search_cloud_inventory_items(Session(data), "201001", limit=10)
+
+        self.assertEqual([row["item_id"] for row in rows_with_zero], [201001, 900000003720])
+        self.assertEqual([row["item_id"] for row in rows_without_zero], [201001, 900000003720])
+        for rows in (rows_with_zero, rows_without_zero):
+            pack = rows[1]
+            self.assertEqual(
+                [(component["component_item_code"], component["quantity"], component["component_name"]) for component in pack["hub_pack_components"]],
+                [
+                    ("0201001", 2, "Tatami, 80 x 200 x 5,5 cm."),
+                    ("0728003", 1, "Futon Algodon"),
+                ],
+            )
+            self.assertEqual(
+                self.app._price_display_name_for_inventory_item(self.app._inventory_item_from_cloud_row(pack)),
+                "2x0201001xTatami, 80 x 200 x 5,5 cm. | 1x0728003xFuton Algodon",
+            )
+
+        inventory_calls = [call for call in data["__calls__"] if call[0] == "inventory_items"]
+        self.assertLess(len(inventory_calls), 20)
+
+    def test_woo_sku_pack_lookup_pages_beyond_first_500_candidates(self) -> None:
+        false_positive_packs = [
+            {
+                "item_id": 900000000000 + index,
+                "name": f"False positive {index}",
+                "item_record_type": "woo_pack",
+                "hub_item_code": f"WOO-PACK-{index}",
+                "woo_sku": "12010010",
+            }
+            for index in range(500)
+        ]
+        expected_pack = {
+            "item_id": 900000003720,
+            "name": "Pack Woo 3720",
+            "item_record_type": "woo_pack",
+            "hub_item_code": "WOO-PACK-3720",
+            "woo_sku": "0201001|0201001|0728003",
+        }
+        session = Session({"inventory_items": [*false_positive_packs, expected_pack]})
+
+        rows = inventory._find_inventory_pack_rows_by_woo_sku_token(session, "201001", limit=10)
+
+        self.assertEqual([row["item_id"] for row in rows], [900000003720])
 
     def test_component_search_by_normalized_code_returns_simple_item_and_pack_with_names(self) -> None:
         session = Session(
