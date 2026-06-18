@@ -5,7 +5,7 @@ Fecha: 2026-06-18
 Estado:
 
 ```text
-Implementado con FUNC-002H. Pendiente de smoke manual.
+Implementado con FUNC-002I. Pendiente de smoke manual.
 ```
 
 ## Objetivo
@@ -33,6 +33,8 @@ FUNC-002E corrige el corte temprano de la ruta rankeada: si buscar `201001` devu
 FUNC-002G usa los tokens reales de `woo_sku` como fuente estructurada cuando no existen relaciones, resuelve nombres en bloque y elimina el limite silencioso de los primeros 500 packs.
 
 FUNC-002H simplifica la composicion visible, evita cortes/solapes y aplica un orden final comun a las busquedas equivalentes.
+
+FUNC-002I recupera espacio vertical en Cambio de Precios y permite altura distinta por resultado sin aplicar un `rowheight` grande global.
 
 ## Alcance
 
@@ -178,6 +180,35 @@ Comparacion de busqueda:
 
 La comparacion automatizada ejecuta el servicio con respuestas rankeadas asimetricas para ambas formas. La comparacion contra datos vivos requiere login interactivo y queda pendiente en el smoke manual.
 
+## FUNC-002I
+
+Limitacion confirmada:
+
+- `ttk.Treeview` aplica `rowheight` al estilo completo;
+- no soporta altura diferente por fila de forma nativa;
+- aumentar la altura global hace que articulos simples consuman el mismo espacio que packs largos.
+
+Solucion localizada:
+
+- solo el selector `Items` deja de usar `Treeview`;
+- usa `Canvas`, scrollbar y una fila `Frame` por resultado;
+- conserva cabecera y columnas `ID | Nombre | Precio`;
+- articulo normal usa una linea compacta;
+- cada componente de un pack ocupa una linea;
+- el viewport se limita a 210 px y activa scroll cuando el contenido crece;
+- subida `%`, subida por valor y `Anadir` quedan fuera del viewport desplazable;
+- `Variaciones` conserva el `Treeview` existente y permanece visible debajo;
+- se mantienen seleccion, doble clic y boton `Anadir`;
+- las tuplas originales de ID, nombre y precio son las usadas para anadir.
+
+Shell:
+
+- la busqueda global superior se oculta mediante `grid_remove()` solo para `precios`;
+- se restaura automaticamente en Dashboard, Inventario y el resto de vistas;
+- el estado de sesion sigue visible con padding vertical reducido en Cambio de Precios.
+
+No se modifican calculos, propuestas, servicios, Supabase ni WooCommerce.
+
 ## Simbolos tocados
 
 ```text
@@ -232,12 +263,19 @@ Cobertura automatizada:
 - `0201001` y `201001` producen el mismo conjunto, cardinalidad y orden final;
 - resultados sin duplicados;
 - articulos normales sin cambios.
+- barra global oculta solo en Cambio de Precios;
+- barra global visible en Dashboard e Inventario;
+- simples usan una linea y packs usan tantas lineas como componentes, con limite de seis para calculo;
+- viewport de resultados limitado a 210 px con scroll;
+- controles inferiores fuera del area desplazable;
+- `Items` usa filas widget y `Variaciones` conserva `Treeview`;
+- seleccion, doble clic y `Anadir` mantienen ID, nombre y precio.
 
 Resultado automatizado:
 
 ```text
-Tests del corte: Ran 29 tests
-Suite completa: Ran 122 tests
+Tests del corte: Ran 39 tests
+Suite completa: Ran 127 tests
 OK
 ```
 
@@ -289,6 +327,12 @@ OK
 824b5b9faf0475b94c2b145076dfe90c9bce23d8
 ```
 
+## Commit funcional FUNC-002I
+
+```text
+b510998b7032ac6de71ff9aff54073e94504e783
+```
+
 ## Smoke manual
 
 Pendiente.
@@ -297,10 +341,16 @@ Checklist propuesto:
 
 - Abrir ERP con `Abrir ERP.bat`.
 - Ir a propuestas de precios.
+- Confirmar que la busqueda global superior desaparece en Cambio de Precios.
+- Volver a Dashboard e Inventario y confirmar que la busqueda global reaparece.
 - Confirmar que un articulo normal mantiene `ID | Nombre | Precio`.
 - Confirmar que un pack Woo muestra composicion compacta en `Nombre`.
 - Confirmar formato visible `{cantidad}x{nombre}` separado por `|`.
 - Confirmar que la tabla muestra cada componente completo, con salto de linea cuando sea necesario.
+- Confirmar que un articulo normal ocupa una fila compacta.
+- Confirmar que un pack de dos componentes ocupa dos lineas.
+- Cargar suficientes resultados y confirmar que aparece scroll sin empujar fuera subida %, valor, Anadir ni Variaciones.
+- Confirmar seleccion, doble clic y boton Anadir.
 - Verificar agrupacion de componentes repetidos.
 - Verificar orden por ID de componente.
 - Buscar un componente, por ejemplo `0201001`, y confirmar que aparecen el articulo normal y los packs que lo contienen.
@@ -323,4 +373,4 @@ Checklist propuesto:
 - La paginacion puede requerir varias lecturas si existen mas de 500 candidatos parciales; no omite resultados por ese motivo.
 - El orden interno de componentes sigue siendo por `component_item_code`, no por orden comercial de Woo.
 - La igualdad contra datos vivos requiere login interactivo y sigue pendiente de smoke.
-- El smoke manual sigue pendiente, por lo que FUNC-002H no esta cerrado.
+- El smoke manual sigue pendiente, por lo que FUNC-002I no esta cerrado.
