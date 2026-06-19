@@ -8,6 +8,7 @@ Estado:
 Implementado y verificado automaticamente.
 FUNC-003A implementado el 2026-06-19.
 FUNC-003B implementado el 2026-06-19.
+FUNC-003C implementado el 2026-06-19.
 Pendiente de smoke manual mediante Abrir ERP.bat.
 ```
 
@@ -549,6 +550,219 @@ OK
 OK
 ```
 
+## FUNC-003C - Solo articulos base operativos
+
+Fecha: 2026-06-19
+
+Estado:
+
+```text
+Implementado y verificado automaticamente.
+Pendiente de smoke manual mediante Abrir ERP.bat.
+```
+
+### Investigacion de candidatos reales
+
+La consulta anonima de solo lectura a Supabase fue aceptada, pero RLS devolvio
+cero filas. La identidad se verifico contra los fixtures operativos usados para
+cargar esos mismos registros.
+
+Articulo base, fixture:
+
+```text
+docs/imports/E-2026-03_inventory_items_from_upload.csv
+```
+
+Campos:
+
+```text
+item_id = 724004
+hub_item_code = vacio/no definido en el fixture
+hub_search_code = no aplica
+item_record_type = vacio; el buscador lo trata como simple
+hub_search_record_type = no aplica
+is_pack = false/no definido
+heca_reference = 0724004
+woo_sku = vacio
+name = Futon de Algodon 150 x 200 x 14 cm.
+cubic_meters = 0.35
+rotation_c = 0.051780822
+packages = 1
+primary_supplier_price = 80.64
+pascal_price = 77.5
+source_row/metadatos = import E-2026-03; sin relacion de pack
+```
+
+Fila sintetica Woo, fixture:
+
+```text
+010_woo_cierre_lote_D_FINAL.sql
+```
+
+Campos:
+
+```text
+item_id = 930000012860
+hub_item_code = WOO-ITEM-12860
+hub_search_code = no persistido
+item_record_type = woo_item
+hub_search_record_type = no aplica
+is_pack = false
+heca_reference = no establecido por este lote
+woo_sku = 0724003-724004
+woo_item_kind = variation
+woo_id = 12860
+woo_parent_id = 12856
+name = 14,5 cm, 140x200x14,5 cm, Crudo
+source_row.source = woo_cierre_lote_D
+source_row.original_sku = 0724003-724004
+componentes/relaciones = variacion Woo sintetica; no articulo de compra
+```
+
+El SQL actualiza filas existentes sin limpiar `heca_reference`. Por tanto, una
+fila sintetica preexistente puede conservar un alias numerico relacionado y
+entrar en los indices de pedidos.
+
+### Causa de la falsa ambiguedad
+
+FUNC-003B solo respondia a la pregunta:
+
+```text
+¿es un pack?
+```
+
+La fila `930000012860` supera ese filtro porque:
+
+- `is_pack=false`;
+- `item_record_type=woo_item`, no `woo_pack`;
+- `hub_item_code` empieza por `WOO-ITEM-`, no por `WOO-PACK-`;
+- `woo_sku` usa `-`, no `|`.
+
+El resolver trataba todos los campos indexados con la misma autoridad. Una
+coincidencia auxiliar por alias podia competir con el `item_id` canonico del
+articulo base.
+
+### Criterio definitivo de elegibilidad
+
+Se creo el predicado central:
+
+```text
+is_supplier_order_eligible_inventory_row
+```
+
+Una fila es elegible solo si:
+
+- no es pack segun `is_inventory_pack_row`;
+- tiene `item_id` numerico;
+- `item_record_type` es vacio o `simple`;
+- no usa prefijos sinteticos `WOO-ITEM-`, `WOO-VAR-`, `WOO-ALIAS-`,
+  `SEARCH-` o `ALIAS-`;
+- no tiene `base_item_code`;
+- no contiene tipos de relacion `alias`, `component`, `pack_component`,
+  `search` o `search_alias`;
+- no contiene metadatos de componente, padre, relacionado o proyeccion.
+
+Se excluyen explicitamente:
+
+```text
+woo_item
+woo_product
+woo_variation
+woo_pack
+manual_pack
+alias
+component
+pack_alias
+pack_component
+search_alias
+search_projection
+synthetic
+```
+
+El predicado reutiliza `is_inventory_pack_row`, pero no considera elegible una
+fila simplemente por no ser pack.
+
+### Prioridad semantica
+
+Los indices se construyen solo con filas elegibles. La resolucion recorre estos
+niveles:
+
+```text
+1. item_id exacto
+2. item_id canonico
+3. hub_item_code exacto
+4. hub_item_code canonico
+5. heca_reference exacto
+6. heca_reference canonico
+7. woo_sku exacto autorizado
+8. woo_sku canonico autorizado
+```
+
+La primera prioridad con candidatos decide el resultado.
+
+`SupplierOrderCodeAmbiguityError` solo se lanza cuando hay dos o mas articulos
+base elegibles dentro del mismo nivel. Una coincidencia auxiliar de menor
+prioridad no compite con un `item_id` unico.
+
+### Comportamiento validado
+
+- `0724004` resuelve `item_id=724004`;
+- la variacion `930000012860` queda excluida;
+- `0724001` resuelve `724001`;
+- `0201001` resuelve `201001`;
+- articulos base ganan frente a packs, componentes, aliases y sinteticos;
+- `item_id` exacto gana frente a `hub_item_code`;
+- `item_id` canonico gana frente a aliases canonicos;
+- dos articulos base en igual prioridad siguen bloqueando;
+- nombre, RotC, M3, bultos y precio proceden del articulo base;
+- recepcion e inventario conservan `inventory_matched_item_id` del articulo
+  base;
+- codigo visible, guardado y exportado permanece intacto;
+- la lectura sigue siendo batch, sin consultas por linea;
+- Cambio de Precios y composicion de packs no cambian.
+
+### Archivos FUNC-003C
+
+```text
+GestorWoo/src/futonhub/core/codes.py
+GestorWoo/src/futonhub/cloud/services/supplier_prices.py
+GestorWoo/tests/test_characterization_supplier_order_costs.py
+```
+
+Commit de codigo:
+
+```text
+008cac9 fix: resolve orders only to base inventory items
+```
+
+### Verificacion FUNC-003C
+
+Tests especificos:
+
+```text
+Ran 36 tests
+OK
+```
+
+Suite completa:
+
+```text
+Ran 154 tests
+OK
+```
+
+`py_compile`:
+
+```text
+OK
+```
+
+`git diff --check`:
+
+```text
+OK
+```
+
 ## Smoke manual pendiente
 
 Ejecutar mediante:
@@ -596,3 +810,16 @@ Smoke adicional FUNC-003B:
 7. comprobar que dos articulos normales equivalentes siguen mostrando error de
    ambiguedad;
 8. cerrar sin traceback.
+
+Smoke adicional FUNC-003C:
+
+1. cargar el pedido real con codigo `0724004`;
+2. confirmar seleccion de `inventory_items.item_id=724004`;
+3. confirmar que la fila `WOO-ITEM-12860` no participa;
+4. comprobar nombre, RotC, M3, bultos y precio de proveedor del articulo base;
+5. calcular Coste Final, Ponderado, Rentabilidad y P.V.P.;
+6. guardar, cerrar y recargar;
+7. confirmar `0724004` intacto en UI y exportacion;
+8. comprobar recepcion e inventario contra `724004`;
+9. confirmar que dos articulos base en la misma prioridad siguen bloqueando;
+10. cerrar sin traceback.
