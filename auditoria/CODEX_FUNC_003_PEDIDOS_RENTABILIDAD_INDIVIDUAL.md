@@ -763,6 +763,134 @@ OK
 OK
 ```
 
+## FUNC-003D - fallback controlado de precio principal para Pascal
+
+### Punto de seleccion del precio
+
+La seleccion se realiza en:
+
+```text
+resolve_supplier_order_inventory_items
+```
+
+despues de resolver en batch el articulo base elegible y antes de enriquecer la
+linea del pedido. Toda la validacion y prioridad de precios se centraliza en:
+
+```text
+resolve_supplier_order_effective_price
+```
+
+El helper acepta solo precios numericos positivos y aplica estas reglas:
+
+1. pedido Pascal con `pascal_price` valido: usa Pascal;
+2. pedido Pascal sin `pascal_price` valido: usa
+   `primary_supplier_price` como fallback;
+3. pedido Pascal sin ninguno de los dos: conserva el precio ausente para que
+   el flujo solicite entrada manual;
+4. pedido no Pascal: mantiene el precio principal.
+
+Valores vacios, nulos, `NO ESTA`, no numericos, cero o negativos no se
+consideran precios validos.
+
+### Trazabilidad
+
+El enriquecimiento persiste en la linea o `source_row`:
+
+```text
+supplier_price_source
+supplier_price_source_label
+supplier_price_column
+supplier_price_provider
+supplier_price_requested_provider
+supplier_price_fallback_used
+supplier_price_warning
+supplier_price_item_id
+```
+
+Los origenes internos son:
+
+```text
+pascal
+primary
+primary_fallback_for_pascal
+manual
+```
+
+El fallback Pascal conserva:
+
+```text
+supplier_price_requested_provider = pascal
+supplier_price_fallback_used = true
+```
+
+No existe ninguna escritura a `inventory_items`, `pascal_price` ni
+`primary_supplier_price`.
+
+### UI y exportacion
+
+La linea con fallback deja de abrir el editor obligatoriamente por falta de
+precio. Si el editor se abre, muestra el precio efectivo, el origen de solo
+lectura y la advertencia:
+
+```text
+Precio Pascal no disponible. Se usa precio principal: 114,26 €
+```
+
+La exportacion incluye `Origen precio proveedor` con uno de estos valores:
+
+```text
+Pascal
+Principal
+Principal fallback Pascal
+Manual
+```
+
+El codigo original del pedido no se normaliza en UI, guardado ni exportacion.
+Coste Final, coste de linea, Ponderado, Rentabilidad, P.V.P. y recepcion usan el
+precio efectivo del pedido.
+
+### Archivos FUNC-003D
+
+```text
+GestorWoo/src/futonhub/cloud/services/supplier_prices.py
+GestorWoo/src/futonhub/ui/erp/prototype.py
+GestorWoo/tests/test_characterization_supplier_order_costs.py
+```
+
+Commit de codigo:
+
+```text
+e2dfe14 feat: add Pascal primary price fallback
+```
+
+### Verificacion FUNC-003D
+
+Tests especificos:
+
+```text
+Ran 43 tests
+OK
+```
+
+Suite completa:
+
+```text
+Ran 161 tests
+OK
+```
+
+`py_compile`:
+
+```text
+OK
+```
+
+`git diff --check`:
+
+```text
+OK
+```
+
 ## Smoke manual pendiente
 
 Ejecutar mediante:
@@ -823,3 +951,20 @@ Smoke adicional FUNC-003C:
 8. comprobar recepcion e inventario contra `724004`;
 9. confirmar que dos articulos base en la misma prioridad siguen bloqueando;
 10. cerrar sin traceback.
+
+Smoke adicional FUNC-003D:
+
+1. cargar un pedido Pascal real con codigo `0780004`;
+2. confirmar seleccion del articulo base `780004`;
+3. con `pascal_price` vacio y precio principal `114.26`, confirmar que no se
+   abre el editor obligatoriamente;
+4. comprobar nombre, RotC, M3, bultos y precio efectivo `114.26`;
+5. confirmar advertencia y origen `Principal fallback Pascal`;
+6. calcular Coste Final, Ponderado, Rentabilidad y P.V.P.;
+7. cambiar transporte u otro coste y confirmar el recalculo;
+8. guardar, cerrar, recargar y exportar, conservando precio efectivo, origen y
+   codigo `0780004`;
+9. comprobar que `inventory_items.pascal_price` continua nulo;
+10. probar otro articulo con precio Pascal real y confirmar origen `Pascal`;
+11. probar ambos precios ausentes y confirmar solicitud manual;
+12. comprobar recepcion con el coste efectivo y cerrar sin traceback.
