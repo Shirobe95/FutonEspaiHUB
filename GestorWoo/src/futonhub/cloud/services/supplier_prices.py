@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from futonhub.cloud.audit import AuditEvent, OperationSnapshot, new_operation_id, write_audit_event, write_snapshot
-from futonhub.core.codes import is_inventory_pack_row, normalize_inventory_numeric_code
+from futonhub.core.codes import is_supplier_order_eligible_inventory_row, normalize_inventory_numeric_code
 from gestorwoo.config import Settings, load_settings
 
 
@@ -322,13 +322,24 @@ def migrate_supplier_prices_to_supabase(
 
 
 SUPPLIER_ORDER_INVENTORY_COLUMNS = (
-    "item_id,name,heca_reference,hub_item_code,item_record_type,is_pack,woo_sku,"
+    "item_id,name,heca_reference,hub_item_code,item_record_type,base_item_code,is_pack,"
+    "woo_sku,woo_item_kind,woo_parent_id,"
     "primary_supplier_price,pascal_price,cubic_meters,rotation_c,packages,"
     "store_stock,warehouse_stock,weighted_average_cost,order_calculated_price,"
     "updated_at,source_row"
 )
 
 SUPPLIER_ORDER_CODE_FIELDS = ("item_id", "heca_reference", "hub_item_code", "woo_sku")
+SUPPLIER_ORDER_MATCH_LEVELS = (
+    ("item_id", "exact"),
+    ("item_id", "canonical"),
+    ("hub_item_code", "exact"),
+    ("hub_item_code", "canonical"),
+    ("heca_reference", "exact"),
+    ("heca_reference", "canonical"),
+    ("woo_sku", "exact"),
+    ("woo_sku", "canonical"),
+)
 
 
 class SupplierOrderCodeAmbiguityError(ValueError):
@@ -377,13 +388,12 @@ def resolve_supplier_order_inventory_items(
     if not requested:
         return {}
 
-    exact_index: dict[str, dict[str, dict[str, Any]]] = {}
-    canonical_index: dict[str, dict[str, dict[str, Any]]] = {}
-    exact_field: dict[tuple[str, str], str] = {}
-    canonical_field: dict[tuple[str, str], str] = {}
+    indexes: dict[tuple[str, str], dict[str, dict[str, dict[str, Any]]]] = {
+        level: {} for level in SUPPLIER_ORDER_MATCH_LEVELS
+    }
 
     for row in _supplier_order_inventory_rows(session):
-        if is_inventory_pack_row(row):
+        if not is_supplier_order_eligible_inventory_row(row):
             continue
         row_key = _supplier_order_row_key(row)
         for field in SUPPLIER_ORDER_CODE_FIELDS:
@@ -391,36 +401,39 @@ def resolve_supplier_order_inventory_items(
             if not value:
                 continue
             exact_key = value.lower()
-            exact_index.setdefault(exact_key, {})[row_key] = row
-            exact_field.setdefault((exact_key, row_key), field)
+            indexes[(field, "exact")].setdefault(exact_key, {})[row_key] = row
             if value.isdigit():
                 canonical_key = normalize_inventory_numeric_code(value).lower()
-                canonical_index.setdefault(canonical_key, {})[row_key] = row
-                canonical_field.setdefault((canonical_key, row_key), field)
+                indexes[(field, "canonical")].setdefault(canonical_key, {})[row_key] = row
 
     provider = _norm_supplier(supplier)
     price_column = "pascal_price" if provider.lower() == "pascal" else "primary_supplier_price"
     resolved: dict[str, dict[str, Any]] = {}
 
     for raw_code in requested:
-        index_key = raw_code.lower()
-        candidates = exact_index.get(index_key, {})
-        match_mode = "exact"
-        field_map = exact_field
-        if not candidates and raw_code.isdigit():
-            index_key = normalize_inventory_numeric_code(raw_code).lower()
-            candidates = canonical_index.get(index_key, {})
-            match_mode = "canonical"
-            field_map = canonical_field
-        if not candidates:
-            continue
-        if len(candidates) > 1:
-            candidate_ids = sorted(str(row.get("item_id") or "?") for row in candidates.values())
-            raise SupplierOrderCodeAmbiguityError(
-                f"Codigo de pedido ambiguo {raw_code!r}: coincide con inventory_items {', '.join(candidate_ids)}."
+        selected: tuple[str, str, dict[str, Any]] | None = None
+        for field, match_mode in SUPPLIER_ORDER_MATCH_LEVELS:
+            if match_mode == "canonical" and not raw_code.isdigit():
+                continue
+            index_key = (
+                normalize_inventory_numeric_code(raw_code).lower()
+                if match_mode == "canonical"
+                else raw_code.lower()
             )
-        row_key, row = next(iter(candidates.items()))
-        matched_field = field_map.get((index_key, row_key), "")
+            candidates = indexes[(field, match_mode)].get(index_key, {})
+            if not candidates:
+                continue
+            if len(candidates) > 1:
+                candidate_ids = sorted(str(row.get("item_id") or "?") for row in candidates.values())
+                raise SupplierOrderCodeAmbiguityError(
+                    f"Codigo de pedido ambiguo {raw_code!r} en prioridad {match_mode}:{field}: "
+                    f"coincide con inventory_items {', '.join(candidate_ids)}."
+                )
+            selected = (field, match_mode, next(iter(candidates.values())))
+            break
+        if selected is None:
+            continue
+        matched_field, match_mode, row = selected
         resolved[raw_code] = {
             "item_id": row.get("item_id"),
             "matched_by": f"{match_mode}:{matched_field}",

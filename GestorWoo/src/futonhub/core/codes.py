@@ -37,3 +37,65 @@ def is_inventory_pack_row(row: dict[str, Any] | None) -> bool:
         or value("hub_pack_components_text")
         or value("hub_pack_components_multiline")
     )
+
+
+def is_supplier_order_eligible_inventory_row(row: dict[str, Any] | None) -> bool:
+    """Return True only for base inventory rows suitable for purchasing."""
+    if not isinstance(row, dict) or is_inventory_pack_row(row):
+        return False
+    source = row.get("source_row") if isinstance(row.get("source_row"), dict) else {}
+
+    def value(key: str) -> Any:
+        candidate = row.get(key)
+        return candidate if candidate not in (None, "") else source.get(key)
+
+    item_id = str(value("item_id") or "").strip()
+    if not item_id or not item_id.isdigit():
+        return False
+
+    record_type = str(value("hub_search_record_type") or value("item_record_type") or "").strip().lower()
+    ineligible_record_types = {
+        "alias",
+        "component",
+        "pack_alias",
+        "pack_component",
+        "search_alias",
+        "search_projection",
+        "synthetic",
+        "woo_item",
+        "woo_product",
+        "woo_variation",
+    }
+    if record_type in ineligible_record_types:
+        return False
+    if record_type not in {"", "simple"}:
+        return False
+
+    hub_code = str(value("hub_search_code") or value("hub_item_code") or "").strip().upper()
+    if hub_code.startswith(("WOO-ITEM-", "WOO-VAR-", "WOO-ALIAS-", "SEARCH-", "ALIAS-")):
+        return False
+
+    if str(value("base_item_code") or "").strip():
+        return False
+
+    relation_type = str(
+        value("hub_search_relation_type")
+        or value("relation_type")
+        or value("token_type")
+        or ""
+    ).strip().lower()
+    if relation_type in {"alias", "component", "pack_component", "search", "search_alias"}:
+        return False
+
+    if any(
+        value(key) not in (None, "", [], {})
+        for key in (
+            "component_item_code",
+            "parent_item_code",
+            "related_item_code",
+            "hub_search_related_code",
+        )
+    ):
+        return False
+
+    return True
