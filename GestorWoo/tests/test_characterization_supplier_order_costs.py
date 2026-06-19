@@ -18,6 +18,7 @@ sys.path.insert(0, str(ROOT / "src"))
 from futonhub.cloud.services import orders as orders_service  # noqa: E402
 from futonhub.cloud.services.supplier_prices import (  # noqa: E402
     SupplierOrderCodeAmbiguityError,
+    resolve_supplier_order_effective_price,
     resolve_supplier_order_inventory_items,
 )
 from futonhub.core.codes import (  # noqa: E402
@@ -220,7 +221,8 @@ def inventory_row(
     woo_item_kind: str = "",
     woo_parent_id: int = 0,
     source_row: dict[str, object] | None = None,
-    primary_supplier_price: float = 93.65,
+    primary_supplier_price: object = 93.65,
+    pascal_price: object = 0,
     rotation_c: float = 2,
 ) -> dict[str, object]:
     return {
@@ -235,7 +237,7 @@ def inventory_row(
         "woo_item_kind": woo_item_kind,
         "woo_parent_id": woo_parent_id,
         "primary_supplier_price": primary_supplier_price,
-        "pascal_price": 0,
+        "pascal_price": pascal_price,
         "cubic_meters": 1,
         "rotation_c": rotation_c,
         "packages": 1,
@@ -529,6 +531,203 @@ class SupplierOrderCostTests(unittest.TestCase):
         self.assertEqual(resolved["0724004"]["matched_by"], "canonical:item_id")
         self.assertEqual(resolved["0724004"]["price"], 80.64)
         self.assertEqual(resolved["0724004"]["item"]["rotation_c"], 0.051780822)
+
+    def test_pascal_effective_price_prefers_valid_pascal_price(self) -> None:
+        result = resolve_supplier_order_effective_price(
+            {"pascal_price": 120, "primary_supplier_price": 114.26},
+            "Pascal",
+        )
+
+        self.assertEqual(result["price"], 120)
+        self.assertEqual(result["source"], "pascal")
+        self.assertFalse(result["fallback_used"])
+        self.assertEqual(result["warning"], "")
+
+    def test_pascal_missing_or_invalid_uses_primary_fallback(self) -> None:
+        for missing in (None, "", "NO ESTA", "no numerico"):
+            with self.subTest(pascal_price=missing):
+                result = resolve_supplier_order_effective_price(
+                    {"pascal_price": missing, "primary_supplier_price": 114.26},
+                    "Pascal",
+                )
+                self.assertEqual(result["price"], 114.26)
+                self.assertEqual(result["source"], "primary_fallback_for_pascal")
+                self.assertEqual(result["requested_provider"], "pascal")
+                self.assertTrue(result["fallback_used"])
+                self.assertIn("114,26 €", result["warning"])
+
+    def test_pascal_without_any_valid_price_remains_manual_required(self) -> None:
+        for primary in (None, "", "NO ESTA", "incorrecto"):
+            with self.subTest(primary_supplier_price=primary):
+                result = resolve_supplier_order_effective_price(
+                    {"pascal_price": None, "primary_supplier_price": primary},
+                    "Pascal",
+                )
+                self.assertEqual(result["price"], 0)
+                self.assertEqual(result["source"], "pascal")
+                self.assertFalse(result["fallback_used"])
+
+    def test_pascal_line_without_any_price_keeps_manual_price_blocker(self) -> None:
+        ui = app()
+        del ui.__dict__["_fill_supplier_prices_for_order_items"]
+        session = MemorySession()
+        session.client.tables["inventory_items"] = [
+            inventory_row(
+                780004,
+                name="Futon Pascal",
+                heca_reference="0780004",
+                primary_supplier_price="NO ESTA",
+                pascal_price=None,
+                rotation_c=0.051780822,
+            )
+        ]
+        ui._cloud_session = session
+        item = OrderItem(
+            "0780004",
+            "Pendiente",
+            1,
+            "Pendiente",
+            "Pendiente",
+            "OK",
+            raw={"source_row": {"cuenta_reparto_descarga": True}},
+        )
+
+        enriched = ui._fill_supplier_prices_for_order_items("Pascal", (item,))
+
+        self.assertIn("falta precio proveedor", ui._order_item_missing_reasons(enriched[0]))
+        self.assertNotIn("precio_proveedor", enriched[0].raw["source_row"])
+
+    def test_non_pascal_keeps_primary_price_rule(self) -> None:
+        result = resolve_supplier_order_effective_price(
+            {"pascal_price": 120, "primary_supplier_price": 114.26},
+            "Ekomat",
+        )
+
+        self.assertEqual(result["price"], 114.26)
+        self.assertEqual(result["source"], "primary")
+        self.assertFalse(result["fallback_used"])
+
+    def test_pascal_fallback_enriches_line_without_inventory_write_and_recalculates(self) -> None:
+        ui = app()
+        del ui.__dict__["_fill_supplier_prices_for_order_items"]
+        session = MemorySession()
+        session.client.tables["inventory_items"] = [
+            inventory_row(
+                780004,
+                name="Futon Pascal",
+                heca_reference="0780004",
+                primary_supplier_price=114.26,
+                pascal_price=None,
+                rotation_c=0.051780822,
+            )
+        ]
+        ui._cloud_session = session
+        item = OrderItem(
+            "0780004",
+            "Pendiente",
+            1,
+            "Pendiente",
+            "Pendiente",
+            "OK",
+            raw={"source_row": {"cuenta_reparto_descarga": True}},
+        )
+        before_inventory = json.loads(json.dumps(session.client.tables["inventory_items"]))
+
+        enriched = ui._fill_supplier_prices_for_order_items("Pascal", (item,))
+        source = enriched[0].raw["source_row"]
+        self.assertEqual(enriched[0].code, "0780004")
+        self.assertEqual(enriched[0].name, "Futon Pascal")
+        self.assertEqual(source["precio_proveedor"], 114.26)
+        self.assertEqual(source["inventory_rotation_c"], 0.051780822)
+        self.assertEqual(source["inventory_packages"], 1)
+        self.assertEqual(source["inventory_m3"], 1)
+        self.assertEqual(source["supplier_price_source"], "primary_fallback_for_pascal")
+        self.assertEqual(source["supplier_price_requested_provider"], "pascal")
+        self.assertTrue(source["supplier_price_fallback_used"])
+        self.assertIn("Precio Pascal no disponible", source["supplier_price_warning"])
+        self.assertNotIn("falta precio proveedor", ui._order_item_missing_reasons(enriched[0]))
+        self.assertEqual(session.client.tables["inventory_items"], before_inventory)
+
+        first, _raw, _summary = ui._calculate_supplier_order_in_memory(
+            "Pascal",
+            {"Rentabilidad %": "30", "Coste transporte + IVA": "1"},
+            enriched,
+            [],
+        )
+        second, _raw, _summary = ui._calculate_supplier_order_in_memory(
+            "Pascal",
+            {"Rentabilidad %": "30", "Coste transporte + IVA": "11"},
+            first,
+            [],
+        )
+        first_source = first[0].raw["source_row"]
+        second_source = second[0].raw["source_row"]
+        self.assertGreater(second_source["unit_cost"], first_source["unit_cost"])
+        self.assertEqual(second_source["precio_proveedor"], 114.26)
+        self.assertEqual(second_source["supplier_price_source"], "primary_fallback_for_pascal")
+        self.assertEqual(
+            second_source["pvp_unit"],
+            ui._supplier_order_pvp(second_source["unit_cost"], 30),
+        )
+        self.assertEqual(session.client.tables["inventory_items"], before_inventory)
+
+    def test_pascal_fallback_trace_survives_reload_and_exports_origin(self) -> None:
+        ui = app()
+        source = {
+            **general_item().raw["source_row"],
+            "precio_proveedor": 114.26,
+            "precio_excel": 114.26,
+            "unit_cost": 120,
+            "precio_coste_final": 120,
+            "line_cost": 120,
+            "final_cost": 120,
+            "rentabilidad_percent": 30,
+            "pvp_unit": 171.43,
+            "supplier_price_source": "primary_fallback_for_pascal",
+            "supplier_price_source_label": "Principal fallback Pascal",
+            "supplier_price_requested_provider": "pascal",
+            "supplier_price_fallback_used": True,
+            "supplier_price_item_id": 780004,
+            "supplier_price_warning": "Precio Pascal no disponible. Se usa precio principal: 114.26 EUR",
+        }
+        cloud_row = json.loads(
+            json.dumps(
+                {
+                    "id": 1,
+                    "order_id": "ORDER-PASCAL",
+                    "item_code": "0780004",
+                    "item_name": "Futon Pascal",
+                    "quantity_ordered": 1,
+                    "quantity_received": 0,
+                    "unit_cost": 120,
+                    "line_cost": 120,
+                    "updated_at": "2026-06-19T00:00:00+00:00",
+                    "source_row": source,
+                }
+            )
+        )
+
+        reloaded = ui._supplier_order_item_from_cloud_row(cloud_row)
+        reloaded_source = reloaded.raw["source_row"]
+        self.assertEqual(reloaded.code, "0780004")
+        self.assertEqual(reloaded_source["precio_proveedor"], 114.26)
+        self.assertTrue(reloaded_source["supplier_price_fallback_used"])
+        self.assertEqual(ui._supplier_order_price_origin_label(reloaded_source), "Principal fallback Pascal")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "pascal-fallback.xlsx"
+            with patch.object(prototype_module.messagebox, "showinfo"):
+                ui._export_supplier_order_audit_excel(
+                    None,
+                    provider="Pascal",
+                    values={"Nombre del pedido": "PED-PASCAL"},
+                    items=(reloaded,),
+                    path=str(path),
+                )
+            ws = load_workbook(path)["Líneas calculadas"]
+            headers = [cell.value for cell in ws[1]]
+            origin_column = headers.index("Origen precio proveedor") + 1
+            self.assertEqual(ws.cell(row=2, column=origin_column).value, "Principal fallback Pascal")
 
     def test_equivalent_order_code_fills_name_rotation_price_and_calculates_without_changing_code(self) -> None:
         ui = app()
@@ -1109,6 +1308,8 @@ class SupplierOrderCostTests(unittest.TestCase):
         self.assertIn("Usar rentabilidad global", source)
         self.assertIn("Coste Final calculado", source)
         self.assertIn("_supplier_order_update_line_rentabilidad", source)
+        self.assertIn("supplier_price_warning", source)
+        self.assertIn('"Origen precio"', source)
         self.assertNotIn('entries["Coste Final"]', source)
 
     def test_new_column_order_starts_with_cost_margin_pvp_and_weighted(self) -> None:

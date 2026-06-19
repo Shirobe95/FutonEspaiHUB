@@ -3331,17 +3331,25 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 updated_source.update({"precio_proveedor": price, "precio_excel": price})
                 updated_source.update({
                     "supplier_price_source": supplier_price.get("source"),
+                    "supplier_price_source_label": supplier_price.get("source_label"),
                     "supplier_price_column": supplier_price.get("column"),
                     "supplier_price_provider": supplier_price.get("supplier"),
+                    "supplier_price_requested_provider": supplier_price.get("requested_provider"),
+                    "supplier_price_fallback_used": bool(supplier_price.get("fallback_used")),
+                    "supplier_price_warning": supplier_price.get("warning") or "",
                     "supplier_price_matched_by": supplier_price.get("matched_by"),
                     "supplier_price_item_id": supplier_price.get("item_id"),
                     "ui_supplier_price_filled": True,
                 })
             elif manual_price:
                 updated_source.update({
-                    "supplier_price_source": updated_source.get("supplier_price_source") or "manual_order_editor",
+                    "supplier_price_source": updated_source.get("supplier_price_source") or "manual",
+                    "supplier_price_source_label": updated_source.get("supplier_price_source_label") or "Manual",
                     "supplier_price_column": updated_source.get("supplier_price_column") or "manual",
                     "supplier_price_provider": updated_source.get("supplier_price_provider") or provider,
+                    "supplier_price_requested_provider": updated_source.get("supplier_price_requested_provider") or str(provider or "").strip().lower(),
+                    "supplier_price_fallback_used": False,
+                    "supplier_price_warning": "",
                     "supplier_price_matched_by": updated_source.get("supplier_price_matched_by") or "manual",
                     "ui_supplier_price_filled": False,
                     "ui_supplier_price_preserved_manual": True,
@@ -3351,8 +3359,12 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 # metadatos del match sin pisar el precio.
                 updated_source.update({
                     "supplier_price_source": updated_source.get("supplier_price_source") or supplier_price.get("source"),
+                    "supplier_price_source_label": updated_source.get("supplier_price_source_label") or supplier_price.get("source_label"),
                     "supplier_price_column": updated_source.get("supplier_price_column") or supplier_price.get("column"),
                     "supplier_price_provider": updated_source.get("supplier_price_provider") or supplier_price.get("supplier"),
+                    "supplier_price_requested_provider": updated_source.get("supplier_price_requested_provider") or supplier_price.get("requested_provider"),
+                    "supplier_price_fallback_used": bool(updated_source.get("supplier_price_fallback_used")),
+                    "supplier_price_warning": updated_source.get("supplier_price_warning") or "",
                     "supplier_price_matched_by": updated_source.get("supplier_price_matched_by") or supplier_price.get("matched_by"),
                     "supplier_price_item_id": updated_source.get("supplier_price_item_id") or supplier_price.get("item_id"),
                     "ui_supplier_price_filled": False,
@@ -3396,6 +3408,18 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 )
             )
         return tuple(enriched)
+
+    def _supplier_order_price_origin_label(self, source: dict[str, Any]) -> str:
+        label = str(source.get("supplier_price_source_label") or "").strip()
+        if label:
+            return label
+        return {
+            "pascal": "Pascal",
+            "primary": "Principal",
+            "primary_fallback_for_pascal": "Principal fallback Pascal",
+            "manual": "Manual",
+            "manual_order_editor": "Manual",
+        }.get(str(source.get("supplier_price_source") or "").strip(), str(source.get("supplier_price_source") or ""))
 
     def _order_item_missing_reasons(self, item: OrderItem) -> list[str]:
         """Return visible blocking reasons for a supplier order calculation line.
@@ -4838,6 +4862,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             ("Rotación C", str(source.get("rotacion_c") or source.get("inventory_rotation_c") or source.get("rotation_c") or ""), False),
             ("Bultos", str(source.get("packages") or source.get("inventory_packages") or "1"), False),
             ("Precio proveedor", str(source.get("precio_proveedor") or source.get("precio_excel") or source.get("precio") or ""), False),
+            ("Origen precio", self._supplier_order_price_origin_label(source), True),
         ]
         entries: dict[str, tk.Entry] = {}
         for index, (label, value, readonly) in enumerate(fields):
@@ -4850,6 +4875,22 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 entry.configure(state="readonly", readonlybackground=SOFT)
             entry.pack(fill=tk.X, ipady=8)
             entries[label] = entry
+
+        price_warning = str(source.get("supplier_price_warning") or "").strip()
+        rent_row = 4
+        if price_warning:
+            tk.Label(
+                form,
+                text=price_warning,
+                bg=AMBER_SOFT,
+                fg=AMBER,
+                wraplength=600,
+                justify=tk.LEFT,
+                anchor=tk.W,
+                padx=10,
+                pady=8,
+            ).grid(row=4, column=0, columnspan=2, sticky="ew", pady=(0, 12))
+            rent_row = 5
 
         calc_inputs = source.get("calculation_inputs") if isinstance(source.get("calculation_inputs"), dict) else {}
         global_rentabilidad = self._money_float(
@@ -4869,7 +4910,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         calculated_final_cost = self._money_float(source.get("precio_coste_final") or source.get("unit_cost"), 0.0)
 
         rent_field = tk.Frame(form, bg=CARD)
-        rent_field.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(0, 12))
+        rent_field.grid(row=rent_row, column=0, columnspan=2, sticky="ew", pady=(0, 12))
         rent_field.columnconfigure(1, weight=1)
         tk.Label(rent_field, text="RENTABILIDAD", bg=CARD, fg=MUTED, font=("Segoe UI", 8, "bold"), anchor=tk.W).grid(row=0, column=0, sticky="w", columnspan=2, pady=(0, 5))
         tk.Label(
@@ -4923,7 +4964,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         refresh_pvp_preview()
 
         cuenta_field = tk.Frame(form, bg=CARD)
-        cuenta_field.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(0, 12))
+        cuenta_field.grid(row=rent_row + 1, column=0, columnspan=2, sticky="ew", pady=(0, 12))
         tk.Label(cuenta_field, text="CUENTA PARA DESCARGA", bg=CARD, fg=MUTED, font=("Segoe UI", 8, "bold"), anchor=tk.W).pack(fill=tk.X, pady=(0, 5))
         cuenta_var = tk.StringVar(value=self._order_line_counts_for_download_label(item, source))
         cuenta_combo = ttk.Combobox(cuenta_field, values=("Sí", "No"), textvariable=cuenta_var, state="readonly", font=("Segoe UI", 10), width=12)
@@ -5027,9 +5068,13 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 "inventory_packages": packages,
                 "precio_excel": price_provider,
                 "precio_proveedor": price_provider,
-                "supplier_price_source": "manual_order_editor",
+                "supplier_price_source": "manual",
+                "supplier_price_source_label": "Manual",
                 "supplier_price_column": "manual",
                 "supplier_price_matched_by": "manual",
+                "supplier_price_requested_provider": updated_source.get("supplier_price_requested_provider") or str(updated_source.get("supplier_price_provider") or "").strip().lower(),
+                "supplier_price_fallback_used": False,
+                "supplier_price_warning": "",
                 "ui_manual_supplier_price": True,
                 "cuenta_pedido": cuenta,
                 "cuenta_para_descarga": cuenta,
@@ -5617,7 +5662,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                     self._excel_number(source.get("line_cost") or source.get("final_cost")),
                     item.status,
                     ", ".join(str(reason) for reason in reasons) if isinstance(reasons, list) else str(reasons or ""),
-                    source.get("supplier_price_source"),
+                    self._supplier_order_price_origin_label(source),
                     f"{source.get('supplier_price_matched_by') or ''} → {source.get('supplier_price_item_id') or ''}",
                 ]
             )

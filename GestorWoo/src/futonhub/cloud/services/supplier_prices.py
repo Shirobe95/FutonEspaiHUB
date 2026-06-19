@@ -49,6 +49,57 @@ def _norm_supplier(value: Any) -> str:
     return aliases.get(text.lower(), text or "Sin proveedor")
 
 
+def resolve_supplier_order_effective_price(row: dict[str, Any], supplier: str) -> dict[str, Any]:
+    """Select a valid supplier price without mutating inventory data."""
+    provider = _norm_supplier(supplier)
+    requested_provider = provider.lower()
+    primary_price = _safe_float(row.get("primary_supplier_price"), 0.0)
+    pascal_price = _safe_float(row.get("pascal_price"), 0.0)
+    if requested_provider == "pascal":
+        if pascal_price > 0:
+            return {
+                "price": pascal_price,
+                "source": "pascal",
+                "source_label": "Pascal",
+                "column": "pascal_price",
+                "requested_provider": "pascal",
+                "fallback_used": False,
+                "warning": "",
+            }
+        if primary_price > 0:
+            primary_display = f"{primary_price:.2f}".replace(".", ",")
+            return {
+                "price": primary_price,
+                "source": "primary_fallback_for_pascal",
+                "source_label": "Principal fallback Pascal",
+                "column": "primary_supplier_price",
+                "requested_provider": "pascal",
+                "fallback_used": True,
+                "warning": (
+                    "Precio Pascal no disponible. "
+                    f"Se usa precio principal: {primary_display} €"
+                ),
+            }
+        return {
+            "price": 0.0,
+            "source": "pascal",
+            "source_label": "Pascal",
+            "column": "pascal_price",
+            "requested_provider": "pascal",
+            "fallback_used": False,
+            "warning": "",
+        }
+    return {
+        "price": primary_price,
+        "source": "primary",
+        "source_label": "Principal",
+        "column": "primary_supplier_price",
+        "requested_provider": requested_provider,
+        "fallback_used": False,
+        "warning": "",
+    }
+
+
 def read_local_supplier_prices(settings: Settings | None = None) -> list[LocalSupplierPrice]:
     settings = settings or load_settings()
     db_path = Path(settings.db_path)
@@ -407,7 +458,6 @@ def resolve_supplier_order_inventory_items(
                 indexes[(field, "canonical")].setdefault(canonical_key, {})[row_key] = row
 
     provider = _norm_supplier(supplier)
-    price_column = "pascal_price" if provider.lower() == "pascal" else "primary_supplier_price"
     resolved: dict[str, dict[str, Any]] = {}
 
     for raw_code in requested:
@@ -434,15 +484,20 @@ def resolve_supplier_order_inventory_items(
         if selected is None:
             continue
         matched_field, match_mode, row = selected
+        effective_price = resolve_supplier_order_effective_price(row, provider)
         resolved[raw_code] = {
             "item_id": row.get("item_id"),
             "matched_by": f"{match_mode}:{matched_field}",
             "matched_value": raw_code,
             "supplier": provider,
-            "price": _safe_float(row.get(price_column)),
+            "price": effective_price["price"],
             "currency": "EUR",
-            "source": f"inventory_items.{price_column}",
-            "column": price_column,
+            "source": effective_price["source"],
+            "source_label": effective_price["source_label"],
+            "column": effective_price["column"],
+            "requested_provider": effective_price["requested_provider"],
+            "fallback_used": effective_price["fallback_used"],
+            "warning": effective_price["warning"],
             "item": row,
         }
     return resolved
