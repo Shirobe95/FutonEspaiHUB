@@ -7,6 +7,7 @@ Estado:
 ```text
 Implementado y verificado automaticamente.
 FUNC-003A implementado el 2026-06-19.
+FUNC-003B implementado el 2026-06-19.
 Pendiente de smoke manual mediante Abrir ERP.bat.
 ```
 
@@ -401,6 +402,153 @@ OK
 OK
 ```
 
+## FUNC-003B - Packs excluidos del calculo de pedidos
+
+Fecha: 2026-06-19
+
+Estado:
+
+```text
+Implementado y verificado automaticamente.
+Pendiente de smoke manual mediante Abrir ERP.bat.
+```
+
+### Incidencia
+
+Para el codigo de pedido `0724001`, el indice canonico de FUNC-003A podia
+contener simultaneamente:
+
+- el articulo normal;
+- un pack Woo equivalente o relacionado.
+
+El resolver lanzaba `SupplierOrderCodeAmbiguityError`, aunque los packs no son
+articulos elegibles para calcular pedidos.
+
+### Regla aplicada
+
+Los packs quedan excluidos de:
+
+- resolucion del articulo del pedido;
+- nombre, RotC, M3, bultos y precio de proveedor;
+- Coste Final y Ponderado;
+- Rentabilidad y P.V.P.;
+- recepcion e inventario asociados a la linea del pedido.
+
+La ambiguedad se mantiene si dos o mas articulos normales elegibles coinciden
+exacta o canonicamente.
+
+### Detector central
+
+Se centralizo:
+
+```text
+futonhub.core.codes.is_inventory_pack_row
+```
+
+Una fila se considera pack si cumple cualquiera de estas señales persistidas:
+
+```text
+item_record_type o hub_search_record_type = woo_pack | manual_pack
+is_pack = true | 1 | yes | si
+item_id, hub_search_code o hub_item_code empieza por WOO-PACK-
+woo_sku contiene |
+existen metadatos hub_pack_components*
+```
+
+El detector revisa tambien `source_row` cuando la señal no esta proyectada en
+la raiz.
+
+El panel de Inventario reutiliza el mismo detector en lugar de mantener su
+implementacion local. No se cambia el formato, busqueda ni composicion visible
+de packs en Cambio de Precios.
+
+### Punto exacto del filtro
+
+El filtro se ejecuta en:
+
+```text
+resolve_supplier_order_inventory_items
+```
+
+inmediatamente despues de leer cada fila y antes de construir:
+
+```text
+exact_index
+canonical_index
+exact_field
+canonical_field
+```
+
+Por tanto, un pack nunca llega a ser candidato exacto ni canonico de un
+pedido.
+
+La consulta batch incluye:
+
+```text
+item_record_type
+is_pack
+```
+
+ademas de las señales ya disponibles `item_id`, `hub_item_code`, `woo_sku` y
+`source_row`.
+
+### Comportamiento validado
+
+- articulo normal y pack equivalente seleccionan el normal;
+- varios packs equivalentes no generan ambiguedad;
+- dos articulos normales equivalentes siguen bloqueando;
+- coincidencia exacta normal mantiene prioridad;
+- packs por prefijo `WOO-PACK-` quedan excluidos;
+- packs por SKU compuesto quedan excluidos;
+- codigos alfanumericos normales siguen resolviendo;
+- `0201001` sigue resolviendo `201001`;
+- RotC y precio se recuperan del articulo normal;
+- codigo visible, guardado y exportado permanece intacto;
+- la resolucion sigue siendo batch, sin consultas por linea.
+
+### Archivos FUNC-003B
+
+```text
+GestorWoo/src/futonhub/core/codes.py
+GestorWoo/src/futonhub/cloud/services/supplier_prices.py
+GestorWoo/src/futonhub/ui/erp/cloud_inventory.py
+GestorWoo/tests/test_characterization_supplier_order_costs.py
+```
+
+Commit de codigo:
+
+```text
+72b9158 fix: exclude packs from supplier order resolution
+```
+
+### Verificacion FUNC-003B
+
+Tests especificos:
+
+```text
+Ran 32 tests
+OK
+```
+
+Suite completa:
+
+```text
+Ran 150 tests
+OK
+```
+
+`py_compile`:
+
+```text
+OK
+```
+
+`git diff --check`:
+
+```text
+OK
+```
+
 ## Smoke manual pendiente
 
 Ejecutar mediante:
@@ -436,3 +584,15 @@ Smoke adicional FUNC-003A:
 8. probar un codigo alfanumerico;
 9. si existen candidatos canonicos ambiguos, confirmar bloqueo visible;
 10. cerrar sin traceback.
+
+Smoke adicional FUNC-003B:
+
+1. cargar el pedido real con codigo `0724001`;
+2. confirmar que el articulo normal se selecciona aunque exista un pack Woo;
+3. confirmar nombre, RotC y precio de proveedor automaticos;
+4. calcular Coste Final, Ponderado, Rentabilidad y P.V.P.;
+5. confirmar que UI y exportacion conservan `0724001`;
+6. comprobar que el pack no participa en recepcion ni inventario del pedido;
+7. comprobar que dos articulos normales equivalentes siguen mostrando error de
+   ambiguedad;
+8. cerrar sin traceback.

@@ -23,7 +23,7 @@ Abrir ERP.bat -> GestorWoo/gestorwoo.py erp-prototype -> gestorwoo.cli -> futonh
 | 004D1 inventory item creation | Creacion de items, validaciones, persistencia de `rotation_c`, `packages`, `primary_supplier_price`, `pascal_price` y `commercial_status`, refresco, detalle completo, edicion posterior, sin falsos cambios y cierre | Aprobado | 2026-06-16 | `d2c005d056d6698511c1e1aea211a680449e475b` | Usuario confirma smoke test manual aprobado mediante `Abrir ERP.bat` tras correccion de proyeccion de lectura | WooCommerce intacto; sin cambios en escrituras, RLS ni esquema |
 | FUNC-001 supplier order cost and P.V.P. | Pedidos separa coste real, rentabilidad y P.V.P.; UI y exportaciones reales de Ekomat/Heimei; coste total por cantidad basado en coste real; recepcion e inventario no usan `pvp_*` | Aprobado | 2026-06-16 | `3d0f08bd7a28115cca182a8da4578f59cab55258` | Usuario confirma smoke manual aprobado en UI y exportaciones reales | Sin cambios en esquema, RLS, RPCs ni pedidos historicos |
 | FUNC-002I price proposal pack composition | Busqueda global oculta solo en Cambio de Precios; Items usa lista scrollable con filas compactas para simples y multilinea para packs; viewport limitado; controles y Variaciones permanecen visibles | Pendiente | 2026-06-18 | FUNC-002H `824b5b9faf0475b94c2b145076dfe90c9bce23d8` / FUNC-002I `b510998b7032ac6de71ff9aff54073e94504e783` | Pendiente de smoke manual mediante `Abrir ERP.bat` | Confirmar alturas reales, scroll, controles inferiores, variaciones, seleccion, doble clic y Anadir |
-| FUNC-003 / FUNC-003A supplier order profitability and canonical codes | Formula de margen de venta; rentabilidad global o individual; Coste Final real; equivalencia numerica con ceros iniciales en `item_id`, `heca_reference` y `hub_item_code`; prioridad exacta y bloqueo de ambiguedad | Pendiente | 2026-06-19 | FUNC-003 `2cb5939` / FUNC-003A `8499a6b` | Pendiente de smoke manual mediante `Abrir ERP.bat` | Confirmar guardar/recargar, cambio global sin sobrescribir individuales, pedido `0201001` contra item `201001`, RotC/precio automaticos, codigo visible/exportado intacto y bloqueo ambiguo |
+| FUNC-003 / 003A / 003B supplier order profitability and canonical codes | Formula de margen de venta; rentabilidad global o individual; equivalencia numerica; packs Woo excluidos antes de indices exacto/canonico; ambiguedad preservada entre articulos normales | Pendiente | 2026-06-19 | FUNC-003 `2cb5939` / 003A `8499a6b` / 003B `72b9158` | Pendiente de smoke manual mediante `Abrir ERP.bat` | Confirmar pedido `0724001` con articulo normal y pack, RotC/precio automaticos, pack excluido de calculo/recepcion/inventario, codigo visible/exportado intacto y ambiguedad entre normales |
 
 ## Suite automatizada asociada
 
@@ -33,10 +33,10 @@ Comando:
 python -m unittest discover -s GestorWoo\tests -v
 ```
 
-Resultado actual tras FUNC-003A:
+Resultado actual tras FUNC-003B:
 
 ```text
-Ran 145 tests
+Ran 150 tests
 OK
 ```
 
