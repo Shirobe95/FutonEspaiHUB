@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from futonhub.cloud.audit import AuditEvent, OperationSnapshot, new_operation_id, write_audit_event, write_snapshot
+from futonhub.core.codes import normalize_inventory_numeric_code
 from gestorwoo.config import Settings, load_settings
 
 
@@ -320,81 +321,127 @@ def migrate_supplier_prices_to_supabase(
     }
 
 
+SUPPLIER_ORDER_INVENTORY_COLUMNS = (
+    "item_id,name,heca_reference,hub_item_code,woo_sku,"
+    "primary_supplier_price,pascal_price,cubic_meters,rotation_c,packages,"
+    "store_stock,warehouse_stock,weighted_average_cost,order_calculated_price,"
+    "updated_at,source_row"
+)
+
+SUPPLIER_ORDER_CODE_FIELDS = ("item_id", "heca_reference", "hub_item_code", "woo_sku")
+
+
+class SupplierOrderCodeAmbiguityError(ValueError):
+    pass
+
+
+def _supplier_order_inventory_rows(session, page_size: int = 500) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    start = 0
+    while True:
+        query = (
+            session.client.table("inventory_items")
+            .select(SUPPLIER_ORDER_INVENTORY_COLUMNS)
+            .order("item_id", desc=False)
+        )
+        if hasattr(query, "range"):
+            query = query.range(start, start + page_size - 1)
+            paged = True
+        else:
+            query = query.limit(page_size)
+            paged = False
+        response = query.execute()
+        page = [dict(row) for row in (getattr(response, "data", None) or [])]
+        rows.extend(page)
+        if not paged or len(page) < page_size:
+            break
+        start += page_size
+    return rows
+
+
+def _supplier_order_row_key(row: dict[str, Any]) -> str:
+    item_id = str(row.get("item_id") or "").strip()
+    if item_id:
+        return f"item_id:{item_id}"
+    return "|".join(str(row.get(field) or "").strip().lower() for field in SUPPLIER_ORDER_CODE_FIELDS)
+
+
+def resolve_supplier_order_inventory_items(
+    session,
+    codes: list[Any] | tuple[Any, ...],
+    supplier: str,
+) -> dict[str, dict[str, Any]]:
+    """Resolve order codes in one inventory read, exact before canonical."""
+    raw_codes = [str(code or "").strip() for code in codes]
+    requested = list(dict.fromkeys(code for code in raw_codes if code))
+    if not requested:
+        return {}
+
+    exact_index: dict[str, dict[str, dict[str, Any]]] = {}
+    canonical_index: dict[str, dict[str, dict[str, Any]]] = {}
+    exact_field: dict[tuple[str, str], str] = {}
+    canonical_field: dict[tuple[str, str], str] = {}
+
+    for row in _supplier_order_inventory_rows(session):
+        row_key = _supplier_order_row_key(row)
+        for field in SUPPLIER_ORDER_CODE_FIELDS:
+            value = str(row.get(field) or "").strip()
+            if not value:
+                continue
+            exact_key = value.lower()
+            exact_index.setdefault(exact_key, {})[row_key] = row
+            exact_field.setdefault((exact_key, row_key), field)
+            if value.isdigit():
+                canonical_key = normalize_inventory_numeric_code(value).lower()
+                canonical_index.setdefault(canonical_key, {})[row_key] = row
+                canonical_field.setdefault((canonical_key, row_key), field)
+
+    provider = _norm_supplier(supplier)
+    price_column = "pascal_price" if provider.lower() == "pascal" else "primary_supplier_price"
+    resolved: dict[str, dict[str, Any]] = {}
+
+    for raw_code in requested:
+        index_key = raw_code.lower()
+        candidates = exact_index.get(index_key, {})
+        match_mode = "exact"
+        field_map = exact_field
+        if not candidates and raw_code.isdigit():
+            index_key = normalize_inventory_numeric_code(raw_code).lower()
+            candidates = canonical_index.get(index_key, {})
+            match_mode = "canonical"
+            field_map = canonical_field
+        if not candidates:
+            continue
+        if len(candidates) > 1:
+            candidate_ids = sorted(str(row.get("item_id") or "?") for row in candidates.values())
+            raise SupplierOrderCodeAmbiguityError(
+                f"Codigo de pedido ambiguo {raw_code!r}: coincide con inventory_items {', '.join(candidate_ids)}."
+            )
+        row_key, row = next(iter(candidates.items()))
+        matched_field = field_map.get((index_key, row_key), "")
+        resolved[raw_code] = {
+            "item_id": row.get("item_id"),
+            "matched_by": f"{match_mode}:{matched_field}",
+            "matched_value": raw_code,
+            "supplier": provider,
+            "price": _safe_float(row.get(price_column)),
+            "currency": "EUR",
+            "source": f"inventory_items.{price_column}",
+            "column": price_column,
+            "item": row,
+        }
+    return resolved
+
+
 def get_supplier_price(session, item_id: int | str, supplier: str) -> dict[str, Any] | None:
-    """Return supplier price using Supabase inventory_items columns.
-
-    Pascal uses `pascal_price`. Every other provider uses
-    `primary_supplier_price`.
-
-    The supplier order Excel/PDF can provide different identifiers, so this
-    resolver tries several safe matches:
-
-    1. inventory_items.item_id
-    2. inventory_items.heca_reference
-    3. inventory_items.woo_sku
-    4. numeric version without leading zeros
-    """
+    """Return one supplier price through the shared canonical resolver."""
     raw_code = str(item_id or "").strip()
     if not raw_code:
         return None
-
-    provider = _norm_supplier(supplier)
-    column = "pascal_price" if provider.lower() == "pascal" else "primary_supplier_price"
-    select_cols = "item_id,name,heca_reference,woo_sku,primary_supplier_price,pascal_price,cubic_meters,rotation_c,packages,store_stock,warehouse_stock,weighted_average_cost,order_calculated_price,updated_at,source_row"
-
-    def _row_to_price(row: dict[str, Any], matched_by: str) -> dict[str, Any] | None:
-        price = row.get(column)
-        if _safe_float(price) <= 0:
-            return None
-        return {
-            "item_id": row.get("item_id"),
-            "matched_by": matched_by,
-            "matched_value": raw_code,
-            "supplier": provider,
-            "price": _safe_float(price),
-            "currency": "EUR",
-            "source": f"inventory_items.{column}",
-            "column": column,
-            "item": row,
-        }
-
-    attempts: list[tuple[str, Any]] = []
-    attempts.append(("item_id_text", raw_code))
-    if raw_code.isdigit():
-        attempts.append(("item_id", int(raw_code)))
-        attempts.append(("item_id_no_leading_zero", int(raw_code.lstrip("0") or "0")))
-    attempts.append(("heca_reference", raw_code))
-    attempts.append(("woo_sku", raw_code))
-    if raw_code.isdigit():
-        attempts.append(("heca_reference", raw_code.lstrip("0") or raw_code))
-        attempts.append(("woo_sku", raw_code.lstrip("0") or raw_code))
-
-    seen: set[tuple[str, str]] = set()
-    for field, value in attempts:
-        key = (field, str(value))
-        if key in seen:
-            continue
-        seen.add(key)
-        try:
-            query = session.client.table("inventory_items").select(select_cols)
-            if field.startswith("item_id"):
-                # item_id es numérico en Supabase.
-                try:
-                    value = int(value)
-                except Exception:
-                    continue
-                response = query.eq("item_id", value).limit(1).execute()
-            else:
-                response = query.eq(field, str(value)).limit(1).execute()
-            rows = getattr(response, "data", None) or []
-            if not rows:
-                continue
-            priced = _row_to_price(rows[0], field)
-            if priced:
-                return priced
-        except Exception:
-            continue
-    return None
+    result = resolve_supplier_order_inventory_items(session, [raw_code], supplier).get(raw_code)
+    if not result or _safe_float(result.get("price")) <= 0:
+        return None
+    return result
 
 def list_supplier_prices_for_item(session, item_id: int | str) -> list[dict[str, Any]]:
     try:
@@ -508,9 +555,10 @@ def diagnose_supplier_price_columns(session, settings: Settings | None = None) -
 
 def diagnose_supplier_price_resolution(session, codes: list[str], supplier: str) -> list[dict[str, Any]]:
     """Diagnose how order line codes resolve to supplier prices."""
+    resolved = resolve_supplier_order_inventory_items(session, codes, supplier)
     result: list[dict[str, Any]] = []
     for code in codes:
-        price = get_supplier_price(session, code, supplier)
+        price = resolved.get(str(code or "").strip())
         result.append(
             {
                 "code": code,

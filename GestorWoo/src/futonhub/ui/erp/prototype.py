@@ -65,8 +65,8 @@ from futonhub.cloud.services.woocommerce_sync_preview import (
     search_manual_link_inventory_candidates,
 )
 from futonhub.cloud.services.supplier_prices import (
-    get_supplier_price,
     list_supplier_price_inventory_items,
+    resolve_supplier_order_inventory_items,
     update_supplier_price_inventory_item,
 )
 from futonhub.cloud.services.business_constants import DEFAULT_BUSINESS_CONSTANTS, list_business_constants, save_business_constants
@@ -3310,10 +3310,15 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         """
         if self._cloud_session is None:
             return items
+        resolved_by_code = resolve_supplier_order_inventory_items(
+            self._cloud_session,
+            [item.code for item in items],
+            provider,
+        )
         enriched: list[OrderItem] = []
         for item in items:
             source = item.raw.get("source_row") if isinstance(getattr(item, "raw", None), dict) and isinstance(item.raw.get("source_row"), dict) else {}
-            supplier_price = get_supplier_price(self._cloud_session, item.code, provider)
+            supplier_price = resolved_by_code.get(str(item.code or "").strip())
             if not supplier_price:
                 enriched.append(item)
                 continue
@@ -3363,6 +3368,9 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                     "inventory_stock_total": self._money_float(inventory_row.get("store_stock"), 0.0) + self._money_float(inventory_row.get("warehouse_stock"), 0.0),
                     "inventory_weighted_average_cost": inventory_row.get("weighted_average_cost"),
                     "inventory_order_calculated_price": inventory_row.get("order_calculated_price"),
+                    "inventory_matched_item_id": inventory_row.get("item_id"),
+                    "inventory_matched_by": supplier_price.get("matched_by"),
+                    "inventory_order_original_code": item.code,
                 }
             )
             # Si el Excel/PDF no trae M3, aprovechamos el M3 del inventario.
@@ -3375,7 +3383,11 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             enriched.append(
                 OrderItem(
                     code=item.code,
-                    name=item.name,
+                    name=(
+                        str(inventory_row.get("name") or "").strip()
+                        if str(item.name or "").strip().lower() in {"", "-", "pendiente", "no encontrado"}
+                        else item.name
+                    ),
                     quantity=item.quantity,
                     m3=item.m3,
                     final_cost=item.final_cost,
@@ -5044,14 +5056,17 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 raw={"source_row": updated_source},
             )
 
-            # Si la referencia coincide con inventory_items.item_id, guardamos los
-            # campos que sirven para que este bug no vuelva a aparecer en pedidos
-            # futuros. No tocamos WooCommerce.
-            if self._cloud_session is not None and str(item.code or "").strip().isdigit():
+            # Usamos el item_id ya resuelto por el enriquecimiento exacto/canónico.
+            # El código visible del pedido puede conservar ceros iniciales.
+            resolved_inventory_item_id = (
+                updated_source.get("inventory_matched_item_id")
+                or updated_source.get("supplier_price_item_id")
+            )
+            if self._cloud_session is not None and str(resolved_inventory_item_id or "").strip().isdigit():
                 try:
                     update_inventory_item_fields(
                         self._cloud_session,
-                        int(str(item.code).strip()),
+                        int(str(resolved_inventory_item_id).strip()),
                         {
                             "name": desc,
                             "cubic_meters": m3_unit,

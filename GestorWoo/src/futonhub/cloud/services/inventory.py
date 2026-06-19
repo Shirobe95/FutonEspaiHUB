@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from futonhub.cloud.audit import AuditEvent, CloudAuditError, OperationSnapshot, new_operation_id, write_audit_event, write_snapshot
+from futonhub.core.codes import normalize_inventory_numeric_code
 from gestorwoo.config import Settings, load_settings
 
 
@@ -60,11 +61,7 @@ def _format_relation_quantity(value: Any) -> str:
         return str(value or '1')
 
 
-def _normalize_inventory_numeric_code(value: Any) -> str:
-    text = str(value or '').strip()
-    if text.isdigit():
-        return text.lstrip('0') or '0'
-    return text
+_normalize_inventory_numeric_code = normalize_inventory_numeric_code
 
 
 def _inventory_code_cache_keys(value: Any) -> set[str]:

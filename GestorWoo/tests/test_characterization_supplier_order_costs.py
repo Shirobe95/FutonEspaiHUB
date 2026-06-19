@@ -16,6 +16,11 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from futonhub.cloud.services import orders as orders_service  # noqa: E402
+from futonhub.cloud.services.supplier_prices import (  # noqa: E402
+    SupplierOrderCodeAmbiguityError,
+    resolve_supplier_order_inventory_items,
+)
+from futonhub.core.codes import normalize_inventory_numeric_code  # noqa: E402
 from futonhub.ui.erp import prototype as prototype_module  # noqa: E402
 from futonhub.ui.erp.prototype import FutonHubErpPrototype  # noqa: E402
 from futonhub.ui.erp.shared_ui import OrderItem  # noqa: E402
@@ -51,6 +56,7 @@ class MemoryQuery:
         self.payload = None
         self.filters: list[tuple[str, str, object]] = []
         self.limit_value: int | None = None
+        self.range_value: tuple[int, int] | None = None
 
     def select(self, _columns: str) -> "MemoryQuery":
         self.action = "select"
@@ -85,6 +91,10 @@ class MemoryQuery:
         self.limit_value = value
         return self
 
+    def range(self, start: int, end: int) -> "MemoryQuery":
+        self.range_value = (start, end)
+        return self
+
     def _matches(self, row: dict[str, object]) -> bool:
         for operator, field, value in self.filters:
             if operator == "eq" and str(row.get(field)) != str(value):
@@ -94,9 +104,13 @@ class MemoryQuery:
         return True
 
     def execute(self) -> SimpleNamespace:
+        self.client.execute_counts[self.table] = self.client.execute_counts.get(self.table, 0) + 1
         rows = self.client.tables.setdefault(self.table, [])
         if self.action == "select":
             selected = [json.loads(json.dumps(row)) for row in rows if self._matches(row)]
+            if self.range_value is not None:
+                start, end = self.range_value
+                selected = selected[start : end + 1]
             if self.limit_value is not None:
                 selected = selected[: self.limit_value]
             return SimpleNamespace(data=selected)
@@ -126,7 +140,9 @@ class MemoryQuery:
 
 class MemoryClient:
     def __init__(self) -> None:
+        self.execute_counts: dict[str, int] = {}
         self.tables: dict[str, list[dict[str, object]]] = {
+            "inventory_items": [],
             "supplier_orders": [],
             "supplier_order_items": [],
         }
@@ -185,6 +201,35 @@ def heimei_item() -> OrderItem:
         "cuenta_reparto_descarga": True,
     }
     return OrderItem("301014", "Tatami prueba", 1, "1", "Pendiente", "OK", raw={"source_row": source})
+
+
+def inventory_row(
+    item_id: int,
+    *,
+    name: str = "Futon inventario",
+    heca_reference: str = "",
+    hub_item_code: str = "",
+    primary_supplier_price: float = 93.65,
+    rotation_c: float = 2,
+) -> dict[str, object]:
+    return {
+        "item_id": item_id,
+        "name": name,
+        "heca_reference": heca_reference,
+        "hub_item_code": hub_item_code,
+        "woo_sku": "",
+        "primary_supplier_price": primary_supplier_price,
+        "pascal_price": 0,
+        "cubic_meters": 1,
+        "rotation_c": rotation_c,
+        "packages": 1,
+        "store_stock": 0,
+        "warehouse_stock": 0,
+        "weighted_average_cost": 0,
+        "order_calculated_price": 0,
+        "updated_at": "2026-06-19T08:00:00+00:00",
+        "source_row": {},
+    }
 
 
 class SupplierOrderCostTests(unittest.TestCase):
@@ -259,6 +304,127 @@ class SupplierOrderCostTests(unittest.TestCase):
             ui._supplier_order_pvp(100, 100)
         with self.assertRaises(ValueError):
             ui._supplier_order_pvp(100, -1)
+
+    def test_inventory_numeric_code_normalization_is_shared_and_safe(self) -> None:
+        self.assertEqual(normalize_inventory_numeric_code("0201001"), "201001")
+        self.assertEqual(normalize_inventory_numeric_code("000201001"), "201001")
+        self.assertEqual(normalize_inventory_numeric_code("0000"), "0")
+        self.assertEqual(normalize_inventory_numeric_code("AB0201001"), "AB0201001")
+
+    def test_order_code_resolver_matches_both_leading_zero_directions_in_one_batch(self) -> None:
+        session = MemorySession()
+        session.client.tables["inventory_items"] = [
+            inventory_row(201001, heca_reference="201001"),
+            inventory_row(999001, heca_reference="0201002", hub_item_code="000201002"),
+        ]
+
+        resolved = resolve_supplier_order_inventory_items(
+            session,
+            ["0201001", "201002", "AB0201001"],
+            "ekomat",
+        )
+
+        self.assertEqual(resolved["0201001"]["item_id"], 201001)
+        self.assertEqual(resolved["0201001"]["matched_by"], "canonical:item_id")
+        self.assertEqual(resolved["201002"]["item_id"], 999001)
+        self.assertIn(resolved["201002"]["matched_by"], {"canonical:heca_reference", "canonical:hub_item_code"})
+        self.assertNotIn("AB0201001", resolved)
+        self.assertEqual(session.client.execute_counts["inventory_items"], 1)
+
+    def test_exact_order_code_match_has_priority_over_canonical_match(self) -> None:
+        session = MemorySession()
+        session.client.tables["inventory_items"] = [
+            inventory_row(201001, name="Canonico", heca_reference="201001"),
+            inventory_row(880001, name="Exacto", heca_reference="0201001"),
+        ]
+
+        resolved = resolve_supplier_order_inventory_items(session, ["0201001"], "ekomat")
+
+        self.assertEqual(resolved["0201001"]["item_id"], 880001)
+        self.assertEqual(resolved["0201001"]["matched_by"], "exact:heca_reference")
+
+    def test_canonical_order_code_ambiguity_is_blocked(self) -> None:
+        session = MemorySession()
+        session.client.tables["inventory_items"] = [
+            inventory_row(201001, name="Uno", heca_reference="201001"),
+            inventory_row(880001, name="Dos", heca_reference="0201001"),
+        ]
+
+        with self.assertRaisesRegex(SupplierOrderCodeAmbiguityError, "ambiguo"):
+            resolve_supplier_order_inventory_items(session, ["000201001"], "ekomat")
+
+    def test_equivalent_order_code_fills_name_rotation_price_and_calculates_without_changing_code(self) -> None:
+        ui = app()
+        del ui.__dict__["_fill_supplier_prices_for_order_items"]
+        session = MemorySession()
+        session.client.tables["inventory_items"] = [
+            inventory_row(
+                201001,
+                name="Futon Canonico",
+                heca_reference="201001",
+                primary_supplier_price=93.65,
+                rotation_c=3,
+            )
+        ]
+        ui._cloud_session = session
+        source = {
+            "m3_total": 1,
+            "m3_und": 1,
+            "packages": 1,
+            "cuenta_reparto_descarga": True,
+        }
+        original = OrderItem("0201001", "Pendiente", 1, "1", "Pendiente", "OK", raw={"source_row": source})
+
+        enriched = ui._fill_supplier_prices_for_order_items("ekomat", (original,))
+        enriched_source = enriched[0].raw["source_row"]
+        self.assertEqual(enriched[0].code, "0201001")
+        self.assertEqual(enriched[0].name, "Futon Canonico")
+        self.assertEqual(enriched_source["inventory_rotation_c"], 3)
+        self.assertEqual(enriched_source["precio_proveedor"], 93.65)
+        self.assertEqual(enriched_source["supplier_price_item_id"], 201001)
+        self.assertEqual(enriched_source["inventory_matched_item_id"], 201001)
+        self.assertEqual(ui._order_item_missing_reasons(enriched[0]), [])
+
+        calculated, _raw, _summary = ui._calculate_supplier_order_in_memory(
+            "ekomat",
+            {"Rentabilidad %": "30", "Coste transporte + IVA": "1"},
+            enriched,
+            [],
+        )
+        calculated_source = calculated[0].raw["source_row"]
+        self.assertEqual(calculated[0].code, "0201001")
+        self.assertGreater(calculated_source["unit_cost"], 0)
+        self.assertGreater(calculated_source["precio_ponderado_lote"], 0)
+        self.assertEqual(calculated_source["rentabilidad_percent"], 30)
+        self.assertEqual(
+            calculated_source["pvp_unit"],
+            ui._supplier_order_pvp(calculated_source["unit_cost"], 30),
+        )
+
+    def test_equivalent_codes_do_not_duplicate_inventory_or_change_cost_results(self) -> None:
+        ui = app()
+        del ui.__dict__["_fill_supplier_prices_for_order_items"]
+        session = MemorySession()
+        session.client.tables["inventory_items"] = [inventory_row(201001, heca_reference="0201001")]
+        ui._cloud_session = session
+
+        def calculate(code: str) -> dict[str, object]:
+            item = general_item()
+            item = OrderItem(code, item.name, item.quantity, item.m3, item.final_cost, item.status, raw=item.raw)
+            calculated, _raw, _summary = ui._calculate_supplier_order_in_memory(
+                "ekomat",
+                {"Rentabilidad %": "30", "Coste transporte + IVA": "1"},
+                (item,),
+                [],
+            )
+            return calculated[0].raw["source_row"]
+
+        with_zero = calculate("0201001")
+        without_zero = calculate("201001")
+
+        for field in ("unit_cost", "line_cost", "precio_ponderado_lote", "rentabilidad_percent", "pvp_unit"):
+            self.assertEqual(with_zero[field], without_zero[field])
+        self.assertEqual(len(session.client.tables["inventory_items"]), 1)
 
     def test_global_rentabilidad_is_used_when_line_has_no_individual_value(self) -> None:
         ui = app()
@@ -584,6 +750,104 @@ class SupplierOrderCostTests(unittest.TestCase):
         self.assertEqual(source["rentabilidad_source"], "global")
         self.assertTrue(source["use_global_rentability"])
         self.assertEqual(source["pvp_unit"], ui._supplier_order_pvp(source["unit_cost"], 35))
+
+    def test_leading_zero_code_survives_service_reload_historical_recalculation_and_export(self) -> None:
+        ui = app()
+        del ui.__dict__["_fill_supplier_prices_for_order_items"]
+        session = MemorySession()
+        session.client.tables["inventory_items"] = [
+            inventory_row(201001, name="Futon Canonico", heca_reference="201001")
+        ]
+        session.client.tables["supplier_orders"].append(
+            {
+                "order_id": "ORDER-ZERO",
+                "local_order_id": "PED-ZERO",
+                "provider": "ekomat",
+                "order_file": "pedido-zero.xlsx",
+                "status": "Borrador",
+                "total_items": 1,
+                "total_cost": 0,
+                "notes": "",
+                "created_at": "2025-01-01T00:00:00+00:00",
+                "updated_at": "2025-01-01T00:00:00+00:00",
+                "source_row": {"ui_order_name": "PED-ZERO", "inputs": {"Rentabilidad %": "30"}},
+            }
+        )
+        ui._cloud_session = session
+        historical = OrderItem(
+            "0201001",
+            "Pendiente",
+            1,
+            "1",
+            "Pendiente",
+            "OK",
+            raw={
+                "source_row": {
+                    "m3_total": 1,
+                    "m3_und": 1,
+                    "packages": 1,
+                    "cuenta_reparto_descarga": True,
+                }
+            },
+        )
+        calculated, _raw, _summary = ui._calculate_supplier_order_in_memory(
+            "ekomat",
+            {"Rentabilidad %": "30", "Coste transporte + IVA": "1"},
+            (historical,),
+            [],
+        )
+        source = calculated[0].raw["source_row"]
+        payload = {
+            "code": calculated[0].code,
+            "name": calculated[0].name,
+            "quantity": calculated[0].quantity,
+            "unit_cost": source["unit_cost"],
+            "line_cost": source["line_cost"],
+            "final_cost": source["line_cost"],
+            "status": calculated[0].status,
+            "source_row": source,
+        }
+        settings = SimpleNamespace(sync_role="admin", machine_name="TEST")
+        with (
+            patch.object(orders_service, "load_settings", return_value=settings),
+            patch.object(orders_service, "new_operation_id", return_value="ORDERCALC-ZERO"),
+            patch.object(orders_service, "write_snapshot"),
+            patch.object(orders_service, "write_audit_event"),
+        ):
+            orders_service.update_supplier_order_calculation(
+                session,
+                order_id="ORDER-ZERO",
+                provider="ekomat",
+                order_name="PED-ZERO",
+                order_file="pedido-zero.xlsx",
+                file_type="XLSX",
+                inputs={"Rentabilidad %": "30", "Coste transporte + IVA": "1"},
+                items=[payload],
+            )
+
+        reloaded = ui._load_supplier_orders_from_cloud()[0].items[0]
+        self.assertEqual(reloaded.code, "0201001")
+        recalculated, _raw, _summary = ui._calculate_supplier_order_in_memory(
+            "ekomat",
+            {"Rentabilidad %": "30", "Coste transporte + IVA": "1"},
+            (reloaded,),
+            [],
+        )
+        self.assertEqual(recalculated[0].code, "0201001")
+        self.assertEqual(recalculated[0].raw["source_row"]["supplier_price_item_id"], 201001)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "pedido-zero.xlsx"
+            with patch.object(prototype_module.messagebox, "showinfo"):
+                ui._export_supplier_order_audit_excel(
+                    None,
+                    provider="ekomat",
+                    values={"Nombre del pedido": "PED-ZERO"},
+                    items=recalculated,
+                    path=str(path),
+                )
+            ws = load_workbook(path)["Líneas calculadas"]
+            self.assertEqual(ws.cell(row=2, column=1).value, "0201001")
 
     def test_export_contains_cost_margin_and_pvp_columns(self) -> None:
         ui = app()
