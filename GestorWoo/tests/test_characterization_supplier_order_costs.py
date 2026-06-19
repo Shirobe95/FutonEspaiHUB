@@ -20,7 +20,7 @@ from futonhub.cloud.services.supplier_prices import (  # noqa: E402
     SupplierOrderCodeAmbiguityError,
     resolve_supplier_order_inventory_items,
 )
-from futonhub.core.codes import normalize_inventory_numeric_code  # noqa: E402
+from futonhub.core.codes import is_inventory_pack_row, normalize_inventory_numeric_code  # noqa: E402
 from futonhub.ui.erp import prototype as prototype_module  # noqa: E402
 from futonhub.ui.erp.prototype import FutonHubErpPrototype  # noqa: E402
 from futonhub.ui.erp.shared_ui import OrderItem  # noqa: E402
@@ -204,11 +204,14 @@ def heimei_item() -> OrderItem:
 
 
 def inventory_row(
-    item_id: int,
+    item_id: int | str,
     *,
     name: str = "Futon inventario",
     heca_reference: str = "",
     hub_item_code: str = "",
+    woo_sku: str = "",
+    item_record_type: str = "simple",
+    is_pack: bool = False,
     primary_supplier_price: float = 93.65,
     rotation_c: float = 2,
 ) -> dict[str, object]:
@@ -217,7 +220,9 @@ def inventory_row(
         "name": name,
         "heca_reference": heca_reference,
         "hub_item_code": hub_item_code,
-        "woo_sku": "",
+        "woo_sku": woo_sku,
+        "item_record_type": item_record_type,
+        "is_pack": is_pack,
         "primary_supplier_price": primary_supplier_price,
         "pascal_price": 0,
         "cubic_meters": 1,
@@ -311,6 +316,84 @@ class SupplierOrderCostTests(unittest.TestCase):
         self.assertEqual(normalize_inventory_numeric_code("0000"), "0")
         self.assertEqual(normalize_inventory_numeric_code("AB0201001"), "AB0201001")
 
+    def test_shared_pack_detector_uses_persisted_pack_signals(self) -> None:
+        self.assertTrue(is_inventory_pack_row({"hub_item_code": "WOO-PACK-1"}))
+        self.assertTrue(is_inventory_pack_row({"item_id": "WOO-PACK-2"}))
+        self.assertTrue(is_inventory_pack_row({"item_record_type": "woo_pack"}))
+        self.assertTrue(is_inventory_pack_row({"is_pack": True}))
+        self.assertTrue(is_inventory_pack_row({"woo_sku": "0724001|0201001"}))
+        self.assertFalse(is_inventory_pack_row({"item_id": 724001, "woo_sku": "0724001", "item_record_type": "simple"}))
+
+    def test_normal_item_wins_when_equivalent_pack_is_present(self) -> None:
+        session = MemorySession()
+        session.client.tables["inventory_items"] = [
+            inventory_row(724001, name="Articulo normal", heca_reference="724001", rotation_c=4),
+            inventory_row(
+                990001,
+                name="Pack Woo",
+                heca_reference="0724001",
+                hub_item_code="WOO-PACK-990001",
+                item_record_type="woo_pack",
+                is_pack=True,
+            ),
+        ]
+
+        resolved = resolve_supplier_order_inventory_items(session, ["0724001"], "ekomat")
+
+        self.assertEqual(resolved["0724001"]["item_id"], 724001)
+        self.assertEqual(resolved["0724001"]["item"]["rotation_c"], 4)
+        self.assertEqual(resolved["0724001"]["price"], 93.65)
+        self.assertEqual(resolved["0724001"]["matched_by"], "canonical:item_id")
+
+    def test_multiple_equivalent_packs_do_not_create_order_ambiguity(self) -> None:
+        session = MemorySession()
+        session.client.tables["inventory_items"] = [
+            inventory_row(724001, name="Articulo normal", heca_reference="724001"),
+            inventory_row(
+                990001,
+                name="Pack prefijo",
+                heca_reference="0724001",
+                hub_item_code="WOO-PACK-990001",
+            ),
+            inventory_row(
+                990002,
+                name="Pack SKU compuesto",
+                heca_reference="000724001",
+                woo_sku="0724001|0201001",
+            ),
+        ]
+
+        resolved = resolve_supplier_order_inventory_items(session, ["0724001"], "ekomat")
+
+        self.assertEqual(resolved["0724001"]["item_id"], 724001)
+        self.assertEqual(session.client.execute_counts["inventory_items"], 1)
+
+    def test_pack_prefix_and_compound_sku_are_never_order_candidates(self) -> None:
+        session = MemorySession()
+        session.client.tables["inventory_items"] = [
+            inventory_row("WOO-PACK-1", hub_item_code="WOO-PACK-1"),
+            inventory_row(990002, heca_reference="0724001", woo_sku="0724001|0201001"),
+        ]
+
+        resolved = resolve_supplier_order_inventory_items(
+            session,
+            ["WOO-PACK-1", "0724001"],
+            "ekomat",
+        )
+
+        self.assertEqual(resolved, {})
+
+    def test_alphanumeric_normal_order_code_still_resolves_exactly(self) -> None:
+        session = MemorySession()
+        session.client.tables["inventory_items"] = [
+            inventory_row(810001, heca_reference="AB-0724001", hub_item_code="AB-0724001"),
+        ]
+
+        resolved = resolve_supplier_order_inventory_items(session, ["AB-0724001"], "ekomat")
+
+        self.assertEqual(resolved["AB-0724001"]["item_id"], 810001)
+        self.assertEqual(resolved["AB-0724001"]["matched_by"], "exact:heca_reference")
+
     def test_order_code_resolver_matches_both_leading_zero_directions_in_one_batch(self) -> None:
         session = MemorySession()
         session.client.tables["inventory_items"] = [
@@ -364,7 +447,16 @@ class SupplierOrderCostTests(unittest.TestCase):
                 heca_reference="201001",
                 primary_supplier_price=93.65,
                 rotation_c=3,
-            )
+            ),
+            inventory_row(
+                990001,
+                name="Pack equivalente excluido",
+                heca_reference="0201001",
+                hub_item_code="WOO-PACK-990001",
+                woo_sku="0201001|0724001",
+                item_record_type="woo_pack",
+                is_pack=True,
+            ),
         ]
         ui._cloud_session = session
         source = {

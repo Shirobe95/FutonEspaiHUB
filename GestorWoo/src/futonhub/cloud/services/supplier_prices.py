@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from futonhub.cloud.audit import AuditEvent, OperationSnapshot, new_operation_id, write_audit_event, write_snapshot
-from futonhub.core.codes import normalize_inventory_numeric_code
+from futonhub.core.codes import is_inventory_pack_row, normalize_inventory_numeric_code
 from gestorwoo.config import Settings, load_settings
 
 
@@ -322,7 +322,7 @@ def migrate_supplier_prices_to_supabase(
 
 
 SUPPLIER_ORDER_INVENTORY_COLUMNS = (
-    "item_id,name,heca_reference,hub_item_code,woo_sku,"
+    "item_id,name,heca_reference,hub_item_code,item_record_type,is_pack,woo_sku,"
     "primary_supplier_price,pascal_price,cubic_meters,rotation_c,packages,"
     "store_stock,warehouse_stock,weighted_average_cost,order_calculated_price,"
     "updated_at,source_row"
@@ -383,6 +383,8 @@ def resolve_supplier_order_inventory_items(
     canonical_field: dict[tuple[str, str], str] = {}
 
     for row in _supplier_order_inventory_rows(session):
+        if is_inventory_pack_row(row):
+            continue
         row_key = _supplier_order_row_key(row)
         for field in SUPPLIER_ORDER_CODE_FIELDS:
             value = str(row.get(field) or "").strip()

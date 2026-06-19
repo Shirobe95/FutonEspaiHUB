@@ -3,6 +3,7 @@ from __future__ import annotations
 import tkinter as tk
 from tkinter import messagebox, simpledialog, ttk
 
+from futonhub.core.codes import is_inventory_pack_row
 from futonhub.core.config import load_settings
 from futonhub.ui.theme import C_BG, apply_theme
 from futonhub.ui.windowing import center_window
@@ -163,9 +164,7 @@ class CloudInventoryBoardMixin:
             return "; ".join(parts)
 
         def _is_pack_row(row: dict) -> bool:
-            record_type = row.get("hub_search_record_type") or row.get("item_record_type") or ""
-            code = _pack_code_from_row(row)
-            return record_type in {"woo_pack", "manual_pack"} or code.startswith("WOO-PACK-") or "|" in str(row.get("woo_sku") or "")
+            return is_inventory_pack_row(row)
 
         def _selected_row_silent() -> dict | None:
             sel = tree.selection()
