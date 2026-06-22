@@ -7,6 +7,7 @@ import re
 import tkinter as tk
 import threading
 import unicodedata
+import uuid
 import warnings
 from tkinter import filedialog, messagebox, simpledialog, ttk
 from typing import Any
@@ -35,8 +36,9 @@ from futonhub.cloud.services.inventory import (
 from futonhub.cloud.services.price_proposals import (
     create_real_price_proposal,
     delete_real_price_proposal_group,
+    diagnose_real_price_proposals,
     format_existing_price_proposal_preview,
-    list_real_price_proposals,
+    preview_real_price_proposal,
     preview_existing_price_proposal,
     review_latest_real_price_proposal,
 )
@@ -487,6 +489,9 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         self._price_error = ""
         self._price_mode = "saved"
         self._price_edit_lines: list[ProposalLine] = []
+        self._price_proposal_model: dict[str, dict[str, Any]] = {}
+        self._price_rendered_model_keys: tuple[str, ...] = ()
+        self._price_rendered_model_types: tuple[tuple[str, str], ...] = ()
         self._price_edit_initialized = False
         self._price_edit_selected_code = ""
         self._price_edit_notice = ""
@@ -495,9 +500,21 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         self._price_delete_target_id = ""
         self._price_delete_target_name = ""
         self._price_available_items: list[InventoryItem] = []
+        self._price_search_results: list[dict[str, Any]] = []
         self._price_items_loading = False
         self._price_items_error = ""
         self._price_line_sources: dict[str, dict[str, Any]] = {}
+        self._price_proposal_line_sources: dict[str, dict[str, Any]] = {}
+        self._price_save_in_progress = False
+        self._price_delete_in_progress = False
+        self._price_add_in_progress = False
+        self._price_bulk_add_in_progress = False
+        self._price_active_overlay: tk.Toplevel | None = None
+        self._price_save_token = ""
+        self._price_refresh_generation = 0
+        self._price_refresh_diagnostics: list[dict[str, Any]] = []
+        self._price_next_refresh_source = ""
+        self._price_refresh_preferred_token = ""
         self._supplier_orders: list[SupplierOrder] = []
         self._orders_loaded_once = False
         self._orders_loading = False
@@ -1743,33 +1760,58 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         self._show_view("precios")
 
     def _build_prices(self, parent: tk.Frame) -> None:
-        self._page_header(parent, "Operaciones", "Cambio de Precios", "Propuestas, validacion, aprobacion y publicacion protegida.", ["Nueva propuesta"])
-        if self._proposal_source_item is not None:
-            item = self._proposal_source_item
-            notice = tk.Frame(parent, bg=INDIGO_SOFT, highlightbackground="#C7D2FE", highlightthickness=1)
-            notice.pack(fill=tk.X, pady=(0, 14))
-            tk.Label(
-                notice,
-                text=f"Item recibido desde Inventario: {item.name} - {item.code}",
-                bg=INDIGO_SOFT,
-                fg=INDIGO,
-                font=("Segoe UI", 10, "bold"),
-                anchor=tk.W,
-            ).pack(fill=tk.X, padx=14, pady=(10, 2))
-            tk.Label(
-                notice,
-                text="Flujo previsto: validar producto, crear linea de propuesta, confirmar visualmente y registrar log.",
-                bg=INDIGO_SOFT,
-                fg="#4338CA",
-                font=("Segoe UI", 9),
-                anchor=tk.W,
-            ).pack(fill=tk.X, padx=14, pady=(0, 10))
         if self._price_mode == "edit":
+            tk.Label(
+                parent,
+                text="Nueva Propuesta",
+                bg=BG,
+                fg=TEXT,
+                font=("Segoe UI", 18, "bold"),
+                anchor=tk.W,
+            ).pack(fill=tk.X, pady=(0, 10))
+            if self._proposal_source_item is not None:
+                item = self._proposal_source_item
+                notice = tk.Frame(parent, bg=INDIGO_SOFT, highlightbackground="#C7D2FE", highlightthickness=1)
+                notice.pack(fill=tk.X, pady=(0, 14))
+                tk.Label(
+                    notice,
+                    text=f"Item recibido desde Inventario: {item.name} - {item.code}",
+                    bg=INDIGO_SOFT,
+                    fg=INDIGO,
+                    font=("Segoe UI", 10, "bold"),
+                    anchor=tk.W,
+                ).pack(fill=tk.X, padx=14, pady=(10, 2))
+                tk.Label(
+                    notice,
+                    text="Flujo previsto: validar producto, crear linea de propuesta, confirmar visualmente y registrar log.",
+                    bg=INDIGO_SOFT,
+                    fg="#4338CA",
+                    font=("Segoe UI", 9),
+                    anchor=tk.W,
+                ).pack(fill=tk.X, padx=14, pady=(0, 10))
             self._build_price_edit_workspace(parent)
         else:
+            heading = tk.Frame(parent, bg=BG)
+            heading.pack(fill=tk.X, pady=(0, 10))
+            tk.Label(
+                heading,
+                text="Cambio de Precios",
+                bg=BG,
+                fg=TEXT,
+                font=("Segoe UI", 18, "bold"),
+                anchor=tk.W,
+            ).pack(side=tk.LEFT, fill=tk.X, expand=True)
+            self._button(
+                heading,
+                "Nueva propuesta",
+                primary=True,
+                command=self._start_new_price_proposal,
+            ).pack(side=tk.RIGHT)
             self._build_saved_proposals_workspace(parent)
             if self._cloud_session is not None and not self._price_loaded_once and not self._price_loading:
-                self._refresh_price_proposals(parent)
+                source = self._price_next_refresh_source or "inicial"
+                self._price_next_refresh_source = ""
+                self._refresh_price_proposals(parent, source=source)
 
     def _set_price_mode(self, mode: str) -> None:
         if mode == "edit":
@@ -1790,21 +1832,140 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         self._price_edit_initialized = True
         proposal = self._selected_price_proposal
         self._price_edit_lines = list(proposal.lines) if proposal else []
+        self._price_proposal_model = {}
+        self._price_proposal_line_sources = {}
+        if proposal and isinstance(proposal.raw, dict):
+            for row in proposal.raw.get("ui_member_rows") or [proposal.raw]:
+                source_row = row.get("source_row") if isinstance(row.get("source_row"), dict) else {}
+                kind = str(
+                    source_row.get("ui_canonical_item_kind")
+                    or row.get("item_kind")
+                    or ""
+                ).strip().lower()
+                woo_id = source_row.get("ui_canonical_woo_id") or row.get("item_woo_id")
+                if kind not in {"product", "variation", "pack"} or woo_id in (None, ""):
+                    continue
+                code = f"{kind}:{woo_id}"
+                self._price_proposal_line_sources[code] = {
+                    "item_kind": kind,
+                    "woo_id": int(woo_id),
+                    "proposal_id": row.get("id"),
+                }
+                line = next((candidate for candidate in self._price_edit_lines if candidate.code == code), None)
+                if line is not None:
+                    self._price_model_put(line, self._price_proposal_line_sources[code])
         if self._proposal_source_item is not None and all(line.code != self._proposal_source_item.code for line in self._price_edit_lines):
             item = self._proposal_source_item
-            self._price_edit_lines.insert(0, ProposalLine(item.code, self._price_display_name_for_inventory_item(item), item.price, item.price, "Pendiente", "flat"))
             source = self._price_source_from_inventory_item(item)
-            if source:
-                self._price_line_sources[item.code] = source
+            result = self._price_results_from_items([item])[0]
+            eligibility, reason, _price = self._price_classify_result(result)
+            if eligibility == "VÁLIDO":
+                self._price_edit_lines.insert(0, ProposalLine(item.code, self._price_display_name_for_inventory_item(item), item.price, item.price, "Pendiente", "flat"))
+                self._price_proposal_line_sources[item.code] = source
+                self._price_model_put(self._price_edit_lines[0], source)
+            else:
+                self._price_edit_notice = reason
 
     def _price_reset_edit_state(self) -> None:
         self._price_edit_lines = []
+        self._price_proposal_model = {}
+        self._price_rendered_model_keys = ()
+        self._price_rendered_model_types = ()
         self._price_edit_initialized = False
         self._price_edit_selected_code = ""
         self._price_edit_notice = ""
         self._price_search_query = ""
-        if hasattr(self, "_price_edit_name_var"):
-            self._price_edit_name_var.set("")
+        self._price_search_results = []
+        self._price_proposal_line_sources = {}
+        name_var = self.__dict__.get("_price_edit_name_var")
+        if name_var is not None:
+            name_var.set("")
+
+    def _cancel_price_edit(self) -> None:
+        self._price_reset_edit_state()
+        self._set_price_mode("saved")
+
+    def _price_model_key(self, line: ProposalLine, source: dict[str, Any]) -> str:
+        kind = str(source.get("item_kind") or "").strip().lower()
+        woo_id = source.get("woo_id")
+        if kind not in {"product", "variation", "pack"} or woo_id in (None, ""):
+            raise ValueError(
+                f"El artículo {line.code} no tiene una identidad Woo canónica fiable."
+            )
+        try:
+            normalized_woo_id = int(woo_id)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"El artículo {line.code} no tiene una identidad Woo canónica fiable."
+            ) from exc
+        if normalized_woo_id <= 0:
+            raise ValueError(
+                f"El artículo {line.code} no tiene una identidad Woo canónica fiable."
+            )
+        return f"{kind}:{normalized_woo_id}"
+
+    def _price_model_put(self, line: ProposalLine, source: dict[str, Any]) -> str:
+        model = self.__dict__.setdefault("_price_proposal_model", {})
+        key = self._price_model_key(line, source)
+        model[key] = {
+            "key": key,
+            "line": line,
+            "source": dict(source),
+        }
+        return key
+
+    def _price_model_entries(self) -> tuple[dict[str, Any], ...]:
+        model = self.__dict__.setdefault("_price_proposal_model", {})
+        return tuple({
+            "key": entry["key"],
+            "line": entry["line"],
+            "source": dict(entry["source"]),
+        } for entry in model.values())
+
+    def _price_sync_legacy_model_views(self) -> None:
+        """Espejos de compatibilidad; no son fuentes de verdad."""
+        entries = self._price_model_entries()
+        self._price_edit_lines = [entry["line"] for entry in entries]
+        self._price_proposal_line_sources = {
+            entry["line"].code: dict(entry["source"])
+            for entry in entries
+        }
+
+    def _price_model_target_state(
+        self,
+        entries: tuple[dict[str, Any], ...] | list[dict[str, Any]],
+        target: str = "930000010533",
+    ) -> str:
+        for entry in entries:
+            source = entry.get("source") or {}
+            if str(source.get("woo_id") or "") == target:
+                return str(entry.get("status") or "present")
+        return "absent"
+
+    def _price_canonical_snapshot(self) -> tuple[dict[str, Any], ...]:
+        snapshot = self._price_model_entries()
+        model_keys = tuple(entry["key"] for entry in snapshot)
+        model_types = tuple(
+            (entry["key"], str(entry["source"].get("item_kind") or "").strip().lower())
+            for entry in snapshot
+        )
+        rendered_keys = tuple(self.__dict__.get("_price_rendered_model_keys") or ())
+        rendered_types = tuple(self.__dict__.get("_price_rendered_model_types") or ())
+        if "_price_rendered_model_keys" in self.__dict__ and rendered_keys != model_keys:
+            missing = sorted(set(rendered_keys) - set(model_keys))
+            extra = sorted(set(model_keys) - set(rendered_keys))
+            print(
+                "[PRICE_PROPOSAL_ERROR] integrity key mismatch "
+                f"missing={','.join(missing) or '-'} extra={','.join(extra) or '-'}",
+                flush=True,
+            )
+            raise ValueError("Error interno de integridad: panel y modelo canónico no coinciden.")
+        if "_price_rendered_model_types" in self.__dict__ and rendered_types != model_types:
+            print("[PRICE_PROPOSAL_ERROR] integrity type mismatch", flush=True)
+            raise ValueError(
+                "Error interno de integridad: el tipo del panel y del snapshot no coincide."
+            )
+        return snapshot
 
     def _normalize_search_text(self, value: object) -> str:
         text = str(value or "").lower().strip()
@@ -1914,11 +2075,14 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         head.grid(row=0, column=0, sticky="ew", padx=16, pady=(16, 10))
         head.columnconfigure(0, weight=1)
         tk.Label(head, text="Propuestas", bg=CARD, fg=TEXT, font=("Segoe UI", 14, "bold")).grid(row=0, column=0, sticky="w")
-        source_proposals = self._price_proposals if (self._cloud_session is not None and self._price_loaded_once) else (self._price_proposals or list(SAVED_PROPOSALS))
+        if self._cloud_session is not None:
+            source_proposals = self._price_proposals if self._price_loaded_once else []
+        else:
+            source_proposals = self._price_proposals or list(SAVED_PROPOSALS)
         proposals = [proposal for proposal in source_proposals if self._proposal_matches_search(proposal, self._proposal_search_query)]
         state_text = "Cargando reales..." if self._price_loading else f"{len(proposals)} visibles"
         self._status_chip(head, state_text, "Info").grid(row=0, column=1, sticky="e", padx=(0, 8))
-        self._button(head, "Actualizar", primary=True, command=lambda: self._refresh_price_proposals(parent)).grid(row=0, column=2, sticky="e")
+        self._button(head, "Actualizar", primary=True, command=lambda: self._refresh_price_proposals(parent, source="manual")).grid(row=0, column=2, sticky="e")
         if self._price_error:
             tk.Label(list_card, text=self._price_error, bg=INDIGO_SOFT if self._price_loading else ROSE_SOFT, fg=INDIGO if self._price_loading else ROSE, anchor=tk.W).grid(
                 row=2,
@@ -2008,38 +2172,313 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
 
         self._render_saved_proposal_detail(detail_host, self._selected_price_proposal)
 
-    def _refresh_price_proposals(self, parent: tk.Frame) -> None:
+    def _refresh_price_proposals(self, parent: tk.Frame, *, source: str = "automatico") -> None:
+        self._price_refresh_generation += 1
+        generation = self._price_refresh_generation
         if self._cloud_session is None:
             self._price_error = "Inicia sesion para cargar propuestas reales."
             self._price_loading = False
             self._price_loaded_once = True
+            self._price_record_refresh_diagnostic(
+                source,
+                generation,
+                0,
+                "sesion_ausente",
+                filtered_rows=0,
+                groups=0,
+                query_ok=None,
+            )
             if self._current_key == "precios":
                 self._show_view("precios")
             return
         self._price_loading = True
         self._price_error = "Cargando propuestas reales..."
-        self._show_view("precios")
+        overlay = self._price_start_working_overlay("Cargando propuestas", "Actualizando el listado de propuestas…")
+        self._price_record_refresh_diagnostic(source, generation, 0, "iniciado")
 
         def worker() -> None:
             try:
-                rows = list_real_price_proposals(self._cloud_session, status="all", limit=100)
-                proposals = [self._price_proposal_from_cloud_row(row) for row in rows]
-                self.after(0, lambda: self._finish_price_proposals_refresh(proposals, "" if proposals else "No hay propuestas reales visibles."))
+                diagnostic = diagnose_real_price_proposals(self._cloud_session, status="all", limit=200)
+                rows = list(diagnostic.get("rows") or [])
+                proposals = self._price_group_cloud_proposals(rows)
+                self.after(0, lambda: self._finish_price_proposals_refresh(
+                    proposals,
+                    "" if proposals else "No hay propuestas reales visibles.",
+                    generation=generation,
+                    source=source,
+                    received_rows=int(diagnostic.get("raw_count") or 0),
+                    filtered_rows=int(diagnostic.get("filtered_count") or 0),
+                    discarded=list(diagnostic.get("discarded") or []),
+                    ui_deleted_distribution=dict(diagnostic.get("ui_deleted_distribution") or {}),
+                    deletion_patterns=list(diagnostic.get("deletion_patterns") or []),
+                    repository=str(diagnostic.get("repository") or "price_change_proposals"),
+                    query_ok=True,
+                    overlay=overlay,
+                ))
             except Exception as exc:
-                self.after(0, lambda exc=exc: self._finish_price_proposals_refresh([], f"No se pudieron cargar propuestas reales: {exc}"))
+                self.after(0, lambda exc=exc: self._finish_price_proposals_refresh(
+                    [],
+                    f"No se pudieron cargar propuestas reales: {exc}",
+                    generation=generation,
+                    source=source,
+                    received_rows=0,
+                    filtered_rows=0,
+                    discarded=[],
+                    repository="price_change_proposals",
+                    query_ok=False,
+                    error_type=type(exc).__name__,
+                    overlay=overlay,
+                ))
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def _finish_price_proposals_refresh(self, proposals: list[PriceProposal], error: str) -> None:
+    def _finish_price_proposals_refresh(
+        self,
+        proposals: list[PriceProposal],
+        error: str,
+        *,
+        generation: int | None = None,
+        source: str = "automatico",
+        received_rows: int | None = None,
+        filtered_rows: int | None = None,
+        discarded: list[dict[str, str]] | None = None,
+        repository: str = "price_change_proposals",
+        query_ok: bool | None = True,
+        error_type: str = "",
+        ui_deleted_distribution: dict[str, int] | None = None,
+        deletion_patterns: list[dict[str, Any]] | None = None,
+        overlay: tk.Toplevel | None = None,
+    ) -> None:
+        self._price_stop_working_overlay(overlay)
+        active_generation = self._price_refresh_generation
+        if generation is not None and generation != active_generation:
+            self._price_record_refresh_diagnostic(
+                source, generation, received_rows or 0, "descartado_obsoleto",
+                filtered_rows, len(proposals), discarded, repository, query_ok, "",
+                ui_deleted_distribution, deletion_patterns,
+            )
+            return
+        if self._current_key != "precios" or self._price_mode != "saved":
+            self._price_record_refresh_diagnostic(
+                source, generation or active_generation, received_rows or 0,
+                "descartado_vista_inactiva", filtered_rows, len(proposals),
+                discarded, repository, query_ok, "", ui_deleted_distribution,
+                deletion_patterns,
+            )
+            self._price_loading = False
+            return
+        if not query_ok:
+            self._price_loading = False
+            self._price_error = error
+            self._price_record_refresh_diagnostic(
+                source,
+                generation or active_generation,
+                received_rows or 0,
+                "consulta_error",
+                filtered_rows,
+                len(proposals),
+                discarded,
+                repository,
+                False,
+                error_type,
+            )
+            if self._current_key == "precios":
+                self._show_view("precios")
+            return
+        if not proposals and self._price_proposals and self._price_session_access_mode() != "authenticated_session":
+            self._price_loading = False
+            self._price_error = "No se aplicó un resultado vacío sin sesión autenticada."
+            self._price_record_refresh_diagnostic(source, generation or active_generation, received_rows or 0, "descartado_vacio_no_autorizado", filtered_rows, len(proposals), discarded, repository, query_ok)
+            if self._current_key == "precios":
+                self._show_view("precios")
+            return
         # Si hay sesión cloud, una lista vacía es un estado real: no volver a rellenar con mocks.
         # Los mocks solo sirven cuando no hay sesión/entorno real disponible.
+        previous_raw = self._selected_price_proposal.raw if self._selected_price_proposal and isinstance(self._selected_price_proposal.raw, dict) else {}
+        previous_key = str(previous_raw.get("ui_group_key") or "")
         self._price_proposals = proposals if self._cloud_session is not None else (proposals or list(SAVED_PROPOSALS))
         self._price_error = error
         self._price_loading = False
         self._price_loaded_once = True
-        self._selected_price_proposal = self._price_proposals[0] if self._price_proposals else None
+        preferred_token = self._price_refresh_preferred_token
+        selected = None
+        for proposal in self._price_proposals:
+            raw = proposal.raw if isinstance(proposal.raw, dict) else {}
+            if preferred_token and str(raw.get("ui_save_token") or "") == preferred_token:
+                selected = proposal
+                break
+            if not preferred_token and previous_key and str(raw.get("ui_group_key") or "") == previous_key:
+                selected = proposal
+                break
+        self._selected_price_proposal = selected or (self._price_proposals[0] if self._price_proposals else None)
+        self._price_refresh_preferred_token = ""
+        self._price_record_refresh_diagnostic(
+            source,
+            generation or active_generation,
+            received_rows if received_rows is not None else len(proposals),
+            "aplicado",
+            filtered_rows,
+            len(proposals),
+            discarded,
+            repository,
+            query_ok,
+            "",
+            ui_deleted_distribution,
+            deletion_patterns,
+        )
         if self._current_key == "precios":
             self._show_view("precios")
+
+    def _price_record_refresh_diagnostic(
+        self,
+        source: str,
+        generation: int,
+        rows: int,
+        result: str,
+        filtered_rows: int | None = None,
+        groups: int | None = None,
+        discarded: list[dict[str, str]] | None = None,
+        repository: str = "price_change_proposals",
+        query_ok: bool | None = True,
+        error_type: str = "",
+        ui_deleted_distribution: dict[str, int] | None = None,
+        deletion_patterns: list[dict[str, Any]] | None = None,
+    ) -> None:
+        diagnostics = self.__dict__.setdefault("_price_refresh_diagnostics", [])
+        diagnostics.append({
+            "source": source,
+            "generation": int(generation),
+            "rows": int(rows),
+            "filtered_rows": int(filtered_rows if filtered_rows is not None else rows),
+            "groups": int(groups if groups is not None else 0),
+            "rendered": len(self.__dict__.get("_price_proposals") or []),
+            "result": result,
+            "access": self._price_session_access_mode(),
+            "session_present": self._cloud_session is not None,
+            "authenticated_user": bool(getattr(self._cloud_session, "user_id", None)) if self._cloud_session is not None else False,
+            "role_known": bool(getattr(self._cloud_session, "role", None)) if self._cloud_session is not None else False,
+            "repository": repository,
+            "loader": "diagnose_real_price_proposals",
+            "query": "ok" if query_ok is True else "error" if query_ok is False else "skipped",
+            "error_type": str(error_type or ""),
+            "ui_deleted_distribution": dict(ui_deleted_distribution or {}),
+            "deletion_patterns": list(deletion_patterns or []),
+            "cache_items": len(self.__dict__.get("_price_proposals") or []),
+            "discarded": list(discarded or []),
+        })
+        del diagnostics[:-30]
+        if query_ok is False:
+            print(
+                "[PRICE_PROPOSALS] "
+                f"origin={source} query=error "
+                f"error_type={str(error_type or 'unknown')} reason={result}",
+                flush=True,
+            )
+
+    def _price_session_access_mode(self) -> str:
+        if self._cloud_session is None:
+            return "offline"
+        return "authenticated_session" if getattr(self._cloud_session, "user_id", None) else "unverified_session"
+
+    def _price_historical_group_key(self, row: dict[str, Any], source: dict[str, Any]) -> str:
+        """Obtiene una identidad histórica fiable sin fusionar únicamente por nombre."""
+        for key in (
+            "ui_save_token",
+            "ui_proposal_id",
+            "proposal_group_id",
+            "group_id",
+            "batch_id",
+            "operation_id",
+            "local_sqlite_id",
+        ):
+            value = source.get(key) if key in source else row.get(key)
+            if value not in (None, ""):
+                return f"{key}:{value}"
+        proposal_id = str(row.get("id") or "").strip()
+        return f"id:{proposal_id}" if proposal_id else f"legacy-row:{id(row)}"
+
+    def _price_group_cloud_proposals(self, rows: list[dict[str, Any]]) -> list[PriceProposal]:
+        """Agrupa propuestas modernas e históricas sin ocultar estados antiguos."""
+        groups: dict[str, list[dict[str, Any]]] = {}
+        order: list[str] = []
+        seen_ids: set[str] = set()
+        for raw_row in rows:
+            row = dict(raw_row)
+            proposal_id = str(row.get("id") or "").strip()
+            if proposal_id and proposal_id in seen_ids:
+                continue
+            if proposal_id:
+                seen_ids.add(proposal_id)
+            source = row.get("source_row") if isinstance(row.get("source_row"), dict) else {}
+            group_key = self._price_historical_group_key(row, source)
+            if group_key not in groups:
+                groups[group_key] = []
+                order.append(group_key)
+            groups[group_key].append(row)
+
+        proposals: list[PriceProposal] = []
+        for group_key in order:
+            member_rows = groups[group_key]
+            member_proposals = [self._price_proposal_from_cloud_row(row) for row in member_rows]
+            first = member_proposals[0]
+            lines = tuple(line for proposal in member_proposals for line in proposal.lines)
+            up = sum(proposal.up for proposal in member_proposals)
+            down = sum(proposal.down for proposal in member_proposals)
+            flat = sum(proposal.flat for proposal in member_proposals)
+            raw = dict(member_rows[0])
+            raw["ui_member_ids"] = [str(row.get("id")) for row in member_rows if row.get("id")]
+            raw["ui_member_rows"] = member_rows
+            raw["ui_group_key"] = group_key
+            if member_rows[0].get("source_row") and isinstance(member_rows[0]["source_row"], dict):
+                raw["ui_save_token"] = member_rows[0]["source_row"].get("ui_save_token")
+            proposals.append(PriceProposal(
+                name=first.name,
+                date=first.date,
+                items=len(lines),
+                up=up,
+                down=down,
+                flat=flat,
+                change=first.change if len(lines) == 1 else "Grupo",
+                status=first.status,
+                lines=lines,
+                raw=raw,
+            ))
+        return proposals
+
+    def _render_empty_saved_proposal_detail(self, parent: tk.Misc) -> None:
+        for child in parent.winfo_children():
+            child.destroy()
+        card = self._card(parent)
+        card.pack(fill=tk.BOTH, expand=True)
+        tk.Label(
+            card,
+            text="Selecciona una propuesta para ver sus detalles.",
+            bg=CARD,
+            fg=MUTED,
+            font=("Segoe UI", 11),
+            anchor=tk.CENTER,
+            justify=tk.CENTER,
+        ).pack(fill=tk.BOTH, expand=True, padx=24, pady=24)
+
+    def _price_start_working_overlay(self, title: str, message: str) -> tk.Toplevel | None:
+        if "tk" not in self.__dict__:
+            return None
+        current = self.__dict__.get("_price_active_overlay")
+        if current is not None:
+            try:
+                if current.winfo_exists():
+                    return None
+            except Exception:
+                pass
+        overlay = self._show_working_overlay(title, message)
+        self._price_active_overlay = overlay
+        return overlay
+
+    def _price_stop_working_overlay(self, overlay: tk.Toplevel | None) -> None:
+        if overlay is not None:
+            self._close_working_overlay(overlay)
+        if self.__dict__.get("_price_active_overlay") is overlay:
+            self._price_active_overlay = None
 
     def _price_proposal_from_cloud_row(self, row: dict[str, Any]) -> PriceProposal:
         old_price = self._money_or_none(row.get("old_price"))
@@ -2055,10 +2494,16 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 change = f"{delta:+.2f}"
         status = self._price_status_label_from_cloud(row.get("status"))
         source_row = row.get("source_row") if isinstance(row.get("source_row"), dict) else {}
+        canonical_kind = str(
+            source_row.get("ui_canonical_item_kind")
+            or row.get("item_kind")
+            or "-"
+        ).strip().lower()
+        canonical_woo_id = source_row.get("ui_canonical_woo_id") or row.get("item_woo_id") or row.get("local_id") or "-"
         display_name = str(source_row.get("ui_proposal_name") or row.get("proposal_name") or row.get("title") or row.get("name") or f"Propuesta {row.get('id') or '-'}")
         line_name = str(source_row.get("ui_line_name") or row.get("name") or "Producto sin nombre")
         line = ProposalLine(
-            code=f"{row.get('item_kind') or '-'}:{row.get('item_woo_id') or row.get('local_id') or '-'}",
+            code=f"{canonical_kind}:{canonical_woo_id}",
             name=line_name,
             old_price=self._format_price_value(old_price),
             new_price=self._format_price_value(new_price),
@@ -2189,8 +2634,11 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         return self._price_status_raw_from_label(proposal.status)
 
     def _open_delete_price_proposal_confirmation(self, proposal: PriceProposal) -> None:
+        if self._price_delete_in_progress:
+            return
         row = proposal.raw or {}
         proposal_id = row.get("id")
+        member_ids = [str(value) for value in (row.get("ui_member_ids") or [proposal_id]) if value]
         source_row = row.get("source_row") if isinstance(row.get("source_row"), dict) else {}
         proposal_name = str(source_row.get("ui_proposal_name") or proposal.name or "").strip()
         if not proposal_id and proposal in self._price_proposals:
@@ -2206,54 +2654,59 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         label = proposal_name or f"ID {proposal_id}"
         if not messagebox.askyesno(
             "Borrar propuesta",
-            "Se eliminará la propuesta completa de Cambio de Precios.\n\n"
-            f"Propuesta: {label}\n\n"
-            "Si la propuesta contiene varios items con el mismo nombre de propuesta, se quitarán todos.\n"
+            "Se eliminará la propuesta seleccionada de Cambio de Precios.\n\n"
+            f"Propuesta: {label}\n"
+            f"Fecha: {proposal.date}\n"
+            f"Items: {proposal.items}\n"
+            f"Referencia: {str(proposal_id)[:12]}\n\n"
             "Esta acción quedará registrada en Seguridad / Logs.\n\n"
             "¿Continuar?",
         ):
             return
+        self._price_delete_in_progress = True
         self._price_error = "Borrando propuesta..."
         self._price_delete_target_id = str(proposal_id)
-        self._price_delete_target_name = proposal_name
+        self._price_delete_target_ids = member_ids
+        overlay = self._price_start_working_overlay("Eliminando propuesta", "Eliminando propuesta…")
         self._show_view("precios")
 
         def worker() -> None:
             try:
-                result = delete_real_price_proposal_group(self._cloud_session, str(proposal_id), proposal_name=proposal_name)
+                result = delete_real_price_proposal_group(
+                    self._cloud_session,
+                    str(proposal_id),
+                    proposal_name=proposal_name,
+                    proposal_ids=member_ids,
+                )
                 deleted = int(result.get("deleted_count") or 0)
-                self.after(0, lambda: self._finish_delete_price_proposal(deleted))
+                self.after(0, lambda: self._finish_delete_price_proposal(deleted, overlay))
             except Exception as exc:
-                self.after(0, lambda exc=exc: self._finish_delete_price_proposal_error(str(exc)))
+                self.after(0, lambda exc=exc: self._finish_delete_price_proposal_error(str(exc), overlay))
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def _finish_delete_price_proposal(self, deleted_count: int) -> None:
+    def _finish_delete_price_proposal(self, deleted_count: int, overlay: tk.Toplevel | None = None) -> None:
+        self._price_stop_working_overlay(overlay)
+        self._price_delete_in_progress = False
         messagebox.showinfo("Cambio de Precios", f"Propuesta borrada correctamente. Registros afectados: {deleted_count}")
-        deleted_id = str(getattr(self, "_price_delete_target_id", "") or "")
-        deleted_name = str(getattr(self, "_price_delete_target_name", "") or "").strip()
+        deleted_ids = set(str(value) for value in (self.__dict__.get("_price_delete_target_ids") or []))
 
         def keep(proposal: PriceProposal) -> bool:
             row = proposal.raw or {}
-            source = row.get("source_row") if isinstance(row.get("source_row"), dict) else {}
-            row_id = str(row.get("id") or "")
-            row_name = str(source.get("ui_proposal_name") or proposal.name or "").strip()
-            if deleted_id and row_id == deleted_id:
-                return False
-            if deleted_name and row_name == deleted_name:
-                return False
-            return True
+            proposal_ids = set(str(value) for value in (row.get("ui_member_ids") or [row.get("id")]) if value)
+            return not bool(proposal_ids & deleted_ids)
 
         self._price_proposals = [proposal for proposal in self._price_proposals if keep(proposal)]
         self._price_loaded_once = False
         self._selected_price_proposal = self._price_proposals[0] if self._price_proposals else None
         self._price_error = ""
         self._price_mode = "saved"
+        self._price_next_refresh_source = "borrado"
         self._show_view("precios")
-        if self._cloud_session is not None:
-            self._refresh_price_proposals(self._content)
 
-    def _finish_delete_price_proposal_error(self, error: str) -> None:
+    def _finish_delete_price_proposal_error(self, error: str, overlay: tk.Toplevel | None = None) -> None:
+        self._price_stop_working_overlay(overlay)
+        self._price_delete_in_progress = False
         self._price_error = f"No se pudo borrar la propuesta: {error}"
         if self._current_key == "precios":
             self._show_view("precios")
@@ -2409,8 +2862,9 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 message = f"Propuesta rechazada correctamente.\nOperacion: {review_operation_id}"
             messagebox.showinfo("Cambio de Precios", message)
             self._price_loaded_once = False
+            self._price_next_refresh_source = "automatico"
             if self._content is not None:
-                self._refresh_price_proposals(self._content)
+                self._refresh_price_proposals(self._content, source="automatico")
 
         def finish_error(error: str) -> None:
             status_label.configure(text=f"No se pudo ejecutar la revision: {error}", fg=ROSE)
@@ -2425,7 +2879,15 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         threading.Thread(target=load_preview, daemon=True).start()
 
     def _proposal_line_preview(self, parent: tk.Misc, line: ProposalLine) -> tk.Frame:
-        status = "OK" if line.direction == "up" else "Critical" if line.direction in ("down", "critical") else "Info"
+        status = (
+            "Warning"
+            if line.direction == "warning"
+            else "OK"
+            if line.direction == "up"
+            else "Critical"
+            if line.direction in ("down", "critical")
+            else "Info"
+        )
         frame = tk.Frame(parent, bg=SOFT, highlightbackground=LINE, highlightthickness=1)
         frame.columnconfigure(0, weight=1)
         text = tk.Frame(frame, bg=SOFT)
@@ -2487,13 +2949,10 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             notice.pack(fill=tk.X, pady=(0, 12))
 
         available_items = list(self._price_available_items or self._inventory_items)
-        item_rows = [(item.code, self._price_display_name_for_inventory_item(item), item.price) for item in available_items]
-        if not item_rows and not self._price_items_loading:
+        results = self._price_search_results or self._price_results_from_items(available_items)
+        if not results and not self._price_items_loading:
             self._price_items_error = self._price_items_error or "No hay items reales cargados para anadir a propuestas. Usa Buscar o Recargar."
-        variations_host = tk.Frame(left, bg=BG)
-        self._price_pick_table(left, "Items", item_rows, include_all=False, update_variations=True, variation_parent=variations_host)
-        variations_host.pack(fill=tk.BOTH, expand=True)
-        self._render_price_variations_picker(variations_host)
+        self._price_items_pick_list(left, results)
 
         panel = self._card(right)
         panel.pack(fill=tk.BOTH, expand=True)
@@ -2517,20 +2976,31 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         list_window = list_canvas.create_window((0, 0), window=list_host, anchor="nw")
         list_host.bind("<Configure>", lambda _event: list_canvas.configure(scrollregion=list_canvas.bbox("all")))
         list_canvas.bind("<Configure>", lambda event: list_canvas.itemconfigure(list_window, width=event.width))
-        if not self._price_edit_lines:
+        model_entries = self._price_model_entries()
+        self._price_rendered_model_keys = tuple(entry["key"] for entry in model_entries)
+        self._price_rendered_model_types = tuple(
+            (entry["key"], str(entry["source"].get("item_kind") or "").strip().lower())
+            for entry in model_entries
+        )
+        if not model_entries:
             tk.Label(list_host, text="Esta propuesta no tiene items.", bg=CARD, fg=MUTED).pack(anchor=tk.W, pady=10)
         else:
-            for line in self._price_edit_lines:
-                self._proposal_edit_line(list_host, line).pack(fill=tk.X, pady=5)
+            for entry in model_entries:
+                self._proposal_edit_line(list_host, entry["line"]).pack(fill=tk.X, pady=5)
 
         footer = tk.Frame(panel, bg=CARD, highlightbackground=SOFT, highlightthickness=1)
         footer.pack(fill=tk.X, side=tk.BOTTOM, padx=16, pady=16)
-        self._status_chip(footer, f"{len(self._price_edit_lines)} items en propuesta", "Info").pack(side=tk.LEFT, padx=12, pady=12)
-        self._button(footer, "Guardar cambios", primary=True, command=self._save_price_edit).pack(side=tk.RIGHT, padx=(6, 12), pady=12)
-        self._button(footer, "Cancelar", command=lambda: (self._price_reset_edit_state(), self._set_price_mode("saved"))).pack(side=tk.RIGHT, padx=6, pady=12)
+        self._status_chip(footer, f"{len(model_entries)} items en propuesta", "Info").pack(side=tk.LEFT, padx=12, pady=12)
+        save_button = self._button(footer, "Guardar cambios", primary=True, command=self._save_price_edit)
+        save_button.configure(state=tk.DISABLED if self._price_save_in_progress else tk.NORMAL)
+        save_button.pack(side=tk.RIGHT, padx=(6, 12), pady=12)
+        self._button(footer, "Cancelar", command=self._cancel_price_edit).pack(side=tk.RIGHT, padx=6, pady=12)
 
     def _refresh_price_edit_items(self, parent: tk.Frame, query: str = "", allow_empty: bool = True) -> None:
+        if self._price_items_loading:
+            return
         query = (query or "").strip()
+        self._price_edit_notice = ""
         if not query and not allow_empty:
             self._price_items_error = "Introduce texto para buscar items reales."
             if self._current_key == "precios" and parent.winfo_exists():
@@ -2545,6 +3015,10 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         self._price_search_query = query
         self._price_items_error = ""
         self._price_items_loading = True
+        overlay = self._price_start_working_overlay(
+            "Buscando artículos",
+            "Buscando artículos, variaciones y packs…",
+        )
         if self._current_key == "precios" and parent.winfo_exists():
             self._show_view("precios")
 
@@ -2559,16 +3033,18 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                         rows = self._merge_inventory_rows([server_rows, self._accent_insensitive_inventory_search(all_rows, query)])
                 else:
                     rows = list_cloud_inventory_items(self._cloud_session, limit=150)
+                rows = self._price_unified_search_rows(rows)
                 items = [self._inventory_item_from_cloud_row(row) for row in rows]
                 error = "Sin resultados reales para esa busqueda." if query and not items else ("No hay items reales visibles en Supabase." if not items else "")
-                self.after(0, lambda: self._finish_price_edit_items(items, error))
+                self.after(0, lambda: (self._price_stop_working_overlay(overlay), self._finish_price_edit_items(items, error)))
             except Exception as exc:
-                self.after(0, lambda exc=exc: self._finish_price_edit_items([], f"No se pudieron cargar items reales: {exc}"))
+                self.after(0, lambda exc=exc: (self._price_stop_working_overlay(overlay), self._finish_price_edit_items([], f"No se pudieron cargar items reales: {exc}")))
 
         threading.Thread(target=worker, daemon=True).start()
 
     def _finish_price_edit_items(self, items: list[InventoryItem], error: str) -> None:
         self._price_available_items = list(items)
+        self._price_search_results = self._price_results_from_items(items)
         self._price_items_error = error
         self._price_items_loading = False
         self._price_line_sources = {
@@ -2580,6 +3056,128 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             self._price_edit_selected_code = items[0].code
         if self._current_key == "precios":
             self._show_view("precios")
+
+    def _price_result_type(self, item: InventoryItem) -> str:
+        if self._price_inventory_item_is_pack(item):
+            return "Pack"
+        source = self._price_source_from_inventory_item(item)
+        raw_type = str((item.raw or {}).get("item_record_type") or "").strip().lower()
+        if source.get("item_kind") == "variation" or raw_type in {"variation", "woo_variation"}:
+            return "Variación"
+        return "Simple"
+
+    def _price_result_key(self, item: InventoryItem) -> str:
+        source = self._price_source_from_inventory_item(item)
+        if source:
+            return f"{source.get('item_kind')}:{source.get('woo_id')}"
+        return f"{self._price_result_type(item)}:{item.code}"
+
+    def _price_results_from_items(self, items: list[InventoryItem]) -> list[dict[str, Any]]:
+        groups: dict[str, list[dict[str, Any]]] = {"Simple": [], "Variación": [], "Pack": []}
+        seen: set[str] = set()
+        for item in items:
+            key = self._price_result_key(item)
+            if key in seen:
+                continue
+            seen.add(key)
+            result_type = self._price_result_type(item)
+            groups[result_type].append({
+                "key": key,
+                "code": item.code,
+                "type": result_type,
+                "name": self._price_display_name_for_inventory_item(item),
+                "price": item.price,
+                "item": item,
+                "source": self._price_source_from_inventory_item(item),
+            })
+        return [*groups["Simple"], *groups["Variación"], *groups["Pack"]]
+
+    def _price_unified_search_rows(self, inventory_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Une bases, variaciones Woo y packs con orden estable y sin consultas por fila."""
+        base_rows: list[dict[str, Any]] = []
+        direct_variation_rows: list[dict[str, Any]] = []
+        pack_rows: list[dict[str, Any]] = []
+        parent_woo_ids: set[int] = set()
+        existing_sources: set[tuple[str, int]] = set()
+
+        for raw_row in inventory_rows:
+            row = dict(raw_row)
+            record_type = str(row.get("item_record_type") or row.get("hub_search_record_type") or "").strip().lower()
+            if record_type in {"woo_pack", "manual_pack"} or self._price_inventory_item_is_pack(self._inventory_item_from_cloud_row(row)):
+                pack_rows.append(row)
+                continue
+            kind = str(row.get("woo_item_kind") or "").strip().lower()
+            try:
+                woo_id = int(row.get("woo_id"))
+            except Exception:
+                woo_id = 0
+            try:
+                parent_id = int(row.get("woo_parent_id"))
+            except Exception:
+                parent_id = 0
+            if kind == "variation":
+                direct_variation_rows.append(row)
+                if woo_id > 0:
+                    existing_sources.add(("variation", woo_id))
+                if parent_id > 0:
+                    parent_woo_ids.add(parent_id)
+            else:
+                base_rows.append(row)
+                if kind == "product" and woo_id > 0:
+                    existing_sources.add(("product", woo_id))
+                    parent_woo_ids.add(woo_id)
+
+        variation_rows: list[dict[str, Any]] = list(direct_variation_rows)
+        if parent_woo_ids and self._cloud_session is not None:
+            try:
+                response = (
+                    self._cloud_session.client.table("product_variations")
+                    .select("woo_id,parent_woo_id,parent_name,sku,price,regular_price,sale_price,attributes_label,status")
+                    .in_("parent_woo_id", sorted(parent_woo_ids))
+                    .order("parent_woo_id")
+                    .order("woo_id")
+                    .limit(500)
+                    .execute()
+                )
+                for raw_variation in getattr(response, "data", None) or []:
+                    try:
+                        woo_id = int(raw_variation.get("woo_id"))
+                    except Exception:
+                        continue
+                    if ("variation", woo_id) in existing_sources:
+                        continue
+                    row = dict(raw_variation)
+                    parent_name = str(row.get("parent_name") or "Producto").strip()
+                    label = str(row.get("attributes_label") or row.get("sku") or "variacion").strip()
+                    price = row.get("price")
+                    if price in (None, ""):
+                        price = row.get("regular_price") if row.get("regular_price") not in (None, "") else row.get("sale_price")
+                    row.update({
+                        "item_id": str(woo_id),
+                        "name": f"{parent_name} - {label}",
+                        "woo_id": woo_id,
+                        "woo_parent_id": row.get("parent_woo_id"),
+                        "woo_item_kind": "variation",
+                        "woo_price": price,
+                        "woo_sku": row.get("sku"),
+                        "item_record_type": "woo_variation",
+                    })
+                    existing_sources.add(("variation", woo_id))
+                    variation_rows.append(row)
+            except Exception:
+                variation_rows = list(direct_variation_rows)
+
+        ordered = [*base_rows, *variation_rows, *pack_rows]
+        unique: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for row in ordered:
+            item = self._inventory_item_from_cloud_row(row)
+            key = self._price_result_key(item)
+            if key in seen:
+                continue
+            seen.add(key)
+            unique.append(row)
+        return unique
 
     def _price_source_from_inventory_item(self, item: InventoryItem) -> dict[str, Any]:
         kind = (item.woo_item_kind or "").strip().lower()
@@ -2593,9 +3191,21 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 woo_id = int((item.raw or {}).get("woo_id")) if item.raw else 0
             except Exception:
                 woo_id = 0
-        if kind not in {"product", "variation"} or woo_id <= 0:
+        if woo_id <= 0:
             return {}
-        return {"item_kind": kind, "woo_id": woo_id, "item_id": item.code}
+        raw = item.raw or {}
+        if self._price_inventory_item_is_pack(item):
+            kind = "pack"
+        if kind not in {"product", "variation", "pack"}:
+            return {}
+        return {
+            "item_kind": kind,
+            "woo_id": woo_id,
+            "item_id": item.code,
+            "hub_item_code": str(raw.get("hub_item_code") or item.code or ""),
+            "item_snapshot": dict(raw),
+            "product_type": str(raw.get("type") or raw.get("woo_product_type") or "").strip().lower(),
+        }
 
     def _price_variation_rows_for_selected(self) -> list[tuple[str, str, str]]:
         selected = self._price_edit_selected_code
@@ -2670,9 +3280,18 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         if title == "Items":
             self._price_items_pick_list(
                 parent,
-                rows,
-                update_variations=update_variations,
-                variation_parent=variation_parent,
+                [
+                    {
+                        "key": f"Simple:{code}",
+                        "code": code,
+                        "type": "Simple",
+                        "name": name,
+                        "price": price,
+                        "item": None,
+                        "source": self._price_line_sources.get(code) or {},
+                    }
+                    for code, name, price in rows
+                ],
             )
             return
 
@@ -2750,27 +3369,20 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
     def _price_items_pick_list(
         self,
         parent: tk.Misc,
-        rows: list[tuple[str, str, str]],
-        *,
-        update_variations: bool,
-        variation_parent: tk.Misc | None,
+        results: list[dict[str, Any]],
     ) -> None:
-        """Selector Items con altura variable por fila.
-
-        ttk.Treeview solo permite rowheight global por estilo. Esta lista localizada
-        usa widgets por resultado para que simples sean compactos y packs multilinea.
-        """
+        """Tabla unificada Base -> Variaciones -> Packs con controles persistentes."""
         card = self._card(parent)
-        card.pack(fill=tk.X, pady=(0, 12))
-        tk.Label(card, text="Items", bg=CARD, fg=TEXT, font=("Segoe UI", 14, "bold")).pack(anchor=tk.W, padx=16, pady=(16, 8))
+        card.pack(fill=tk.BOTH, expand=True)
 
         header = tk.Frame(card, bg=SOFT, highlightbackground=LINE, highlightthickness=1)
-        header.pack(fill=tk.X, padx=16)
-        header.columnconfigure(1, weight=1)
+        header.pack(fill=tk.X, padx=16, pady=(16, 0))
+        header.columnconfigure(2, weight=1)
         for column, text, width, anchor in (
-            (0, "ID", 12, tk.CENTER),
-            (1, "Nombre", 1, tk.W),
-            (2, "Precio", 10, tk.CENTER),
+            (0, "ID", 14, tk.CENTER),
+            (1, "Tipo", 11, tk.CENTER),
+            (2, "Nombre", 1, tk.W),
+            (3, "Precio", 11, tk.CENTER),
         ):
             tk.Label(
                 header,
@@ -2784,54 +3396,72 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 pady=7,
             ).grid(row=0, column=column, sticky="ew")
 
-        viewport_height = self._price_items_viewport_height(rows)
-        viewport = tk.Frame(card, bg=CARD, height=viewport_height)
-        viewport.pack(fill=tk.X, padx=16)
-        viewport.pack_propagate(False)
+        viewport = tk.Frame(card, bg=CARD)
+        viewport.pack(fill=tk.BOTH, expand=True, padx=16)
         viewport.rowconfigure(0, weight=1)
         viewport.columnconfigure(0, weight=1)
-        canvas = tk.Canvas(viewport, bg=CARD, highlightthickness=0, height=viewport_height)
-        scrollbar = ttk.Scrollbar(viewport, orient=tk.VERTICAL, command=canvas.yview)
+        canvas = tk.Canvas(viewport, bg=CARD, highlightthickness=0)
+        vertical_scroll = ttk.Scrollbar(viewport, orient=tk.VERTICAL, command=canvas.yview)
+        horizontal_scroll = ttk.Scrollbar(viewport, orient=tk.HORIZONTAL, command=canvas.xview)
         list_host = tk.Frame(canvas, bg=CARD)
         list_host.columnconfigure(0, weight=1)
         list_window = canvas.create_window((0, 0), window=list_host, anchor="nw")
-        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.configure(yscrollcommand=vertical_scroll.set, xscrollcommand=horizontal_scroll.set)
         canvas.grid(row=0, column=0, sticky="nsew")
-        scrollbar.grid(row=0, column=1, sticky="ns")
+        vertical_scroll.grid(row=0, column=1, sticky="ns")
+        horizontal_scroll.grid(row=1, column=0, sticky="ew")
         list_host.bind("<Configure>", lambda _event: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.bind("<Configure>", lambda event: canvas.itemconfigure(list_window, width=event.width))
+        canvas.bind("<Configure>", lambda event: canvas.itemconfigure(list_window, width=max(event.width, 720)))
         canvas.bind("<MouseWheel>", lambda event: canvas.yview_scroll(int(-1 * (event.delta / 120)), "units"))
 
-        selected_code = self._price_edit_selected_code if any(row[0] == self._price_edit_selected_code for row in rows) else (rows[0][0] if rows else "")
-        selected_var = tk.StringVar(value=selected_code)
+        selected_key = ""
+        for result in results:
+            if result.get("code") == self._price_edit_selected_code:
+                selected_key = str(result.get("key") or "")
+                break
+        selected_var = tk.StringVar(value=selected_key)
         row_widgets: dict[str, tk.Frame] = {}
 
         def selected_rows() -> list[tuple[str, str, str]]:
             selected = selected_var.get()
-            return [row for row in rows if row[0] == selected][:1]
+            for result in results:
+                if str(result.get("key") or "") == selected:
+                    return [(
+                        str(result.get("code") or ""),
+                        str(result.get("name") or ""),
+                        str(result.get("price") or ""),
+                    )]
+            return []
 
-        def select_row(row: tuple[str, str, str]) -> None:
-            selected_var.set(row[0])
-            for code, widget in row_widgets.items():
-                row_bg = INDIGO_SOFT if code == row[0] else CARD
+        def select_row(result: dict[str, Any]) -> None:
+            key = str(result.get("key") or "")
+            selected_var.set(key)
+            self._price_edit_selected_code = str(result.get("code") or "")
+            if self._price_classify_result(result)[0] == "VÁLIDO":
+                self._price_edit_notice = ""
+            for row_key, widget in row_widgets.items():
+                row_bg = INDIGO_SOFT if row_key == key else CARD
                 widget.configure(bg=row_bg)
                 for child in widget.winfo_children():
                     child.configure(bg=row_bg)
-            if update_variations and row[0] != self._price_edit_selected_code:
-                self._price_edit_selected_code = row[0]
-                if variation_parent is not None:
-                    self._render_price_variations_picker(variation_parent)
+            add_button.configure(state=tk.NORMAL)
 
-        if not rows:
+        if not results:
             tk.Label(list_host, text="Sin resultados", bg=CARD, fg=MUTED, anchor=tk.W, padx=10, pady=10).grid(row=0, column=0, sticky="ew")
 
-        for index, row in enumerate(rows):
-            visible_name = self._price_pick_table_display_name(row[1])
-            row_bg = INDIGO_SOFT if row[0] == selected_var.get() else CARD
+        for index, result in enumerate(results):
+            key = str(result.get("key") or "")
+            visible_name = self._price_pick_table_display_name(str(result.get("name") or ""))
+            eligibility = self._price_classify_result(result)[0]
+            visible_type = str(result.get("type") or "")
+            if eligibility == "ERROR":
+                visible_type = f"{visible_type} · No publicable"
+            row_bg = INDIGO_SOFT if key == selected_var.get() else CARD
             item = tk.Frame(list_host, bg=row_bg, highlightbackground=LINE, highlightthickness=1, cursor="hand2")
             item.grid(row=index, column=0, sticky="ew")
-            item.columnconfigure(1, weight=1)
-            tk.Label(item, text=row[0], bg=row_bg, fg=TEXT, width=12, anchor=tk.CENTER, padx=8, pady=5).grid(row=0, column=0, sticky="nsew")
+            item.columnconfigure(2, weight=1)
+            tk.Label(item, text=result.get("code"), bg=row_bg, fg=TEXT, width=14, anchor=tk.CENTER, padx=8, pady=5).grid(row=0, column=0, sticky="nsew")
+            tk.Label(item, text=visible_type, bg=row_bg, fg=ROSE if eligibility == "ERROR" else MUTED, width=18, anchor=tk.CENTER, padx=8, pady=5).grid(row=0, column=1, sticky="nsew")
             tk.Label(
                 item,
                 text=visible_name,
@@ -2841,41 +3471,349 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 justify=tk.LEFT,
                 padx=8,
                 pady=5,
-            ).grid(row=0, column=1, sticky="nsew")
-            tk.Label(item, text=row[2], bg=row_bg, fg=TEXT, width=10, anchor=tk.CENTER, padx=8, pady=5).grid(row=0, column=2, sticky="nsew")
-            row_widgets[row[0]] = item
+            ).grid(row=0, column=2, sticky="nsew")
+            tk.Label(item, text=result.get("price"), bg=row_bg, fg=TEXT, width=11, anchor=tk.CENTER, padx=8, pady=5).grid(row=0, column=3, sticky="nsew")
+            row_widgets[key] = item
             for widget in (item, *item.winfo_children()):
-                widget.bind("<Button-1>", lambda _event, row=row: select_row(row), add="+")
+                widget.bind("<Button-1>", lambda _event, result=result: select_row(result), add="+")
 
         footer = tk.Frame(card, bg=CARD)
         footer.pack(fill=tk.X, padx=16, pady=(10, 16))
         tk.Label(footer, text="Subida %", bg=CARD, fg=MUTED, font=("Segoe UI", 8, "bold")).pack(side=tk.LEFT, padx=(0, 6))
-        percent_entry = tk.Entry(footer, width=8, bg=CARD, fg=TEXT, relief=tk.FLAT, highlightbackground=LINE, highlightcolor=INDIGO, highlightthickness=1)
+        percent_entry = tk.Entry(footer, width=8, bg=CARD, fg=TEXT, relief=tk.SOLID, borderwidth=1, highlightbackground=LINE, highlightcolor=INDIGO, highlightthickness=1)
         percent_entry.pack(side=tk.LEFT, ipady=7, padx=(0, 12))
         tk.Label(footer, text="Valor", bg=CARD, fg=MUTED, font=("Segoe UI", 8, "bold")).pack(side=tk.LEFT, padx=(0, 6))
-        exact_entry = tk.Entry(footer, width=10, bg=CARD, fg=TEXT, relief=tk.FLAT, highlightbackground=LINE, highlightcolor=INDIGO, highlightthickness=1)
+        exact_entry = tk.Entry(footer, width=10, bg=CARD, fg=TEXT, relief=tk.SOLID, borderwidth=1, highlightbackground=LINE, highlightcolor=INDIGO, highlightthickness=1)
         exact_entry.pack(side=tk.LEFT, ipady=7, padx=(0, 12))
         tk.Frame(footer, bg=CARD).pack(side=tk.LEFT, fill=tk.X, expand=True)
 
         def add_selected() -> None:
             self._price_add_rows_to_proposal(selected_rows(), percent_entry.get(), exact_entry.get())
 
-        self._button(footer, "Anadir", command=add_selected).pack(side=tk.RIGHT, padx=(6, 0))
+        add_all_button = self._button(
+            footer,
+            "Añadir todos",
+            primary=True,
+            command=lambda: self._open_price_bulk_add_preview(results, percent_entry.get(), exact_entry.get()),
+        )
+        add_all_button.configure(state=tk.NORMAL if self._price_search_query.strip() and results else tk.DISABLED, disabledforeground="#CBD5E1")
+        add_all_button.pack(side=tk.RIGHT, padx=(6, 0), ipadx=8)
+        add_button = self._button(footer, "Añadir", primary=True, command=add_selected)
+        add_button.configure(state=tk.NORMAL if selected_var.get() else tk.DISABLED, disabledforeground="#CBD5E1")
+        add_button.pack(side=tk.RIGHT, padx=(6, 0))
         for item in row_widgets.values():
             for widget in (item, *item.winfo_children()):
                 widget.bind("<Double-Button-1>", lambda _event: add_selected(), add="+")
 
+    def _price_adjustment_mode(self, percent_text: str, exact_text: str) -> tuple[str, str]:
+        percent = (percent_text or "").strip()
+        exact = (exact_text or "").strip()
+        if percent and exact:
+            raise ValueError(
+                "No se pueden usar Subida % y Valor al mismo tiempo.\n"
+                "Vacía uno de los dos campos para continuar."
+            )
+        if not percent and not exact:
+            raise ValueError("Introduce una Subida % o un Valor para continuar.")
+        return ("Subida %", percent) if percent else ("Valor", exact)
+
+    def _price_classify_result(self, result: dict[str, Any]) -> tuple[str, str, float | None]:
+        item = result.get("item")
+        raw = item.raw if isinstance(item, InventoryItem) and isinstance(item.raw, dict) else {}
+        source = result.get("source") or {}
+        result_type = str(result.get("type") or "Simple")
+        product_type = str(raw.get("type") or raw.get("woo_product_type") or "").strip().lower()
+        price_text = str(result.get("price") or "").strip()
+
+        if result_type == "Pack" and not source:
+            return "EXCLUIDO", "Pack pendiente de logica masiva", None
+        if source.get("item_kind") == "product" and product_type in {"variable", "variable-subscription"}:
+            return "ERROR", "Producto padre sin precio único", None
+        if price_text.lower() in {"", "-", "pendiente", "none", "null"}:
+            return "ERROR", "Precio Woo pendiente o no calculable.", None
+        try:
+            price = self._price_parse_money(price_text)
+        except ValueError:
+            return "ERROR", "Precio Woo pendiente o no calculable.", None
+        if price <= 0 and source.get("item_kind") == "product":
+            return "ERROR", "Precio Woo pendiente o no calculable.", None
+        return "VÁLIDO", "Resultado elegible.", price
+
+    def _price_build_bulk_preview(
+        self,
+        results: list[dict[str, Any]],
+        percent_text: str,
+        exact_text: str,
+    ) -> dict[str, Any]:
+        mode, applied_value = self._price_adjustment_mode(percent_text, exact_text)
+        self._price_model_entries()
+        existing_keys = set(self.__dict__.get("_price_proposal_model") or {})
+        preview_rows: list[dict[str, Any]] = []
+        counts = {
+            "valid": 0,
+            "warnings": 0,
+            "errors": 0,
+            "existing": 0,
+            "packs_included": 0,
+            "packs_excluded": 0,
+        }
+
+        for result in results:
+            code = str(result.get("code") or "")
+            result_type = str(result.get("type") or "Simple")
+            status = "VÁLIDO"
+            reason = "Precio valido."
+            old_price: float | None = None
+            new_price: float | None = None
+            line: ProposalLine | None = None
+            eligibility, eligibility_reason, eligible_price = self._price_classify_result(result)
+            if str(result.get("key") or "") in existing_keys:
+                status = "YA EXISTE"
+                reason = "Ya presente en la propuesta."
+                counts["existing"] += 1
+            elif eligibility in {"ERROR", "EXCLUIDO"}:
+                status = eligibility
+                reason = eligibility_reason
+                if eligibility == "EXCLUIDO" and result_type == "Pack":
+                    counts["packs_excluded"] += 1
+                else:
+                    counts["errors"] += 1
+            else:
+                try:
+                    old_price = float(eligible_price)
+                    new_price = self._price_calculate_new_price(old_price, percent_text.strip(), exact_text.strip())
+                    validation, message = self._price_validate_proposed_price(old_price, new_price)
+                    if validation == "Critical":
+                        status = "ERROR"
+                        reason = message
+                        counts["errors"] += 1
+                    else:
+                        direction = "warning" if validation == "Warning" else (
+                            "up" if new_price > old_price else "down" if new_price < old_price else "flat"
+                        )
+                        line = ProposalLine(
+                            code,
+                            str(result.get("name") or ""),
+                            f"{old_price:.2f}",
+                            f"{new_price:.2f}",
+                            self._price_change_label(old_price, new_price),
+                            direction,
+                        )
+                        if validation == "Warning":
+                            status = "WARNING"
+                            reason = message
+                            counts["warnings"] += 1
+                        else:
+                            counts["valid"] += 1
+                        if result_type == "Pack":
+                            counts["packs_included"] += 1
+                except (TypeError, ValueError) as exc:
+                    status = "ERROR"
+                    reason = str(exc)
+                    counts["errors"] += 1
+            preview_rows.append({
+                **result,
+                "old_price_value": old_price,
+                "new_price_value": new_price,
+                "status": status,
+                "reason": reason,
+                "line": line,
+            })
+
+        counts["total_add"] = counts["valid"] + counts["warnings"]
+        accepted_lines = [
+            row for row in preview_rows
+            if row.get("status") in {"VÁLIDO", "WARNING"} and isinstance(row.get("line"), ProposalLine)
+        ]
+        rejected_lines = [
+            row for row in preview_rows
+            if row.get("status") not in {"VÁLIDO", "WARNING"}
+        ]
+        return {
+            "query": self._price_search_query,
+            "mode": mode,
+            "value": applied_value,
+            "rows": preview_rows,
+            "accepted_lines": accepted_lines,
+            "rejected_lines": rejected_lines,
+            "counts": counts,
+        }
+
+    def _open_price_bulk_add_preview(
+        self,
+        results: list[dict[str, Any]],
+        percent_text: str,
+        exact_text: str,
+    ) -> None:
+        if not self._price_search_query.strip() or not results:
+            messagebox.showwarning("Cambio de Precios", "Realiza una busqueda con resultados antes de usar Añadir todos.")
+            return
+        try:
+            preview = self._price_build_bulk_preview(results, percent_text, exact_text)
+        except ValueError as exc:
+            messagebox.showwarning("Cambio de Precios", str(exc))
+            return
+
+        win = tk.Toplevel(self)
+        win.title("Preview - Añadir todos")
+        win.configure(bg=BG)
+        win.transient(self)
+        win.resizable(True, True)
+        win.rowconfigure(1, weight=1)
+        win.columnconfigure(0, weight=1)
+        screen_width = max(1, win.winfo_screenwidth())
+        screen_height = max(1, win.winfo_screenheight())
+        width, height, min_width, min_height = self._price_bulk_preview_dimensions(screen_width, screen_height)
+        win.minsize(min_width, min_height)
+        center_window(win, width, height)
+
+        def cancel_preview(_event: object | None = None) -> None:
+            if not win.winfo_exists():
+                return
+            try:
+                win.grab_release()
+            except tk.TclError:
+                pass
+            win.destroy()
+
+        win.grab_set()
+        summary = tk.Frame(win, bg=CARD, highlightbackground=LINE, highlightthickness=1)
+        summary.grid(row=0, column=0, sticky="ew", padx=16, pady=(16, 10))
+        counts = preview["counts"]
+        summary_text = (
+            f"Busqueda actual: {preview['query']}\n"
+            f"Modo aplicado: {preview['mode']} · Valor aplicado: {preview['value']}\n"
+            f"Resultados encontrados: {len(preview['rows'])} · Articulos validos: {counts['valid']} · "
+            f"Warnings: {counts['warnings']} · Errores: {counts['errors']}\n"
+            f"Ya presentes: {counts['existing']} · Packs incluidos: {counts['packs_included']} · "
+            f"Packs excluidos: {counts['packs_excluded']} · Total que se añadira: {counts['total_add']}"
+        )
+        tk.Label(summary, text=summary_text, bg=CARD, fg=TEXT, justify=tk.LEFT, anchor=tk.W).pack(fill=tk.X, padx=12, pady=12)
+
+        table_host = tk.Frame(win, bg=CARD)
+        table_host.grid(row=1, column=0, sticky="nsew", padx=16)
+        table_host.rowconfigure(0, weight=1)
+        table_host.columnconfigure(0, weight=1)
+        columns = ("id", "type", "name", "old", "new", "status", "reason")
+        tree = ttk.Treeview(table_host, columns=columns, show="headings", height=16)
+        headings = ("ID", "Tipo", "Nombre", "Precio actual", "Nuevo precio", "Estado", "Motivo")
+        widths = (110, 80, 260, 90, 90, 90, 320)
+        for column, heading, width in zip(columns, headings, widths):
+            tree.heading(column, text=heading)
+            tree.column(column, width=width, minwidth=60, anchor=tk.W if column in {"name", "reason"} else tk.CENTER)
+        yscroll = ttk.Scrollbar(table_host, orient=tk.VERTICAL, command=tree.yview)
+        xscroll = ttk.Scrollbar(table_host, orient=tk.HORIZONTAL, command=tree.xview)
+        tree.configure(yscrollcommand=yscroll.set, xscrollcommand=xscroll.set)
+        tree.grid(row=0, column=0, sticky="nsew")
+        yscroll.grid(row=0, column=1, sticky="ns")
+        xscroll.grid(row=1, column=0, sticky="ew")
+        for row in preview["rows"]:
+            tree.insert("", tk.END, values=(
+                row.get("code"),
+                row.get("type"),
+                self._price_pick_table_display_name(str(row.get("name") or "")).replace("\n", " | "),
+                "-" if row.get("old_price_value") is None else f"{row['old_price_value']:.2f}",
+                "-" if row.get("new_price_value") is None else f"{row['new_price_value']:.2f}",
+                row.get("status"),
+                row.get("reason"),
+            ))
+
+        footer = tk.Frame(win, bg=BG, highlightbackground=LINE, highlightthickness=1)
+        footer.grid(row=2, column=0, sticky="ew", padx=16, pady=16)
+        self._button(
+            footer,
+            "Confirmar y añadir",
+            primary=True,
+            command=lambda: self._confirm_price_bulk_add(win, preview),
+        ).pack(side=tk.RIGHT, padx=(8, 12), pady=12, ipadx=8)
+        cancel_button = self._button(footer, "Cancelar", command=cancel_preview)
+        cancel_button.pack(side=tk.RIGHT, pady=12)
+        win.protocol("WM_DELETE_WINDOW", cancel_preview)
+        win.bind("<Escape>", cancel_preview)
+        win.after_idle(cancel_button.focus_set)
+
+    def _price_bulk_preview_dimensions(self, screen_width: int, screen_height: int) -> tuple[int, int, int, int]:
+        """Calcula un modal amplio sin permitir que las acciones salgan de pantalla."""
+        available_width = max(1, int(screen_width) - 80)
+        available_height = max(1, int(screen_height) - 80)
+        width = min(available_width, max(760, int(screen_width * 0.84)))
+        height = min(available_height, max(500, int(screen_height * 0.78)))
+        min_width = min(width, 760)
+        min_height = min(height, 500)
+        return width, height, min_width, min_height
+
+    def _confirm_price_bulk_add(self, win: tk.Toplevel, preview: dict[str, Any]) -> None:
+        if self.__dict__.get("_price_bulk_add_in_progress", False):
+            return
+        self._price_bulk_add_in_progress = True
+        try:
+            win.grab_release()
+        except Exception:
+            pass
+        win.destroy()
+        overlay = self._price_start_working_overlay(
+            "Añadiendo artículos",
+            f"Añadiendo artículos a la propuesta…\nProcesando {len(preview.get('rows') or [])} resultados.",
+        )
+        try:
+            for row in preview.get("accepted_lines") or []:
+                line = row.get("line")
+                if not isinstance(line, ProposalLine):
+                    raise ValueError("Error interno: línea aceptada sin modelo válido.")
+                source = row.get("source") or {}
+                if source:
+                    self._price_model_put(line, source)
+            self._price_sync_legacy_model_views()
+            counts = preview.get("counts") or {}
+            self._price_edit_notice = (
+                f"Añadidos: {counts.get('valid', 0)} · Warnings añadidos: {counts.get('warnings', 0)} · "
+                f"Ya existentes: {counts.get('existing', 0)} · Errores excluidos: {counts.get('errors', 0)} · "
+                f"Packs excluidos: {counts.get('packs_excluded', 0)}"
+            )
+            self._show_view("precios")
+        finally:
+            self._price_stop_working_overlay(overlay)
+            self._price_bulk_add_in_progress = False
+        messagebox.showinfo("Cambio de Precios", self._price_edit_notice)
+
     def _price_add_rows_to_proposal(self, rows: list[tuple[str, str, str]], percent_text: str, exact_text: str) -> None:
+        if self.__dict__.get("_price_add_in_progress", False):
+            return
         if not rows:
             messagebox.showwarning("Cambio de Precios", "Selecciona un item o variacion para anadir.")
             return
+        result_by_code = {
+            str(result.get("code") or ""): result
+            for result in (self.__dict__.get("_price_search_results") or [])
+        }
+        for code, _name, price in rows:
+            result = result_by_code.get(code, {
+                "code": code,
+                "type": "Simple",
+                "price": price,
+                "source": self._price_line_sources.get(code) or {},
+            })
+            status, reason, _effective_price = self._price_classify_result(result)
+            if status in {"ERROR", "EXCLUIDO"}:
+                if reason == "Producto padre sin precio único":
+                    reason = (
+                        "Este producto padre no tiene un precio Woo único.\n"
+                        "Selecciona una variación concreta."
+                    )
+                messagebox.showerror("Cambio de Precios", reason)
+                return
         percent_text = (percent_text or "").strip()
         exact_text = (exact_text or "").strip()
-        if bool(percent_text) == bool(exact_text):
-            messagebox.showwarning("Cambio de Precios", "Usa subida en % o subida por valor, pero no ambas a la vez.")
+        try:
+            self._price_adjustment_mode(percent_text, exact_text)
+        except ValueError as exc:
+            messagebox.showwarning("Cambio de Precios", str(exc))
             return
-        new_lines = list(self._price_edit_lines)
-        duplicates = [row[0] for row in rows if any(line.code == row[0] for line in new_lines)]
+        duplicates = [
+            row[0]
+            for row in rows
+            if any(entry["line"].code == row[0] for entry in self._price_model_entries())
+        ]
         if duplicates:
             answer = messagebox.askyesno(
                 "Item ya incluido",
@@ -2885,7 +3823,11 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 self._price_edit_notice = "Anadido cancelado: item ya existia en la propuesta."
                 self._show_view("precios")
                 return
-            new_lines = [line for line in new_lines if line.code not in set(duplicates)]
+            for key, entry in list(self._price_proposal_model.items()):
+                if entry["line"].code in set(duplicates):
+                    self._price_proposal_model.pop(key, None)
+        self._price_add_in_progress = True
+        overlay = self._price_start_working_overlay("Añadiendo artículo", "Añadiendo artículo a la propuesta…")
         try:
             for code, name, price in rows:
                 old_price = self._price_parse_money(price)
@@ -2903,12 +3845,20 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                             if source:
                                 self._price_line_sources[code] = source
                             break
-                new_lines.append(ProposalLine(code, name, f"{old_price:.2f}", f"{proposed:.2f}", change, direction))
-            self._price_edit_lines = new_lines
-            self._price_edit_notice = f"{len(rows)} item(s) anadidos a la propuesta."
+                source = result_by_code.get(code, {}).get("source") or self._price_line_sources.get(code) or {}
+                if source:
+                    self._price_model_put(
+                        ProposalLine(code, name, f"{old_price:.2f}", f"{proposed:.2f}", change, direction),
+                        source,
+                    )
+            self._price_sync_legacy_model_views()
+            self._price_edit_notice = ""
             self._show_view("precios")
         except ValueError as exc:
             messagebox.showerror("Cambio de Precios", str(exc))
+        finally:
+            self._price_stop_working_overlay(overlay)
+            self._price_add_in_progress = False
 
     def _price_parse_money(self, value: str) -> float:
         try:
@@ -2959,25 +3909,33 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         if not messagebox.askyesno("Borrar item", f"Quitar {line.code} de la propuesta?"):
             return
         self._price_edit_initialized = True
-        self._price_edit_lines = [item for item in self._price_edit_lines if item.code != line.code]
+        for key, entry in list(self._price_proposal_model.items()):
+            if entry["line"] == line:
+                self._price_proposal_model.pop(key, None)
+                break
+        self._price_sync_legacy_model_views()
         self._price_line_sources.pop(line.code, None)
         self._price_edit_notice = f"{line.code} eliminado de la propuesta."
         self._show_view("precios")
 
     def _save_price_edit(self) -> None:
+        if self._price_save_in_progress:
+            return
         proposal_name = ""
-        if hasattr(self, "_price_edit_name_var"):
-            proposal_name = self._price_edit_name_var.get().strip()
+        name_var = self.__dict__.get("_price_edit_name_var")
+        if name_var is not None:
+            proposal_name = name_var.get().strip()
         if not proposal_name:
             messagebox.showwarning("Cambio de Precios", "Pon un nombre a la propuesta antes de guardar.")
             return
-        if not self._price_edit_lines:
+        model_entries = self._price_canonical_snapshot()
+        if not model_entries:
             messagebox.showwarning("Cambio de Precios", "No hay items en la propuesta.")
             return
         if self._cloud_session is None:
             messagebox.showwarning("Cambio de Precios", "Inicia sesion Supabase para guardar propuestas reales.")
             return
-        missing = [line.code for line in self._price_edit_lines if not self._price_line_sources.get(line.code)]
+        missing = [entry["line"].code for entry in model_entries if not entry["source"]]
         if missing:
             messagebox.showwarning(
                 "Cambio de Precios",
@@ -2990,60 +3948,148 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         ):
             return
 
-        lines = list(self._price_edit_lines)
+        entries = tuple(model_entries)
+        self._price_save_in_progress = True
+        self._price_save_token = uuid.uuid4().hex
         self._price_edit_notice = "Guardando propuesta real en Supabase..."
+        overlay = self._price_start_working_overlay(
+            "Guardando propuesta",
+            "Guardando propuesta…\nValidando y registrando los cambios.",
+        )
         self._show_view("precios")
 
         def worker() -> None:
             try:
-                saved: list[str] = []
-                for line in lines:
-                    source = self._price_line_sources.get(line.code) or {}
-                    new_price = self._price_parse_money(line.new_price)
-                    result = create_real_price_proposal(
-                        self._cloud_session,
-                        str(source.get("item_kind") or ""),
-                        int(source.get("woo_id")),
-                        float(new_price),
-                        notes="Creada desde UI-ERP Cambio de Precios.",
-                        acknowledge_price_warning=True,
-                    )
-                    proposal = result.get("proposal") or {}
-                    proposal_id = proposal.get("id")
-                    if proposal_id:
-                        try:
-                            source_row = proposal.get("source_row") if isinstance(proposal.get("source_row"), dict) else {}
-                            source_row.update({
-                                "ui_proposal_name": proposal_name,
-                                "ui_line_code": line.code,
-                                "ui_line_name": line.name,
-                            })
-                            self._cloud_session.client.table("price_change_proposals").update({
-                                "source_row": source_row,
-                                "notes": f"Propuesta UI: {proposal_name}",
-                            }).eq("id", proposal_id).execute()
-                        except Exception:
-                            pass
-                    saved.append(str(proposal_id or source.get("woo_id") or line.code))
-                self.after(0, lambda: self._finish_price_edit_saved(saved))
+                saved, counts = self._price_validate_and_persist_entries(
+                    entries,
+                    proposal_name,
+                    self._price_save_token,
+                )
+                self.after(0, lambda: self._finish_price_edit_saved(saved, counts, overlay))
             except Exception as exc:
-                self.after(0, lambda exc=exc: self._finish_price_edit_save_error(str(exc)))
+                self.after(0, lambda exc=exc: self._finish_price_edit_save_error(str(exc), overlay))
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def _finish_price_edit_saved(self, saved: list[str]) -> None:
-        messagebox.showinfo("Cambio de Precios", f"Propuesta guardada correctamente. Items guardados: {len(saved)}")
+    def _price_validate_and_persist_entries(
+        self,
+        entries: tuple[dict[str, Any], ...],
+        proposal_name: str,
+        save_token: str,
+    ) -> tuple[list[str], dict[str, int]]:
+        """Valida y persiste una copia inmutable del modelo canónico."""
+        plan: list[tuple[ProposalLine, dict[str, Any], float]] = []
+        settings = load_settings()
+        visible_entries = self._price_canonical_snapshot()
+        visible_keys = tuple(entry["key"] for entry in visible_entries)
+        entry_keys = tuple(entry["key"] for entry in entries)
+        if len(entries) != len(visible_entries) or entry_keys != visible_keys:
+            raise ValueError(
+                "Error interno de integridad de propuesta: "
+                f"visibles={len(visible_entries)} modelo={len(entries)}."
+            )
+        for entry in entries:
+            line = entry["line"]
+            source = entry["source"]
+            kind = str(source.get("item_kind") or "").strip().lower()
+            expected_key = f"{kind}:{int(source.get('woo_id'))}"
+            if entry.get("key") != expected_key:
+                raise ValueError(
+                    "Error interno de integridad: "
+                    f"la clave {entry.get('key')} no conserva el tipo {kind}."
+                )
+            woo_id = int(source.get("woo_id"))
+            new_price = self._price_parse_money(line.new_price)
+            preview = preview_real_price_proposal(
+                self._cloud_session,
+                kind,
+                woo_id,
+                float(new_price),
+                notes="Validación previa UI-ERP Cambio de Precios.",
+                settings=settings,
+                item_snapshot=source.get("item_snapshot"),
+            )
+            safety = preview.get("price_safety") or {}
+            if safety.get("status") == "ERROR":
+                messages = "\n".join(str(message) for message in safety.get("messages") or [])
+                raise ValueError(
+                    "Validación de precio bloqueada.\n"
+                    f"Línea: {line.code} [{kind}] {line.name}\n"
+                    f"{messages}".strip()
+                )
+            plan.append((line, source, float(new_price)))
+
+        validated_keys = tuple(self._price_model_key(line, source) for line, source, _price in plan)
+        if validated_keys != entry_keys:
+            raise ValueError(
+                "Error interno de integridad de propuesta: "
+                "los IDs visibles y validados no coinciden."
+            )
+
+        saved: list[str] = []
+        counts = {"up": 0, "down": 0, "flat": 0}
+        for line, source, new_price in plan:
+            result = create_real_price_proposal(
+                self._cloud_session,
+                str(source.get("item_kind") or ""),
+                int(source.get("woo_id")),
+                new_price,
+                notes="Creada desde UI-ERP Cambio de Precios.",
+                acknowledge_price_warning=True,
+                proposal_id=str(source.get("proposal_id")) if source.get("proposal_id") else None,
+                source_row_updates={
+                    "ui_proposal_name": proposal_name,
+                    "ui_line_code": line.code,
+                    "ui_line_name": line.name,
+                    "ui_save_token": save_token,
+                    "ui_canonical_item_kind": str(source.get("item_kind") or ""),
+                    "ui_canonical_woo_id": int(source.get("woo_id")),
+                    "ui_hub_item_code": str(source.get("hub_item_code") or ""),
+                },
+                item_snapshot=source.get("item_snapshot"),
+            )
+            proposal = result.get("proposal") or {}
+            proposal_id = proposal.get("id")
+            saved.append(str(proposal_id or source.get("woo_id") or line.code))
+            direction = "up" if line.direction == "up" else "down" if line.direction == "down" else "flat"
+            counts[direction] += 1
+        return saved, counts
+
+    def _finish_price_edit_saved(self, saved: list[str], counts: dict[str, int] | None = None, overlay: tk.Toplevel | None = None) -> None:
+        self._price_stop_working_overlay(overlay)
+        self._price_save_in_progress = False
+        counts = counts or {"up": 0, "down": 0, "flat": 0}
+        messagebox.showinfo(
+            "Cambio de Precios",
+            "Propuesta guardada correctamente.\n"
+            f"Items: {len(saved)}\n"
+            f"Suben: {counts.get('up', 0)}\n"
+            f"Bajan: {counts.get('down', 0)}\n"
+            f"Sin cambio: {counts.get('flat', 0)}",
+        )
         self._price_reset_edit_state()
         self._price_loaded_once = False
+        self._price_refresh_preferred_token = self._price_save_token
+        self._price_next_refresh_source = "guardado"
         self._set_price_mode("saved")
 
-    def _finish_price_edit_save_error(self, error: str) -> None:
+    def _finish_price_edit_save_error(self, error: str, overlay: tk.Toplevel | None = None) -> None:
+        self._price_stop_working_overlay(overlay)
+        self._price_save_in_progress = False
         self._price_edit_notice = f"No se pudo guardar la propuesta real: {error}"
         if self._current_key == "precios":
             self._show_view("precios")
 
     def _proposal_edit_line(self, parent: tk.Misc, line: ProposalLine) -> tk.Frame:
-        status = "OK" if line.direction == "up" else "Critical" if line.direction in ("down", "critical") else "Info"
+        status = (
+            "Warning"
+            if line.direction == "warning"
+            else "OK"
+            if line.direction == "up"
+            else "Critical"
+            if line.direction in ("down", "critical")
+            else "Info"
+        )
         frame = tk.Frame(parent, bg=SOFT, highlightbackground=LINE, highlightthickness=1)
         frame.columnconfigure(0, weight=1)
 

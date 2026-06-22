@@ -117,7 +117,7 @@ def _proposal_item_snapshot(proposal: dict[str, Any]) -> dict[str, Any]:
 def _fetch_cloud_item_for_proposal(session, proposal: dict[str, Any]) -> dict[str, Any]:
     kind = (proposal.get("item_kind") or "").strip().lower()
     woo_id = int(proposal.get("item_woo_id") or proposal.get("local_id") or 0)
-    if kind in {"product", "variation"} and woo_id:
+    if kind in {"product", "variation", "pack"} and woo_id:
         try:
             return _fetch_cloud_item_for_price(session, kind, woo_id)
         except Exception:
@@ -141,7 +141,7 @@ def _fetch_woo_item_readonly(client: WooCommerceClient, session, proposal: dict[
     woo_id = int(proposal.get("item_woo_id") or proposal.get("local_id") or 0)
     if not woo_id:
         return None
-    if kind == "product":
+    if kind in {"product", "pack"}:
         return client.get(f"products/{woo_id}").json()
     if kind == "variation":
         cloud_item = _fetch_cloud_item_for_proposal(session, proposal)
@@ -439,7 +439,7 @@ def publish_woocommerce_price(session, *, proposal_id: str, confirm: str = "", a
         _ensure_snapshot_persisted(session, publish_snapshot)
 
         pricing_payload, pricing_strategy = _pricing_payload_for_effective_price(woo_before or {}, float(new_price))
-        if kind == "product":
+        if kind in {"product", "pack"}:
             woo_put_response = client.update_product_pricing(woo_id, pricing_payload)
             woo_written = True
             woo_verified = _fetch_woo_item_readonly(client, session, proposal)
@@ -463,7 +463,7 @@ def publish_woocommerce_price(session, *, proposal_id: str, confirm: str = "", a
                 "sale_price": str((woo_before or {}).get("sale_price") or ""),
             }
             try:
-                if kind == "product":
+                if kind in {"product", "pack"}:
                     client.update_product_pricing(woo_id, rollback_payload)
                 else:
                     client.update_variation_pricing(int(parent_id), woo_id, rollback_payload)

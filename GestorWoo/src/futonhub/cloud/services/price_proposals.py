@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from hashlib import sha256
 from typing import Any
 
 from futonhub.cloud.audit import AuditEvent, CloudAuditError, OperationSnapshot, new_operation_id, write_audit_event, write_snapshot
@@ -40,9 +41,199 @@ def _truthy_source_flag(value: Any) -> bool:
     return False
 
 
+def _source_flag_category(source: dict[str, Any], key: str) -> str:
+    if key not in source:
+        return "absent"
+    value = source.get(key)
+    if value is None:
+        return "null"
+    if type(value) is bool:
+        return "bool_true" if value else "bool_false"
+    if type(value) in (int, float):
+        if value == 0:
+            return "number_0"
+        if value == 1:
+            return "number_1"
+        return "number_other"
+    if isinstance(value, str):
+        text = value.strip()
+        lowered = text.lower()
+        if not text:
+            return "string_empty"
+        if lowered == "false":
+            return "string_false"
+        if lowered == "true":
+            return "string_true"
+        return "string_other"
+    return f"other_type:{type(value).__name__}"
+
+
+def _safe_actor_reference(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    return f"actor:{sha256(text.encode('utf-8')).hexdigest()[:10]}" if text else "-"
+
+
 def _is_ui_deleted(row: dict[str, Any]) -> bool:
     source = _source_row_dict(row)
     return _truthy_source_flag(source.get("ui_deleted"))
+
+
+def _price_proposal_logical_identity(row: dict[str, Any]) -> tuple[str, str]:
+    source = _source_row_dict(row)
+    for key in (
+        "ui_save_token",
+        "ui_proposal_id",
+        "proposal_group_id",
+        "group_id",
+        "batch_id",
+        "operation_id",
+    ):
+        value = source.get(key) or row.get(key)
+        if value not in (None, ""):
+            return key, str(value)
+    return "id", str(row.get("id") or "")
+
+
+def analyze_price_proposal_soft_deletes(
+    rows: list[dict[str, Any]],
+    audit_rows: list[dict[str, Any]] | None = None,
+    snapshot_rows: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    """Agrupa soft-deletes de propuestas sin modificar datos."""
+    audit_by_operation = {
+        str(row.get("operation_id") or ""): row
+        for row in (audit_rows or [])
+        if row.get("operation_id")
+    }
+    snapshots_by_operation: dict[str, list[dict[str, Any]]] = {}
+    for row in snapshot_rows or []:
+        operation_id = str(row.get("operation_id") or "")
+        if operation_id:
+            snapshots_by_operation.setdefault(operation_id, []).append(row)
+    rows_by_operation: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        source = _source_row_dict(row)
+        operation_id = str(source.get("ui_delete_operation_id") or "")
+        if operation_id and _is_ui_deleted(row):
+            rows_by_operation.setdefault(operation_id, []).append(row)
+
+    result: list[dict[str, Any]] = []
+    for operation_id, operation_rows in sorted(rows_by_operation.items()):
+        logical_groups: dict[str, dict[str, Any]] = {}
+        item_kinds: dict[str, int] = {}
+        for row in operation_rows:
+            source = _source_row_dict(row)
+            identity_kind, identity_value = _price_proposal_logical_identity(row)
+            identity = f"{identity_kind}:{identity_value}"
+            group = logical_groups.setdefault(identity, {
+                "identity": identity,
+                "token": identity_value,
+                "name": str(
+                    source.get("ui_proposal_name")
+                    or row.get("proposal_name")
+                    or row.get("name")
+                    or "-"
+                ),
+                "created_at": str(row.get("created_at") or "-"),
+                "statuses": {},
+                "line_count": 0,
+                "ids": [],
+                "item_kinds": {},
+            })
+            status = str(row.get("status") or "-")
+            kind = str(
+                source.get("ui_canonical_item_kind")
+                or row.get("item_kind")
+                or "-"
+            ).strip().lower()
+            group["statuses"][status] = group["statuses"].get(status, 0) + 1
+            group["item_kinds"][kind] = group["item_kinds"].get(kind, 0) + 1
+            group["line_count"] += 1
+            group["ids"].append(str(row.get("id") or ""))
+            item_kinds[kind] = item_kinds.get(kind, 0) + 1
+            if str(row.get("created_at") or "") < group["created_at"]:
+                group["created_at"] = str(row.get("created_at") or "-")
+
+        audit = audit_by_operation.get(operation_id) or {}
+        before_data = audit.get("before_data")
+        requested_ids = {
+            str(before_row.get("id") or "")
+            for before_row in (before_data if isinstance(before_data, list) else [])
+            if isinstance(before_row, dict)
+        }
+        affected_ids = {str(row.get("id") or "") for row in operation_rows}
+        exact_selection = bool(requested_ids) and requested_ids == affected_ids
+        group_values = list(logical_groups.values())
+        markers = " ".join(
+            f"{group['token']} {group['name']}".lower()
+            for group in group_values
+        )
+        if "test" in markers or "smoke" in markers or "prueba" in markers:
+            classification = "propuesta_de_prueba"
+        elif len(group_values) > 1:
+            classification = "varias_propuestas_por_error"
+        elif len(group_values) == 1 and exact_selection:
+            classification = "borrado_correcto_una_propuesta"
+        elif len(group_values) == 1:
+            classification = "propuesta_historica_ambigua"
+        else:
+            classification = "ambiguo"
+        result.append({
+            "operation_id": operation_id,
+            "deleted_at": min(
+                str(_source_row_dict(row).get("ui_deleted_at") or "-")
+                for row in operation_rows
+            ),
+            "row_count": len(operation_rows),
+            "logical_count": len(group_values),
+            "logical_groups": group_values,
+            "item_kinds": dict(sorted(item_kinds.items())),
+            "id_sample": sorted(affected_ids)[:5],
+            "requested_id_count": len(requested_ids),
+            "affected_ids_match_requested": exact_selection,
+            "audit_found": bool(audit),
+            "selected_id": str(audit.get("entity_id") or "-"),
+            "selected_name": str(
+                (audit.get("after_data") or {}).get("proposal_name")
+                if isinstance(audit.get("after_data"), dict)
+                else "-"
+            ),
+            "snapshot_count": len(snapshots_by_operation.get(operation_id) or []),
+            "classification": classification,
+        })
+    return result
+
+
+def build_price_proposal_restore_plan(
+    analysis: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Genera un plan reversible de restauración; no ejecuta escrituras."""
+    return {
+        "write_performed": False,
+        "selectors": ["price_delete_operation_id", "logical_token", "exact_ids"],
+        "operations": [
+            {
+                "operation_id": row["operation_id"],
+                "row_count": row["row_count"],
+                "logical_tokens": [
+                    group["identity"] for group in row.get("logical_groups") or []
+                ],
+                "classification": row["classification"],
+            }
+            for row in analysis
+        ],
+        "steps": [
+            "resolver el selector a un conjunto exacto de IDs y bloquear ambigüedades",
+            "verificar conteo y ui_deleted=true antes de escribir",
+            "crear snapshot previo para cada ID",
+            "registrar una operación PRICERESTORE independiente",
+            "actualizar únicamente los IDs autorizados con ui_deleted=false",
+            "preservar ui_deleted_at, actor y PRICEDEL como trazabilidad histórica",
+            "añadir ui_restored_at, ui_restore_operation_id y actor de restauración",
+            "verificar conteos y visibilidad después de escribir",
+            "permitir rollback desde los snapshots PRICERESTORE",
+        ],
+    }
 
 from futonhub.cloud.services.prices import PRICE_PROPOSAL_STATUSES, format_price_safety_for_search as _format_price_safety_for_search, money_or_none as _safe_money, price_safety_preview as _price_safety_preview, short_row_value as _short_row_value
 
@@ -258,11 +449,55 @@ def format_cloud_product_search(rows: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
-def _fetch_cloud_item_for_price(session, item_kind: str, woo_id: int) -> dict[str, Any]:
+def _pack_snapshot_matches(item: dict[str, Any], woo_id: int) -> bool:
+    record_type = str(
+        item.get("item_record_type")
+        or item.get("hub_search_record_type")
+        or ""
+    ).strip().lower()
+    try:
+        snapshot_woo_id = int(item.get("woo_id"))
+    except Exception:
+        snapshot_woo_id = 0
+    return record_type in {"woo_pack", "manual_pack"} and snapshot_woo_id == int(woo_id)
+
+
+def _fetch_cloud_item_for_price(
+    session,
+    item_kind: str,
+    woo_id: int,
+    item_snapshot: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     kind = (item_kind or "").strip().lower()
-    if kind not in {"product", "variation"}:
-        raise CloudAuditError("item_kind debe ser product o variation.")
-    table = "products" if kind == "product" else "product_variations"
+    if kind not in {"product", "variation", "pack"}:
+        raise CloudAuditError("item_kind debe ser product, variation o pack.")
+    if kind == "pack":
+        snapshot = dict(item_snapshot or {})
+        if snapshot and _pack_snapshot_matches(snapshot, int(woo_id)):
+            snapshot.setdefault("price", snapshot.get("woo_price"))
+            snapshot.setdefault("type", "pack")
+            snapshot["item_kind"] = "pack"
+            return snapshot
+        resp = (
+            session.client.table("inventory_items")
+            .select("*")
+            .eq("woo_id", int(woo_id))
+            .in_("item_record_type", ["woo_pack", "manual_pack"])
+            .limit(2)
+            .execute()
+        )
+        rows = list(getattr(resp, "data", None) or [])
+        if len(rows) != 1:
+            reason = "no existe" if not rows else "es ambiguo"
+            raise CloudAuditError(
+                f"El pack con woo_id={woo_id} {reason} en inventory_items."
+            )
+        row = dict(rows[0])
+        row.setdefault("price", row.get("woo_price"))
+        row.setdefault("type", "pack")
+        row["item_kind"] = "pack"
+        return row
+    table = "product_variations" if kind == "variation" else "products"
     resp = session.client.table(table).select("*").eq("woo_id", int(woo_id)).limit(1).execute()
     rows = getattr(resp, "data", None) or []
     if not rows:
@@ -287,7 +522,15 @@ def _fetch_latest_price_proposal(session, *, item_kind: str | None = None, item_
 
 
 
-def preview_real_price_proposal(session, item_kind: str, woo_id: int, new_price: float, notes: str = "", settings: Settings | None = None) -> dict[str, Any]:
+def preview_real_price_proposal(
+    session,
+    item_kind: str,
+    woo_id: int,
+    new_price: float,
+    notes: str = "",
+    settings: Settings | None = None,
+    item_snapshot: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Previsualiza una propuesta interna sin escribir nada.
 
     Se usa desde la UI para que el usuario vea qué se va a guardar antes de
@@ -295,7 +538,12 @@ def preview_real_price_proposal(session, item_kind: str, woo_id: int, new_price:
     """
     settings = settings or load_settings()
     kind = (item_kind or "").strip().lower()
-    item = _fetch_cloud_item_for_price(session, kind, int(woo_id))
+    item = _fetch_cloud_item_for_price(
+        session,
+        kind,
+        int(woo_id),
+        item_snapshot=item_snapshot,
+    )
     proposed_price = _safe_float(new_price, 0.0)
     validation = _price_safety_preview(item, kind, proposed_price, settings)
     old_price = validation.get("current_price")
@@ -353,9 +601,19 @@ def preview_existing_price_proposal(session, proposal_id: str, settings: Setting
     """Previsualiza una propuesta ya guardada antes de aprobar/rechazar."""
     settings = settings or load_settings()
     row = get_real_price_proposal(session, proposal_id)
-    kind = (row.get("item_kind") or "").strip().lower()
-    woo_id = int(row.get("item_woo_id"))
-    item = _fetch_cloud_item_for_price(session, kind, woo_id)
+    source = _source_row_dict(row)
+    kind = str(
+        source.get("ui_canonical_item_kind")
+        or row.get("item_kind")
+        or ""
+    ).strip().lower()
+    woo_id = int(source.get("ui_canonical_woo_id") or row.get("item_woo_id"))
+    item = _fetch_cloud_item_for_price(
+        session,
+        kind,
+        woo_id,
+        item_snapshot=source.get("item_snapshot"),
+    )
     proposed = _safe_float(row.get("new_price"), 0.0)
     validation = _price_safety_preview(item, kind, proposed, settings)
     return {
@@ -417,14 +675,30 @@ def format_existing_price_proposal_preview(preview: dict[str, Any]) -> str:
     lines.extend(["", "Aprobar/rechazar NO toca WooCommerce. Solo cambia el estado interno y genera caja negra."])
     return "\n".join(lines)
 
-def create_real_price_proposal(session, item_kind: str, woo_id: int, new_price: float, notes: str = "", settings: Settings | None = None, acknowledge_price_warning: bool = False) -> dict[str, Any]:
+def create_real_price_proposal(
+    session,
+    item_kind: str,
+    woo_id: int,
+    new_price: float,
+    notes: str = "",
+    settings: Settings | None = None,
+    acknowledge_price_warning: bool = False,
+    proposal_id: str | None = None,
+    source_row_updates: dict[str, Any] | None = None,
+    item_snapshot: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Crea/actualiza una propuesta interna real sobre producto migrado.
 
     No publica nada en WooCommerce. Solo escribe en Supabase y registra caja negra.
     """
     settings = settings or load_settings()
     kind = (item_kind or "").strip().lower()
-    item = _fetch_cloud_item_for_price(session, kind, int(woo_id))
+    item = _fetch_cloud_item_for_price(
+        session,
+        kind,
+        int(woo_id),
+        item_snapshot=item_snapshot,
+    )
     proposed_price = _safe_float(new_price, 0.0)
     validation = _price_safety_preview(item, kind, proposed_price, settings)
     old_price = validation.get("current_price")
@@ -444,7 +718,16 @@ def create_real_price_proposal(session, item_kind: str, woo_id: int, new_price: 
         )
 
     try:
-        before = _fetch_latest_price_proposal(session, item_kind=kind, item_woo_id=int(woo_id), status="pending")
+        if proposal_id:
+            before_resp = session.client.table("price_change_proposals").select("*").eq("id", proposal_id).limit(1).execute()
+            before_rows = getattr(before_resp, "data", None) or []
+            before = before_rows[0] if before_rows else None
+            if before is None:
+                raise CloudAuditError(f"No existe la propuesta {proposal_id} para actualizar.")
+            if str(before.get("item_kind") or "") != kind or int(before.get("item_woo_id") or 0) != int(woo_id):
+                raise CloudAuditError("La propuesta seleccionada no corresponde al artículo editado.")
+        else:
+            before = _fetch_latest_price_proposal(session, item_kind=kind, item_woo_id=int(woo_id), status="pending")
         if before is not None:
             snapshot = OperationSnapshot(
                 operation_id=operation_id,
@@ -478,6 +761,7 @@ def create_real_price_proposal(session, item_kind: str, woo_id: int, new_price: 
                 "item_snapshot": _json_safe(item),
                 "price_safety": _json_safe(validation),
                 "acknowledged_price_warning": bool(acknowledge_price_warning),
+                **(source_row_updates or {}),
             },
         }
 
@@ -608,13 +892,17 @@ def review_latest_real_price_proposal(session, decision: str, proposal_id: str |
 
 
 
-def delete_real_price_proposal_group(session, proposal_id: str, proposal_name: str | None = None, settings: Settings | None = None) -> dict[str, Any]:
-    """Elimina una propuesta real de UI-ERP.
+def delete_real_price_proposal_group(
+    session,
+    proposal_id: str,
+    proposal_name: str | None = None,
+    settings: Settings | None = None,
+    proposal_ids: list[str] | tuple[str, ...] | None = None,
+) -> dict[str, Any]:
+    """Elimina únicamente los IDs reales seleccionados por la UI.
 
-    Si la propuesta pertenece a un grupo visual por `source_row.ui_proposal_name`,
-    elimina todos los registros pendientes/no publicados que comparten ese nombre.
-    Si Supabase/RLS no permite DELETE, marca los registros como `ui_deleted` para
-    ocultarlos de la bandeja sin perder trazabilidad.
+    `proposal_name` se conserva solo para trazabilidad y compatibilidad; nunca se
+    usa como condición de borrado.
     """
     settings = settings or load_settings()
     if not proposal_id:
@@ -628,19 +916,19 @@ def delete_real_price_proposal_group(session, proposal_id: str, proposal_name: s
         selected = rows[0]
         selected_source = _source_row_dict(selected)
         group_name = (proposal_name or selected_source.get("ui_proposal_name") or "").strip()
-        target_rows = [selected]
-        if group_name:
-            all_resp = session.client.table("price_change_proposals").select("*").limit(500).execute()
-            all_rows = getattr(all_resp, "data", None) or []
-            target_rows = []
-            for row in all_rows:
-                source = _source_row_dict(row)
-                if _is_ui_deleted(row):
-                    continue
-                if str(source.get("ui_proposal_name") or "").strip() == group_name:
-                    target_rows.append(row)
-            if not target_rows:
-                target_rows = [selected]
+        requested_ids = [str(value).strip() for value in (proposal_ids or [proposal_id]) if str(value).strip()]
+        if str(proposal_id) not in requested_ids:
+            requested_ids.insert(0, str(proposal_id))
+        target_rows: list[dict[str, Any]] = []
+        for row_id in dict.fromkeys(requested_ids):
+            if row_id == str(proposal_id):
+                row = selected
+            else:
+                row_resp = session.client.table("price_change_proposals").select("*").eq("id", row_id).limit(1).execute()
+                row_data = getattr(row_resp, "data", None) or []
+                row = row_data[0] if row_data else None
+            if row is not None and not _is_ui_deleted(row):
+                target_rows.append(row)
         protected_statuses = {"published", "publishing"}
         blocked = [row for row in target_rows if str(row.get("status") or "").strip().lower() in protected_statuses]
         if blocked:
@@ -752,6 +1040,107 @@ def list_real_price_proposals(session, status: str | None = None, limit: int = 5
             continue
         result.append(row)
     return result
+
+
+def diagnose_real_price_proposals(session, status: str | None = None, limit: int = 200) -> dict[str, Any]:
+    """Lectura autoritativa con conteos y motivos de filtrado, sin exponer secretos."""
+    normalized_status = (status or "").strip().lower()
+    if normalized_status and normalized_status != "all" and normalized_status not in PRICE_PROPOSAL_STATUSES:
+        raise CloudAuditError(
+            "Estado invalido. Usa: "
+            + ", ".join(sorted(PRICE_PROPOSAL_STATUSES))
+            + " o all."
+        )
+    query = session.client.table("price_change_proposals").select("*").order("created_at", desc=True).limit(max(1, min(int(limit or 200), 200)))
+    if normalized_status and normalized_status != "all":
+        query = query.eq("status", normalized_status)
+    resp = query.execute()
+    raw_rows = list(getattr(resp, "data", None) or [])
+    visible_rows: list[dict[str, Any]] = []
+    discarded: list[dict[str, str]] = []
+    ui_deleted_distribution: dict[str, int] = {}
+    deletion_patterns: dict[tuple[str, str, str], int] = {}
+    for row in raw_rows:
+        source = _source_row_dict(row)
+        row_id = str(row.get("id") or "")
+        category = _source_flag_category(source, "ui_deleted")
+        ui_deleted_distribution[category] = ui_deleted_distribution.get(category, 0) + 1
+        if source.get("test") is True:
+            discarded.append({"id": row_id, "reason": "test"})
+            continue
+        if _is_ui_deleted(row):
+            discarded.append({"id": row_id, "reason": "ui_deleted"})
+            pattern = (
+                str(source.get("ui_deleted_at") or "-"),
+                str(source.get("ui_delete_operation_id") or "-"),
+                _safe_actor_reference(
+                    source.get("ui_deleted_by_email")
+                    or source.get("deleted_by")
+                    or source.get("updated_by")
+                ),
+            )
+            deletion_patterns[pattern] = deletion_patterns.get(pattern, 0) + 1
+            continue
+        visible_rows.append(row)
+    delete_operation_ids = sorted({
+        str(_source_row_dict(row).get("ui_delete_operation_id") or "")
+        for row in raw_rows
+        if _is_ui_deleted(row)
+        and _source_row_dict(row).get("ui_delete_operation_id")
+    })
+    audit_rows: list[dict[str, Any]] = []
+    snapshot_rows: list[dict[str, Any]] = []
+    if delete_operation_ids:
+        try:
+            audit_resp = (
+                session.client.table("audit_logs")
+                .select("operation_id,created_at,action,status,entity_id,before_data,after_data")
+                .in_("operation_id", delete_operation_ids)
+                .limit(200)
+                .execute()
+            )
+            audit_rows = list(getattr(audit_resp, "data", None) or [])
+        except Exception:
+            audit_rows = []
+        try:
+            snapshot_resp = (
+                session.client.table("operation_snapshots")
+                .select("operation_id,created_at,action,entity_id,before_data")
+                .in_("operation_id", delete_operation_ids)
+                .limit(500)
+                .execute()
+            )
+            snapshot_rows = list(getattr(snapshot_resp, "data", None) or [])
+        except Exception:
+            snapshot_rows = []
+    delete_analysis = analyze_price_proposal_soft_deletes(
+        raw_rows,
+        audit_rows,
+        snapshot_rows,
+    )
+    return {
+        "rows": visible_rows,
+        "raw_count": len(raw_rows),
+        "filtered_count": len(visible_rows),
+        "discarded": discarded,
+        "ui_deleted_distribution": dict(sorted(ui_deleted_distribution.items())),
+        "deletion_patterns": [
+            {
+                "deleted_at": key[0],
+                "operation_id": key[1],
+                "actor_ref": key[2],
+                "count": count,
+            }
+            for key, count in sorted(
+                deletion_patterns.items(),
+                key=lambda item: (-item[1], item[0]),
+            )
+        ],
+        "delete_analysis": delete_analysis,
+        "restore_plan": build_price_proposal_restore_plan(delete_analysis),
+        "repository": "price_change_proposals",
+        "status_filter": normalized_status or "all",
+    }
 
 
 def format_real_price_proposals(rows: list[dict[str, Any]]) -> str:

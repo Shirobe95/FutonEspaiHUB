@@ -24,6 +24,7 @@ Abrir ERP.bat -> GestorWoo/gestorwoo.py erp-prototype -> gestorwoo.cli -> futonh
 | FUNC-001 supplier order cost and P.V.P. | Pedidos separa coste real, rentabilidad y P.V.P.; UI y exportaciones reales de Ekomat/Heimei; coste total por cantidad basado en coste real; recepcion e inventario no usan `pvp_*` | Aprobado | 2026-06-16 | `3d0f08bd7a28115cca182a8da4578f59cab55258` | Usuario confirma smoke manual aprobado en UI y exportaciones reales | Sin cambios en esquema, RLS, RPCs ni pedidos historicos |
 | FUNC-002I price proposal pack composition | Busqueda global oculta solo en Cambio de Precios; Items usa lista scrollable con filas compactas para simples y multilinea para packs; viewport limitado; controles y Variaciones permanecen visibles | Pendiente | 2026-06-18 | FUNC-002H `824b5b9faf0475b94c2b145076dfe90c9bce23d8` / FUNC-002I `b510998b7032ac6de71ff9aff54073e94504e783` | Pendiente de smoke manual mediante `Abrir ERP.bat` | Confirmar alturas reales, scroll, controles inferiores, variaciones, seleccion, doble clic y Anadir |
 | FUNC-003 / 003A / 003B / 003C / 003D supplier order profitability, base-item resolution and Pascal fallback | Formula de margen; rentabilidad global e individual; Coste Final derivado; equivalencia numerica; packs y filas Woo/alias/componentes/sinteticas excluidas; prioridad por articulo base; Pascal real o fallback principal; entrada manual si faltan ambos precios; calculo, guardado, recarga y recepcion | Aprobado | 2026-06-22 | FUNC-003 `2cb5939` / 003A `8499a6b` / 003B `72b9158` / 003C `008cac9` / 003D `e2dfe14` | Usuario confirma smoke manual completo mediante `Abrir ERP.bat` | Sin traceback ni incidencias funcionales reportadas |
+| FUNC-002K.2 a FUNC-002K.8 price proposals stability and pack persistence | Compatibilidad historica; estado vacio; validacion previa a escrituras; identidad `product|variation|pack:woo_id`; persistencia y recarga de packs; separacion pack/variacion; borrado por IDs reales y soft-delete | Aprobado | 2026-06-22 | Commit de cierre de fase | Usuario confirma propuesta mixta de 109 lineas guardada, recargada y borrada mediante `Abrir ERP.bat`; sin traceback | 200 filas soft-delete auditadas: cuatro propuestas de prueba/smoke, sin restauracion necesaria |
 
 ## Suite automatizada asociada
 
@@ -33,10 +34,10 @@ Comando:
 python -m unittest discover -s GestorWoo\tests -v
 ```
 
-Resultado actual tras FUNC-003D:
+Resultado actual tras cierre FUNC-002K:
 
 ```text
-Ran 161 tests
+Ran 248 tests
 OK
 ```
 

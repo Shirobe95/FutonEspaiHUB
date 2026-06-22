@@ -374,3 +374,20 @@ Checklist propuesto:
 - El orden interno de componentes sigue siendo por `component_item_code`, no por orden comercial de Woo.
 - La igualdad contra datos vivos requiere login interactivo y sigue pendiente de smoke.
 - El smoke manual sigue pendiente, por lo que FUNC-002I no esta cerrado.
+
+## Cierre FUNC-002K.2 a FUNC-002K.8
+
+Estado: aprobado por smoke manual mediante `Abrir ERP.bat` el 2026-06-22.
+
+- recuperada la compatibilidad del listado con propuestas historicas y con estado vacio, sin traceback;
+- el guardado valida completamente el modelo antes de la primera escritura;
+- la propuesta usa una identidad canonica unica: `product|variation|pack:woo_id`;
+- los packs se resuelven desde el snapshot autoritativo del buscador y, como compatibilidad, desde filas `inventory_items` de tipo `woo_pack` o `manual_pack`;
+- variaciones y packs con el mismo `woo_id` permanecen como entidades distintas;
+- la recarga conserva tipo, precios, codigo HUB y composicion del pack;
+- el borrado opera exclusivamente sobre IDs reales y mantiene soft-delete con `ui_deleted=true` cuando el borrado fisico no es posible;
+- se auditaron 200 filas ocultas: pertenecian a cuatro propuestas de prueba/smoke y no requieren restauracion;
+- smoke final: propuesta mixta guardada y recargada con 109 lineas, 109 subidas, borrado correcto y sin errores.
+
+Los diagnosticos temporales masivos se retiraron tras el cierre. Solo permanece
+salida compacta para errores operativos o de integridad.
