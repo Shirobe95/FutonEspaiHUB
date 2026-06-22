@@ -1,6 +1,6 @@
 # FutonHUB - Smoke tests manuales de modularizacion
 
-Fecha de consolidacion: 2026-06-19
+Fecha de consolidacion: 2026-06-22
 
 Regla de entrada validada en todos los cortes:
 
@@ -23,7 +23,7 @@ Abrir ERP.bat -> GestorWoo/gestorwoo.py erp-prototype -> gestorwoo.cli -> futonh
 | 004D1 inventory item creation | Creacion de items, validaciones, persistencia de `rotation_c`, `packages`, `primary_supplier_price`, `pascal_price` y `commercial_status`, refresco, detalle completo, edicion posterior, sin falsos cambios y cierre | Aprobado | 2026-06-16 | `d2c005d056d6698511c1e1aea211a680449e475b` | Usuario confirma smoke test manual aprobado mediante `Abrir ERP.bat` tras correccion de proyeccion de lectura | WooCommerce intacto; sin cambios en escrituras, RLS ni esquema |
 | FUNC-001 supplier order cost and P.V.P. | Pedidos separa coste real, rentabilidad y P.V.P.; UI y exportaciones reales de Ekomat/Heimei; coste total por cantidad basado en coste real; recepcion e inventario no usan `pvp_*` | Aprobado | 2026-06-16 | `3d0f08bd7a28115cca182a8da4578f59cab55258` | Usuario confirma smoke manual aprobado en UI y exportaciones reales | Sin cambios en esquema, RLS, RPCs ni pedidos historicos |
 | FUNC-002I price proposal pack composition | Busqueda global oculta solo en Cambio de Precios; Items usa lista scrollable con filas compactas para simples y multilinea para packs; viewport limitado; controles y Variaciones permanecen visibles | Pendiente | 2026-06-18 | FUNC-002H `824b5b9faf0475b94c2b145076dfe90c9bce23d8` / FUNC-002I `b510998b7032ac6de71ff9aff54073e94504e783` | Pendiente de smoke manual mediante `Abrir ERP.bat` | Confirmar alturas reales, scroll, controles inferiores, variaciones, seleccion, doble clic y Anadir |
-| FUNC-003 / 003A / 003B / 003C / 003D supplier order profitability, base-item resolution and Pascal fallback | Formula de margen; rentabilidad individual; equivalencia numerica; packs y filas Woo/alias/componentes/sinteticas excluidas; prioridad item_id, HUB, HECA y aliases; ambiguedad solo en igual prioridad; fallback Pascal al precio principal con trazabilidad | Pendiente | 2026-06-19 | FUNC-003 `2cb5939` / 003A `8499a6b` / 003B `72b9158` / 003C `008cac9` / 003D `e2dfe14` | Pendiente de smoke manual mediante `Abrir ERP.bat` | Confirmar `0780004` contra base `780004`, fallback `114.26`, aviso/origen, persistencia/exportacion, recalculo, recepcion con coste efectivo y `pascal_price` sin modificar |
+| FUNC-003 / 003A / 003B / 003C / 003D supplier order profitability, base-item resolution and Pascal fallback | Formula de margen; rentabilidad global e individual; Coste Final derivado; equivalencia numerica; packs y filas Woo/alias/componentes/sinteticas excluidas; prioridad por articulo base; Pascal real o fallback principal; entrada manual si faltan ambos precios; calculo, guardado, recarga y recepcion | Aprobado | 2026-06-22 | FUNC-003 `2cb5939` / 003A `8499a6b` / 003B `72b9158` / 003C `008cac9` / 003D `e2dfe14` | Usuario confirma smoke manual completo mediante `Abrir ERP.bat` | Sin traceback ni incidencias funcionales reportadas |
 
 ## Suite automatizada asociada
 
@@ -45,3 +45,21 @@ OK
 - Los smoke tests son manuales porque requieren UI, login y apertura mediante `Abrir ERP.bat`.
 - Los tests automaticos usan dobles/mocks y no escriben en WooCommerce ni Supabase.
 - No se corrigio la deuda Unicode durante esta consolidacion.
+
+## Norma Git para ahorro de tokens
+
+Codex no debe ejecutar Git, crear commits, hacer push, actualizar ramas ni
+generar informes extensos de Git salvo peticion explicita del usuario. Durante
+cada corte debe limitarse a analizar, implementar, probar y resumir. Los cambios
+Git se agrupan al cerrar una fase.
+
+En iteraciones pequenas:
+
+- no ejecutar `git status` repetidamente;
+- no crear commits por cada microcambio;
+- no hacer push automaticamente;
+- no listar hashes ni estado de rama salvo que se solicite;
+- no actualizar documentacion en cada iteracion pequena;
+- mantener respuestas breves;
+- informar solo problema, solucion, archivos tocados, tests y pendiente de
+  smoke.

@@ -1,15 +1,14 @@
 # FutonHUB - FUNC-003 Pedidos con rentabilidad individual
 
 Fecha: 2026-06-18
+Fecha de cierre: 2026-06-22
 
 Estado:
 
 ```text
-Implementado y verificado automaticamente.
-FUNC-003A implementado el 2026-06-19.
-FUNC-003B implementado el 2026-06-19.
-FUNC-003C implementado el 2026-06-19.
-Pendiente de smoke manual mediante Abrir ERP.bat.
+FUNC-003, FUNC-003A, FUNC-003B, FUNC-003C y FUNC-003D implementados,
+verificados automaticamente y aprobados mediante smoke manual con
+Abrir ERP.bat.
 ```
 
 ## Objetivo
@@ -225,7 +224,7 @@ Estado:
 
 ```text
 Implementado y verificado automaticamente.
-Pendiente de smoke manual mediante Abrir ERP.bat.
+Aprobado por smoke manual mediante Abrir ERP.bat el 2026-06-22.
 ```
 
 ### Incidencia
@@ -411,7 +410,7 @@ Estado:
 
 ```text
 Implementado y verificado automaticamente.
-Pendiente de smoke manual mediante Abrir ERP.bat.
+Aprobado por smoke manual mediante Abrir ERP.bat el 2026-06-22.
 ```
 
 ### Incidencia
@@ -558,7 +557,7 @@ Estado:
 
 ```text
 Implementado y verificado automaticamente.
-Pendiente de smoke manual mediante Abrir ERP.bat.
+Aprobado por smoke manual mediante Abrir ERP.bat el 2026-06-22.
 ```
 
 ### Investigacion de candidatos reales
@@ -765,6 +764,15 @@ OK
 
 ## FUNC-003D - fallback controlado de precio principal para Pascal
 
+Fecha: 2026-06-19
+
+Estado:
+
+```text
+Implementado y verificado automaticamente.
+Aprobado por smoke manual mediante Abrir ERP.bat el 2026-06-22.
+```
+
 ### Punto de seleccion del precio
 
 La seleccion se realiza en:
@@ -891,80 +899,30 @@ OK
 OK
 ```
 
-## Smoke manual pendiente
+## Smoke manual aprobado
 
-Ejecutar mediante:
+El usuario valido el flujo completo mediante `Abrir ERP.bat` el 2026-06-22.
+
+Evidencia confirmada:
+
+- rentabilidad global e individual correctas;
+- Coste Final derivado correctamente;
+- codigos con ceros iniciales resuelven el articulo base;
+- packs Woo excluidos;
+- filas Woo sinteticas, aliases y componentes excluidos;
+- prioridad correcta por articulo base;
+- pedidos Pascal usan `pascal_price` cuando existe;
+- si falta Pascal, usan `primary_supplier_price`;
+- si faltan ambos precios, se solicita entrada manual;
+- calculos, guardado, recarga y recepcion funcionan;
+- cierre sin traceback.
+
+Estado final:
 
 ```text
-Abrir ERP.bat
+FUNC-003: aprobado
+FUNC-003A: aprobado
+FUNC-003B: aprobado
+FUNC-003C: aprobado
+FUNC-003D: aprobado
 ```
-
-Validar:
-
-1. abrir un pedido historico sin campos de FUNC-003;
-2. calcular con rentabilidad global;
-3. asignar rentabilidad individual a una linea;
-4. guardar, cerrar y recargar;
-5. confirmar valor individual y modo individual;
-6. cambiar rentabilidad global y confirmar que la individual no cambia;
-7. cambiar transporte u otro coste general y recalcular;
-8. confirmar nuevo Coste Final y nuevo P.V.P.;
-9. volver una linea a `Usar rentabilidad global`;
-10. exportar y revisar columnas/formula;
-11. comprobar que recepcion e inventario usan costes reales;
-12. cerrar sin traceback.
-
-Smoke adicional FUNC-003A:
-
-1. cargar un pedido real con codigo `0201001`;
-2. confirmar match con `inventory_items.item_id=201001`;
-3. confirmar nombre, RotC y precio de proveedor automaticos;
-4. calcular Coste Final, Ponderado, Rentabilidad y P.V.P.;
-5. confirmar que UI y exportacion siguen mostrando `0201001`;
-6. guardar, cerrar y recargar el pedido;
-7. confirmar que el codigo original y el match siguen intactos;
-8. probar un codigo alfanumerico;
-9. si existen candidatos canonicos ambiguos, confirmar bloqueo visible;
-10. cerrar sin traceback.
-
-Smoke adicional FUNC-003B:
-
-1. cargar el pedido real con codigo `0724001`;
-2. confirmar que el articulo normal se selecciona aunque exista un pack Woo;
-3. confirmar nombre, RotC y precio de proveedor automaticos;
-4. calcular Coste Final, Ponderado, Rentabilidad y P.V.P.;
-5. confirmar que UI y exportacion conservan `0724001`;
-6. comprobar que el pack no participa en recepcion ni inventario del pedido;
-7. comprobar que dos articulos normales equivalentes siguen mostrando error de
-   ambiguedad;
-8. cerrar sin traceback.
-
-Smoke adicional FUNC-003C:
-
-1. cargar el pedido real con codigo `0724004`;
-2. confirmar seleccion de `inventory_items.item_id=724004`;
-3. confirmar que la fila `WOO-ITEM-12860` no participa;
-4. comprobar nombre, RotC, M3, bultos y precio de proveedor del articulo base;
-5. calcular Coste Final, Ponderado, Rentabilidad y P.V.P.;
-6. guardar, cerrar y recargar;
-7. confirmar `0724004` intacto en UI y exportacion;
-8. comprobar recepcion e inventario contra `724004`;
-9. confirmar que dos articulos base en la misma prioridad siguen bloqueando;
-10. cerrar sin traceback.
-
-Smoke adicional FUNC-003D:
-
-1. cargar un pedido Pascal real con codigo `0780004`;
-2. confirmar seleccion del articulo base `780004`;
-3. con `pascal_price` vacio y precio principal `114.26`, confirmar que no se
-   abre el editor obligatoriamente;
-4. comprobar nombre, RotC, M3, bultos y precio efectivo `114.26`;
-5. confirmar advertencia y origen `Principal fallback Pascal`;
-6. calcular Coste Final, Ponderado, Rentabilidad y P.V.P.;
-7. cambiar transporte u otro coste y confirmar el recalculo;
-8. guardar, cerrar, recargar y exportar, conservando precio efectivo, origen y
-   codigo `0780004`;
-9. comprobar que `inventory_items.pascal_price` continua nulo;
-10. probar otro articulo con precio Pascal real y confirmar origen `Pascal`;
-11. probar ambos precios ausentes y confirmar solicitud manual;
-12. comprobar recepcion con el coste efectivo y cerrar sin traceback.
