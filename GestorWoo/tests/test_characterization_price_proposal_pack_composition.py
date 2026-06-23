@@ -1464,7 +1464,7 @@ class PriceProposalPackCompositionTests(unittest.TestCase):
 
         self.assertEqual(len(grouped), 2)
         self.assertEqual([proposal.raw["ui_member_ids"] for proposal in grouped], [["legacy-1"], ["legacy-2"]])
-        self.assertEqual([proposal.status for proposal in grouped], ["error", "Restaurada"])
+        self.assertEqual([proposal.status for proposal in grouped], ["Error crítico", "Restaurada"])
 
     def test_historical_error_pending_and_restored_states_remain_visible(self) -> None:
         rows = [
@@ -1485,7 +1485,7 @@ class PriceProposalPackCompositionTests(unittest.TestCase):
         grouped = self.app._price_group_cloud_proposals(rows)
 
         self.assertEqual(len(grouped), 3)
-        self.assertEqual([proposal.status for proposal in grouped], ["Pendiente", "error", "Restaurada"])
+        self.assertEqual([proposal.status for proposal in grouped], ["Pendiente", "Error crítico", "Restaurada"])
 
     def test_refresh_loads_maximum_service_window_and_renders_once_after_worker(self) -> None:
         source = inspect.getsource(FutonHubErpPrototype._refresh_price_proposals)

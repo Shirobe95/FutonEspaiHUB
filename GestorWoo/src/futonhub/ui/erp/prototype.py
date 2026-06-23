@@ -6,6 +6,7 @@ import os
 import re
 import tkinter as tk
 import threading
+import time
 import unicodedata
 import uuid
 import warnings
@@ -40,6 +41,7 @@ from futonhub.cloud.services.price_proposals import (
     format_existing_price_proposal_preview,
     preview_real_price_proposal,
     preview_existing_price_proposal,
+    reject_real_price_proposal_group,
     review_latest_real_price_proposal,
 )
 from futonhub.cloud.services.orders import (
@@ -55,8 +57,16 @@ from futonhub.cloud.services.orders import (
     update_supplier_order_draft,
     update_supplier_order_calculation,
 )
-from futonhub.cloud.services.woocommerce_publish import publish_woocommerce_price
-from futonhub.cloud.services.woocommerce_publish import format_woocommerce_publish_preview, preview_woocommerce_publish
+from futonhub.cloud.services.woocommerce_publish import (
+    format_woocommerce_publish_preview,
+    preview_price_proposal_group_publish,
+    preview_price_proposal_group_restore,
+    preview_woocommerce_publish,
+    publish_price_proposal_group,
+    publish_woocommerce_price,
+    restore_price_proposal_group,
+    sync_price_proposal_inventory_prices,
+)
 from futonhub.cloud.services.woocommerce_sync_preview import (
     apply_manual_classification_edit,
     apply_manual_woo_link,
@@ -506,6 +516,10 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         self._price_line_sources: dict[str, dict[str, Any]] = {}
         self._price_proposal_line_sources: dict[str, dict[str, Any]] = {}
         self._price_save_in_progress = False
+        self._price_publish_in_progress = False
+        self._price_restore_in_progress = False
+        self._price_woo_sync_in_progress = False
+        self._price_last_woo_sync_monotonic = 0.0
         self._price_delete_in_progress = False
         self._price_add_in_progress = False
         self._price_bulk_add_in_progress = False
@@ -2082,7 +2096,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         proposals = [proposal for proposal in source_proposals if self._proposal_matches_search(proposal, self._proposal_search_query)]
         state_text = "Cargando reales..." if self._price_loading else f"{len(proposals)} visibles"
         self._status_chip(head, state_text, "Info").grid(row=0, column=1, sticky="e", padx=(0, 8))
-        self._button(head, "Actualizar", primary=True, command=lambda: self._refresh_price_proposals(parent, source="manual")).grid(row=0, column=2, sticky="e")
+        self._button(head, "Actualizar", primary=True, command=lambda: self._refresh_price_module(parent, source="manual")).grid(row=0, column=2, sticky="e")
         if self._price_error:
             tk.Label(list_card, text=self._price_error, bg=INDIGO_SOFT if self._price_loading else ROSE_SOFT, fg=INDIGO if self._price_loading else ROSE, anchor=tk.W).grid(
                 row=2,
@@ -2328,6 +2342,90 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         )
         if self._current_key == "precios":
             self._show_view("precios")
+            if source == "inicial":
+                self.after(0, self._maybe_start_price_woo_sync)
+
+    def _price_loaded_proposal_ids(self) -> list[str]:
+        ids: list[str] = []
+        for proposal in self.__dict__.get("_price_proposals") or []:
+            ids.extend(self._price_proposal_member_ids(proposal))
+        return list(dict.fromkeys(value for value in ids if value))
+
+    def _invalidate_price_inventory_caches(self) -> None:
+        self._price_available_items = []
+        self._price_search_results = []
+        self._price_line_sources = {}
+        self._price_items_error = ""
+        self._inventory_items = []
+        self._inventory_loaded_once = False
+
+    def _invalidate_price_proposal_caches(self) -> None:
+        self._price_proposals = []
+        self._selected_price_proposal = None
+        self._price_loaded_once = False
+        self._price_refresh_preferred_token = ""
+        self._price_rendered_model_keys = ()
+        self._price_rendered_model_types = ()
+
+    def _maybe_start_price_woo_sync(self) -> None:
+        if self._current_key != "precios" or self._price_mode != "saved":
+            return
+        elapsed = time.monotonic() - float(self._price_last_woo_sync_monotonic or 0.0)
+        if self._price_last_woo_sync_monotonic and elapsed < 300:
+            return
+        self._sync_price_module_prices(refresh_after=False, source="entrada")
+
+    def _refresh_price_module(self, parent: tk.Frame, *, source: str = "manual") -> None:
+        self._sync_price_module_prices(refresh_after=True, source=source, parent=parent)
+
+    def _sync_price_module_prices(
+        self,
+        *,
+        refresh_after: bool,
+        source: str,
+        parent: tk.Frame | None = None,
+    ) -> None:
+        if self._price_woo_sync_in_progress:
+            return
+        proposal_ids = self._price_loaded_proposal_ids()
+        if self._cloud_session is None or not proposal_ids:
+            if refresh_after and parent is not None:
+                self._refresh_price_proposals(parent, source=source)
+            return
+        self._price_woo_sync_in_progress = True
+        overlay = self._price_start_working_overlay(
+            "Sincronizando precios",
+            "Sincronizando precios con WooCommerce...",
+        )
+
+        def worker() -> None:
+            try:
+                result = sync_price_proposal_inventory_prices(
+                    self._cloud_session,
+                    proposal_ids=proposal_ids,
+                    settings=load_settings(),
+                )
+                self.after(0, lambda: finish(result, ""))
+            except Exception as exc:
+                self.after(0, lambda exc=exc: finish(None, str(exc)))
+
+        def finish(result: dict[str, Any] | None, error: str) -> None:
+            self._price_stop_working_overlay(overlay)
+            self._price_woo_sync_in_progress = False
+            if error:
+                self._price_error = f"No se pudieron sincronizar precios Woo: {error}"
+            else:
+                self._price_last_woo_sync_monotonic = time.monotonic()
+                self._invalidate_price_inventory_caches()
+                self._price_error = ""
+            if self._current_key != "precios" or self._price_mode != "saved":
+                return
+            if refresh_after and parent is not None:
+                self._refresh_price_proposals(parent, source=source)
+            else:
+                self._show_view("precios")
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _price_record_refresh_diagnostic(
         self,
@@ -2481,8 +2579,26 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             self._price_active_overlay = None
 
     def _price_proposal_from_cloud_row(self, row: dict[str, Any]) -> PriceProposal:
-        old_price = self._money_or_none(row.get("old_price"))
-        new_price = self._money_or_none(row.get("new_price"))
+        source_row = row.get("source_row") if isinstance(row.get("source_row"), dict) else {}
+        price_snapshot = (
+            source_row.get("proposal_price_snapshot")
+            if isinstance(source_row.get("proposal_price_snapshot"), dict)
+            else {}
+        )
+        old_price = self._money_or_none(
+            source_row.get("price_at_creation")
+            if source_row.get("price_at_creation") not in (None, "")
+            else price_snapshot.get("price_at_creation")
+            if price_snapshot.get("price_at_creation") not in (None, "")
+            else row.get("old_price")
+        )
+        new_price = self._money_or_none(
+            source_row.get("proposed_price")
+            if source_row.get("proposed_price") not in (None, "")
+            else price_snapshot.get("proposed_price")
+            if price_snapshot.get("proposed_price") not in (None, "")
+            else row.get("new_price")
+        )
         delta = None if old_price is None or new_price is None else new_price - old_price
         change = "Pendiente"
         direction = "flat"
@@ -2492,8 +2608,9 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 change = f"{(delta / old_price) * 100:+.2f}%"
             else:
                 change = f"{delta:+.2f}"
-        status = self._price_status_label_from_cloud(row.get("status"))
-        source_row = row.get("source_row") if isinstance(row.get("source_row"), dict) else {}
+        status = self._price_status_label_from_cloud(
+            "rolled_back" if source_row.get("rolled_back") else row.get("status")
+        )
         canonical_kind = str(
             source_row.get("ui_canonical_item_kind")
             or row.get("item_kind")
@@ -2531,6 +2648,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             "rejected": "Rechazada",
             "publishing": "Publicando",
             "published": "Publicada",
+            "error": "Error crítico",
             "rolled_back": "Restaurada",
             "failed": "Fallida",
         }.get(value, str(raw or "-"))
@@ -2593,6 +2711,40 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         scroll.grid(row=1, column=0, sticky="nsew", padx=16)
         tk.Label(scroll, text=proposal.name, bg=CARD, fg=TEXT, font=("Segoe UI", 15, "bold"), wraplength=380, justify=tk.LEFT).pack(anchor=tk.W, fill=tk.X)
         tk.Label(scroll, text=proposal.date, bg=CARD, fg=MUTED).pack(anchor=tk.W, pady=(2, 12))
+        proposal_source = (proposal.raw or {}).get("source_row") if isinstance((proposal.raw or {}).get("source_row"), dict) else {}
+        raw_status = self._proposal_raw_status(proposal)
+        if raw_status in {"published", "rolled_back"}:
+            tk.Label(
+                scroll,
+                text=(
+                    f"Publicada: {(proposal.raw or {}).get('published_at') or '-'} · "
+                    f"Usuario: {proposal_source.get('published_by_email') or '-'} · "
+                    f"Operación: {proposal_source.get('publish_operation_id') or '-'}"
+                ),
+                bg=GREEN_SOFT,
+                fg=GREEN,
+                anchor=tk.W,
+                justify=tk.LEFT,
+                padx=10,
+                pady=8,
+                wraplength=380,
+            ).pack(fill=tk.X, pady=(0, 12))
+        if raw_status == "rolled_back":
+            tk.Label(
+                scroll,
+                text=(
+                    f"Restaurada: {proposal_source.get('rolled_back_at') or '-'} · "
+                    f"Usuario: {proposal_source.get('rolled_back_by_email') or '-'} · "
+                    f"Operación: {proposal_source.get('restore_operation_id') or '-'}"
+                ),
+                bg=AMBER_SOFT,
+                fg=AMBER,
+                anchor=tk.W,
+                justify=tk.LEFT,
+                padx=10,
+                pady=8,
+                wraplength=380,
+            ).pack(fill=tk.X, pady=(0, 12))
 
         summary = tk.Frame(scroll, bg=CARD)
         summary.pack(fill=tk.X, pady=(0, 12))
@@ -2615,19 +2767,74 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         top_actions = tk.Frame(footer, bg=CARD)
         top_actions.pack(fill=tk.X, padx=12, pady=(12, 7))
         self._button(top_actions, "Modificar", primary=True, command=lambda: self._set_price_mode("edit")).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 6))
-        self._button(top_actions, "Borrar propuesta", command=lambda: self._open_delete_price_proposal_confirmation(proposal)).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(6, 0))
+        delete_button = self._button(
+            top_actions,
+            "Borrar propuesta",
+            command=lambda: self._open_delete_price_proposal_confirmation(proposal),
+        )
+        delete_button.configure(
+            bg=CARD,
+            fg=TEXT,
+            activebackground=SOFT,
+            activeforeground=TEXT,
+            relief=tk.SOLID,
+            bd=1,
+        )
+        delete_button.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(6, 0))
         row = tk.Frame(footer, bg=CARD)
         row.pack(fill=tk.X, padx=12, pady=(0, 12))
         can_review = self._proposal_raw_status(proposal) == "pending"
-        accept = self._button(row, "Aceptar propuesta", command=lambda: self._open_price_review_modal(proposal, "approved"))
-        reject = self._button(row, "Rechazar propuesta", command=lambda: self._open_price_review_modal(proposal, "rejected"))
+        accept = self._button(row, "Aceptar propuesta", command=lambda: self._open_price_publish_preview(proposal))
+        reject = self._button(row, "Rechazar propuesta", command=lambda: self._open_price_reject_modal(proposal))
+        accept.configure(
+            bg=GREEN,
+            fg="white",
+            activebackground="#15803D",
+            activeforeground="white",
+            disabledforeground="#F1F5F9",
+        )
+        reject.configure(
+            bg=ROSE,
+            fg="white",
+            activebackground="#BE123C",
+            activeforeground="white",
+            disabledforeground="#F1F5F9",
+        )
         if not can_review:
             accept.configure(state=tk.DISABLED)
             reject.configure(state=tk.DISABLED)
+            for button in top_actions.winfo_children():
+                if isinstance(button, tk.Button) and str(button.cget("text")) == "Modificar":
+                    button.configure(state=tk.DISABLED)
         accept.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 6))
         reject.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(6, 0))
+        can_restore = (
+            raw_status == "published"
+            and str(getattr(self._cloud_session, "role", "") or "").lower() == "admin"
+            and bool(proposal_source.get("publish_operation_id"))
+        )
+        if can_restore:
+            restore_row = tk.Frame(footer, bg=CARD)
+            restore_row.pack(fill=tk.X, padx=12, pady=(0, 12))
+            restore_button = self._button(
+                restore_row,
+                "Restaurar precios",
+                command=lambda: self._open_price_restore_preview(proposal),
+            )
+            restore_button.configure(
+                bg=CARD,
+                fg=TEXT,
+                activebackground=SOFT,
+                activeforeground=TEXT,
+                relief=tk.SOLID,
+                bd=1,
+            )
+            restore_button.pack(side=tk.RIGHT)
 
     def _proposal_raw_status(self, proposal: PriceProposal) -> str:
+        source = (proposal.raw or {}).get("source_row")
+        if isinstance(source, dict) and source.get("rolled_back"):
+            return "rolled_back"
         raw_status = (proposal.raw or {}).get("status")
         if raw_status:
             return str(raw_status).strip().lower()
@@ -2751,6 +2958,443 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             result.delete("1.0", tk.END)
             result.insert("1.0", text)
             result.configure(state=tk.DISABLED)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _price_proposal_member_ids(self, proposal: PriceProposal) -> list[str]:
+        row = proposal.raw or {}
+        return [
+            str(value)
+            for value in (row.get("ui_member_ids") or [row.get("id")])
+            if value
+        ]
+
+    def _open_price_publish_preview(self, proposal: PriceProposal) -> None:
+        if self._price_publish_in_progress:
+            return
+        if self._proposal_raw_status(proposal) != "pending":
+            messagebox.showinfo("Cambio de Precios", "Solo se publican propuestas pendientes.")
+            return
+        member_ids = self._price_proposal_member_ids(proposal)
+        if not member_ids or self._cloud_session is None:
+            messagebox.showinfo("Cambio de Precios", "La propuesta no contiene IDs reales o no hay sesión.")
+            return
+        self._price_publish_in_progress = True
+        overlay = self._price_start_working_overlay(
+            "Preparando publicación",
+            "Preparando publicación y consultando WooCommerce...",
+        )
+
+        def worker() -> None:
+            try:
+                preview = preview_price_proposal_group_publish(
+                    self._cloud_session,
+                    proposal_ids=member_ids,
+                    settings=load_settings(),
+                )
+                self.after(0, lambda: finish(preview, ""))
+            except Exception as exc:
+                self.after(0, lambda exc=exc: finish(None, str(exc)))
+
+        def finish(preview: dict[str, Any] | None, error: str) -> None:
+            self._price_stop_working_overlay(overlay)
+            if error or preview is None:
+                self._price_publish_in_progress = False
+                messagebox.showerror("Cambio de Precios", f"No se pudo preparar la publicación:\n{error}")
+                return
+            self._render_price_publish_preview(proposal, member_ids, preview)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _render_price_publish_preview(
+        self,
+        proposal: PriceProposal,
+        member_ids: list[str],
+        preview: dict[str, Any],
+    ) -> None:
+        win = tk.Toplevel(self)
+        win.title("Preview final - Publicar precios")
+        win.configure(bg=BG)
+        win.transient(self)
+        win.resizable(True, True)
+        win.rowconfigure(1, weight=1)
+        win.columnconfigure(0, weight=1)
+        width, height, min_width, min_height = self._price_bulk_preview_dimensions(
+            win.winfo_screenwidth(),
+            win.winfo_screenheight(),
+        )
+        win.minsize(min_width, min_height)
+        center_window(win, width, height)
+        win.grab_set()
+
+        counts = preview.get("counts") or {}
+        summary = tk.Frame(win, bg=CARD, highlightbackground=LINE, highlightthickness=1)
+        summary.grid(row=0, column=0, sticky="ew", padx=16, pady=(16, 10))
+        tk.Label(
+            summary,
+            text=(
+                f"Propuesta: {proposal.name}\n"
+                f"Total: {counts.get('total', 0)} · Válidas: {counts.get('valid', 0)} · "
+                f"Warnings: {counts.get('warnings', 0)} · Errores: {counts.get('errors', 0)} · "
+                f"Desactualizadas: {counts.get('stale', 0)}"
+            ),
+            bg=CARD,
+            fg=TEXT,
+            anchor=tk.W,
+            justify=tk.LEFT,
+        ).pack(fill=tk.X, padx=12, pady=12)
+
+        host = tk.Frame(win, bg=CARD)
+        host.grid(row=1, column=0, sticky="nsew", padx=16)
+        host.rowconfigure(0, weight=1)
+        host.columnconfigure(0, weight=1)
+        columns = ("type", "code", "name", "registered", "woo", "new", "delta", "status", "reason")
+        tree = ttk.Treeview(host, columns=columns, show="headings", height=16)
+        headings = (
+            "Tipo", "ID/Código", "Nombre", "Precio registrado", "Precio Woo",
+            "Precio nuevo", "Diferencia", "Estado", "Motivo",
+        )
+        widths = (80, 120, 240, 100, 90, 90, 90, 120, 320)
+        for column, heading, column_width in zip(columns, headings, widths):
+            tree.heading(column, text=heading)
+            tree.column(column, width=column_width, minwidth=70, anchor=tk.W if column in {"name", "reason"} else tk.CENTER)
+        yscroll = ttk.Scrollbar(host, orient=tk.VERTICAL, command=tree.yview)
+        xscroll = ttk.Scrollbar(host, orient=tk.HORIZONTAL, command=tree.xview)
+        tree.configure(yscrollcommand=yscroll.set, xscrollcommand=xscroll.set)
+        tree.grid(row=0, column=0, sticky="nsew")
+        yscroll.grid(row=0, column=1, sticky="ns")
+        xscroll.grid(row=1, column=0, sticky="ew")
+        for row in preview.get("rows") or []:
+            delta = row.get("delta")
+            tree.insert("", tk.END, values=(
+                row.get("item_kind"),
+                row.get("code"),
+                row.get("name"),
+                "-" if row.get("old_price_proposal") is None else f"{row['old_price_proposal']:.2f}",
+                "-" if row.get("woo_current_price") is None else f"{row['woo_current_price']:.2f}",
+                "-" if row.get("new_price") is None else f"{row['new_price']:.2f}",
+                "-" if delta is None else f"{delta:+.2f}",
+                row.get("status"),
+                row.get("reason"),
+            ))
+
+        footer = tk.Frame(win, bg=BG, highlightbackground=LINE, highlightthickness=1)
+        footer.grid(row=2, column=0, sticky="ew", padx=16, pady=16)
+        progress_label = tk.Label(footer, text="", bg=BG, fg=INDIGO, anchor=tk.W)
+        progress_label.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=12)
+
+        def close_preview() -> None:
+            if not win.winfo_exists():
+                return
+            try:
+                win.grab_release()
+            except tk.TclError:
+                pass
+            win.destroy()
+            self._price_publish_in_progress = False
+
+        def publish() -> None:
+            confirmation = simpledialog.askstring(
+                "Confirmar publicación",
+                (
+                    f"Se modificarán {counts.get('total', 0)} precios en WooCommerce.\n"
+                    "Se generará snapshot y, ante fallo parcial, se intentará rollback.\n\n"
+                    "Escribe exactamente PUBLICAR:"
+                ),
+                parent=win,
+            )
+            if confirmation != "PUBLICAR":
+                return
+            publish_button.configure(state=tk.DISABLED)
+            cancel_button.configure(state=tk.DISABLED)
+            progress_label.configure(text="Publicando precios en WooCommerce...")
+
+            def report(index: int, total: int, key: str) -> None:
+                self.after(0, lambda: progress_label.configure(
+                    text=f"Publicando precios en WooCommerce... {index}/{total} · {key}"
+                ))
+
+            def publish_worker() -> None:
+                try:
+                    result = publish_price_proposal_group(
+                        self._cloud_session,
+                        proposal_ids=member_ids,
+                        confirm="PUBLICAR",
+                        settings=load_settings(),
+                        progress=report,
+                    )
+                    self.after(0, lambda: publish_finished(result, ""))
+                except Exception as exc:
+                    self.after(0, lambda exc=exc: publish_finished(None, str(exc)))
+
+            threading.Thread(target=publish_worker, daemon=True).start()
+
+        def publish_finished(result: dict[str, Any] | None, error: str) -> None:
+            if error:
+                progress_label.configure(text=error, fg=ROSE)
+                publish_button.configure(state=tk.NORMAL)
+                cancel_button.configure(state=tk.NORMAL)
+                return
+            operation_id = (result or {}).get("operation_id") or "-"
+            close_preview()
+            messagebox.showinfo(
+                "Cambio de Precios",
+                f"Propuesta publicada y verificada.\nOperación: {operation_id}",
+            )
+            self._price_loaded_once = False
+            self._price_last_woo_sync_monotonic = time.monotonic()
+            self._invalidate_price_inventory_caches()
+            self._invalidate_price_proposal_caches()
+            self._price_next_refresh_source = "automatico"
+            if self._content is not None:
+                self._refresh_price_proposals(self._content, source="automatico")
+
+        cancel_button = self._button(footer, "Cancelar", command=close_preview)
+        cancel_button.pack(side=tk.RIGHT, padx=(6, 12), pady=12)
+        publish_button = self._button(footer, "Publicar precios", primary=True, command=publish)
+        publish_button.configure(state=tk.DISABLED if preview.get("blocking") else tk.NORMAL)
+        publish_button.pack(side=tk.RIGHT, padx=6, pady=12)
+        win.protocol("WM_DELETE_WINDOW", close_preview)
+        win.bind("<Escape>", lambda _event: close_preview())
+
+    def _open_price_restore_preview(self, proposal: PriceProposal) -> None:
+        if self._price_restore_in_progress:
+            return
+        if self._proposal_raw_status(proposal) != "published":
+            messagebox.showinfo("Cambio de Precios", "Solo se restauran propuestas publicadas.")
+            return
+        member_ids = self._price_proposal_member_ids(proposal)
+        if not member_ids or self._cloud_session is None:
+            messagebox.showinfo("Cambio de Precios", "La propuesta no contiene IDs reales o no hay sesión.")
+            return
+        self._price_restore_in_progress = True
+        overlay = self._price_start_working_overlay(
+            "Preparando restauración",
+            "Consultando snapshot y precios actuales en WooCommerce...",
+        )
+
+        def worker() -> None:
+            try:
+                preview = preview_price_proposal_group_restore(
+                    self._cloud_session,
+                    proposal_ids=member_ids,
+                    settings=load_settings(),
+                )
+                self.after(0, lambda: finish(preview, ""))
+            except Exception as exc:
+                self.after(0, lambda exc=exc: finish(None, str(exc)))
+
+        def finish(preview: dict[str, Any] | None, error: str) -> None:
+            self._price_stop_working_overlay(overlay)
+            if error or preview is None:
+                self._price_restore_in_progress = False
+                messagebox.showerror(
+                    "Cambio de Precios",
+                    f"No se pudo preparar la restauración:\n{error}",
+                )
+                return
+            self._render_price_restore_preview(proposal, member_ids, preview)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _render_price_restore_preview(
+        self,
+        proposal: PriceProposal,
+        member_ids: list[str],
+        preview: dict[str, Any],
+    ) -> None:
+        win = tk.Toplevel(self)
+        win.title("Preview final - Restaurar precios")
+        win.configure(bg=BG)
+        win.transient(self)
+        win.resizable(True, True)
+        win.rowconfigure(1, weight=1)
+        win.columnconfigure(0, weight=1)
+        width, height, min_width, min_height = self._price_bulk_preview_dimensions(
+            win.winfo_screenwidth(),
+            win.winfo_screenheight(),
+        )
+        win.minsize(min_width, min_height)
+        center_window(win, width, height)
+        win.grab_set()
+
+        counts = preview.get("counts") or {}
+        summary = tk.Frame(win, bg=CARD, highlightbackground=LINE, highlightthickness=1)
+        summary.grid(row=0, column=0, sticky="ew", padx=16, pady=(16, 10))
+        tk.Label(
+            summary,
+            text=(
+                f"Propuesta: {proposal.name}\n"
+                f"Total: {counts.get('total', 0)} · Válidas: {counts.get('valid', 0)} · "
+                f"Errores: {counts.get('errors', 0)} · "
+                f"Desactualizadas: {counts.get('stale', 0)}"
+            ),
+            bg=CARD,
+            fg=TEXT,
+            anchor=tk.W,
+            justify=tk.LEFT,
+        ).pack(fill=tk.X, padx=12, pady=12)
+
+        host = tk.Frame(win, bg=CARD)
+        host.grid(row=1, column=0, sticky="nsew", padx=16)
+        host.rowconfigure(0, weight=1)
+        host.columnconfigure(0, weight=1)
+        columns = ("type", "code", "name", "before", "current", "restore", "status", "reason")
+        tree = ttk.Treeview(host, columns=columns, show="headings", height=16)
+        headings = (
+            "Tipo", "ID/Código", "Nombre", "Precio antes de publicar",
+            "Precio actual Woo", "Precio a restaurar", "Estado", "Motivo",
+        )
+        widths = (80, 120, 240, 130, 110, 120, 130, 320)
+        for column, heading, column_width in zip(columns, headings, widths):
+            tree.heading(column, text=heading)
+            tree.column(
+                column,
+                width=column_width,
+                minwidth=70,
+                anchor=tk.W if column in {"name", "reason"} else tk.CENTER,
+            )
+        yscroll = ttk.Scrollbar(host, orient=tk.VERTICAL, command=tree.yview)
+        xscroll = ttk.Scrollbar(host, orient=tk.HORIZONTAL, command=tree.xview)
+        tree.configure(yscrollcommand=yscroll.set, xscrollcommand=xscroll.set)
+        tree.grid(row=0, column=0, sticky="nsew")
+        yscroll.grid(row=0, column=1, sticky="ns")
+        xscroll.grid(row=1, column=0, sticky="ew")
+        for row in preview.get("rows") or []:
+            tree.insert("", tk.END, values=(
+                row.get("item_kind"),
+                row.get("code"),
+                row.get("name"),
+                "-" if row.get("restore_price") is None else f"{row['restore_price']:.2f}",
+                "-" if row.get("woo_current_price") is None else f"{row['woo_current_price']:.2f}",
+                "-" if row.get("restore_price") is None else f"{row['restore_price']:.2f}",
+                row.get("status"),
+                row.get("reason"),
+            ))
+
+        footer = tk.Frame(win, bg=BG, highlightbackground=LINE, highlightthickness=1)
+        footer.grid(row=2, column=0, sticky="ew", padx=16, pady=16)
+        progress_label = tk.Label(footer, text="", bg=BG, fg=INDIGO, anchor=tk.W)
+        progress_label.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=12)
+
+        def close_preview() -> None:
+            if not win.winfo_exists():
+                return
+            try:
+                win.grab_release()
+            except tk.TclError:
+                pass
+            win.destroy()
+            self._price_restore_in_progress = False
+
+        def restore() -> None:
+            confirmation = simpledialog.askstring(
+                "Confirmar restauración",
+                (
+                    f"Se restaurarán {counts.get('total', 0)} precios reales.\n"
+                    "Se utilizará el snapshot previo y se verificará cada restauración.\n\n"
+                    "Escribe exactamente RESTAURAR:"
+                ),
+                parent=win,
+            )
+            if confirmation != "RESTAURAR":
+                return
+            restore_button.configure(state=tk.DISABLED)
+            cancel_button.configure(state=tk.DISABLED)
+            progress_label.configure(text="Restaurando precios en WooCommerce...")
+
+            def report(index: int, total: int, key: str) -> None:
+                self.after(0, lambda: progress_label.configure(
+                    text=f"Restaurando precios en WooCommerce... {index}/{total} · {key}"
+                ))
+
+            def restore_worker() -> None:
+                try:
+                    result = restore_price_proposal_group(
+                        self._cloud_session,
+                        proposal_ids=member_ids,
+                        confirm="RESTAURAR",
+                        settings=load_settings(),
+                        progress=report,
+                    )
+                    self.after(0, lambda: restore_finished(result, ""))
+                except Exception as exc:
+                    self.after(0, lambda exc=exc: restore_finished(None, str(exc)))
+
+            threading.Thread(target=restore_worker, daemon=True).start()
+
+        def restore_finished(result: dict[str, Any] | None, error: str) -> None:
+            if error:
+                progress_label.configure(text=error, fg=ROSE)
+                restore_button.configure(state=tk.NORMAL)
+                cancel_button.configure(state=tk.NORMAL)
+                return
+            operation_id = (result or {}).get("operation_id") or "-"
+            close_preview()
+            messagebox.showinfo(
+                "Cambio de Precios",
+                f"Precios restaurados y verificados.\nOperación: {operation_id}",
+            )
+            self._price_loaded_once = False
+            self._price_last_woo_sync_monotonic = time.monotonic()
+            self._invalidate_price_inventory_caches()
+            self._invalidate_price_proposal_caches()
+            self._price_next_refresh_source = "automatico"
+            if self._content is not None:
+                self._refresh_price_proposals(self._content, source="automatico")
+
+        cancel_button = self._button(footer, "Cancelar", command=close_preview)
+        cancel_button.pack(side=tk.RIGHT, padx=(6, 12), pady=12)
+        restore_button = self._button(
+            footer,
+            "Restaurar precios",
+            primary=True,
+            command=restore,
+        )
+        restore_button.configure(state=tk.DISABLED if preview.get("blocking") else tk.NORMAL)
+        restore_button.pack(side=tk.RIGHT, padx=6, pady=12)
+        win.protocol("WM_DELETE_WINDOW", close_preview)
+        win.bind("<Escape>", lambda _event: close_preview())
+
+    def _open_price_reject_modal(self, proposal: PriceProposal) -> None:
+        if self._proposal_raw_status(proposal) != "pending":
+            messagebox.showinfo("Cambio de Precios", "Solo se rechazan propuestas pendientes.")
+            return
+        reason = simpledialog.askstring(
+            "Rechazar propuesta",
+            "Motivo obligatorio del rechazo:",
+            parent=self,
+        )
+        if not str(reason or "").strip():
+            messagebox.showwarning("Cambio de Precios", "El motivo de rechazo es obligatorio.")
+            return
+        member_ids = self._price_proposal_member_ids(proposal)
+        overlay = self._price_start_working_overlay("Rechazando propuesta", "Registrando rechazo...")
+
+        def worker() -> None:
+            try:
+                result = reject_real_price_proposal_group(
+                    self._cloud_session,
+                    member_ids,
+                    str(reason),
+                    load_settings(),
+                )
+                self.after(0, lambda: finish(result, ""))
+            except Exception as exc:
+                self.after(0, lambda exc=exc: finish(None, str(exc)))
+
+        def finish(result: dict[str, Any] | None, error: str) -> None:
+            self._price_stop_working_overlay(overlay)
+            if error:
+                messagebox.showerror("Cambio de Precios", f"No se pudo rechazar:\n{error}")
+                return
+            messagebox.showinfo(
+                "Cambio de Precios",
+                f"Propuesta rechazada.\nOperación: {(result or {}).get('operation_id') or '-'}",
+            )
+            self._price_loaded_once = False
+            if self._content is not None:
+                self._refresh_price_proposals(self._content, source="automatico")
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -3978,7 +4622,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         save_token: str,
     ) -> tuple[list[str], dict[str, int]]:
         """Valida y persiste una copia inmutable del modelo canónico."""
-        plan: list[tuple[ProposalLine, dict[str, Any], float]] = []
+        plan: list[tuple[ProposalLine, dict[str, Any], float, float]] = []
         settings = load_settings()
         visible_entries = self._price_canonical_snapshot()
         visible_keys = tuple(entry["key"] for entry in visible_entries)
@@ -3999,6 +4643,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                     f"la clave {entry.get('key')} no conserva el tipo {kind}."
                 )
             woo_id = int(source.get("woo_id"))
+            price_at_creation = self._money_or_none(line.old_price)
             new_price = self._price_parse_money(line.new_price)
             preview = preview_real_price_proposal(
                 self._cloud_session,
@@ -4008,6 +4653,17 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 notes="Validación previa UI-ERP Cambio de Precios.",
                 settings=settings,
                 item_snapshot=source.get("item_snapshot"),
+                price_at_creation=(
+                    float(price_at_creation)
+                    if price_at_creation is not None
+                    else None
+                ),
+            )
+            preview_old_price = self._money_or_none(
+                preview.get("old_price", price_at_creation)
+            )
+            preview_new_price = self._money_or_none(
+                preview.get("new_price", new_price)
             )
             safety = preview.get("price_safety") or {}
             if safety.get("status") == "ERROR":
@@ -4017,9 +4673,25 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                     f"Línea: {line.code} [{kind}] {line.name}\n"
                     f"{messages}".strip()
                 )
-            plan.append((line, source, float(new_price)))
+            if price_at_creation is None:
+                raise ValueError(
+                    "Error interno de integridad de precios: "
+                    f"{entry.get('key')} no tiene price_at_creation numérico en el panel."
+                )
+            if (
+                preview_old_price is None
+                or abs(preview_old_price - float(price_at_creation)) > 0.009
+                or preview_new_price is None
+                or abs(preview_new_price - float(new_price)) > 0.009
+            ):
+                raise ValueError(
+                    "Error interno de integridad de precios: "
+                    f"{entry.get('key')} panel={price_at_creation:.2f}/{new_price:.2f} "
+                    f"preview={preview_old_price!r}/{preview_new_price!r}."
+                )
+            plan.append((line, source, float(price_at_creation), float(new_price)))
 
-        validated_keys = tuple(self._price_model_key(line, source) for line, source, _price in plan)
+        validated_keys = tuple(self._price_model_key(line, source) for line, source, _old, _new in plan)
         if validated_keys != entry_keys:
             raise ValueError(
                 "Error interno de integridad de propuesta: "
@@ -4028,7 +4700,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
 
         saved: list[str] = []
         counts = {"up": 0, "down": 0, "flat": 0}
-        for line, source, new_price in plan:
+        for line, source, price_at_creation, new_price in plan:
             result = create_real_price_proposal(
                 self._cloud_session,
                 str(source.get("item_kind") or ""),
@@ -4045,8 +4717,12 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                     "ui_canonical_item_kind": str(source.get("item_kind") or ""),
                     "ui_canonical_woo_id": int(source.get("woo_id")),
                     "ui_hub_item_code": str(source.get("hub_item_code") or ""),
+                    "price_at_creation": price_at_creation,
+                    "proposed_price": new_price,
+                    "price_value_source": "canonical_ui_model",
                 },
                 item_snapshot=source.get("item_snapshot"),
+                price_at_creation=price_at_creation,
             )
             proposal = result.get("proposal") or {}
             proposal_id = proposal.get("id")
@@ -4068,6 +4744,8 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             f"Sin cambio: {counts.get('flat', 0)}",
         )
         self._price_reset_edit_state()
+        self._invalidate_price_inventory_caches()
+        self._invalidate_price_proposal_caches()
         self._price_loaded_once = False
         self._price_refresh_preferred_token = self._price_save_token
         self._price_next_refresh_source = "guardado"

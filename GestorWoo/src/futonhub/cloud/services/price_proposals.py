@@ -530,6 +530,7 @@ def preview_real_price_proposal(
     notes: str = "",
     settings: Settings | None = None,
     item_snapshot: dict[str, Any] | None = None,
+    price_at_creation: float | None = None,
 ) -> dict[str, Any]:
     """Previsualiza una propuesta interna sin escribir nada.
 
@@ -545,8 +546,14 @@ def preview_real_price_proposal(
         item_snapshot=item_snapshot,
     )
     proposed_price = _safe_float(new_price, 0.0)
-    validation = _price_safety_preview(item, kind, proposed_price, settings)
-    old_price = validation.get("current_price")
+    validation_item = dict(item)
+    authoritative_price = _safe_money(price_at_creation)
+    if authoritative_price is not None:
+        validation_item["price"] = authoritative_price
+        validation_item["regular_price"] = authoritative_price
+        validation_item["sale_price"] = None
+    validation = _price_safety_preview(validation_item, kind, proposed_price, settings)
+    old_price = authoritative_price if authoritative_price is not None else validation.get("current_price")
     return {
         "item": item,
         "item_kind": kind,
@@ -686,6 +693,7 @@ def create_real_price_proposal(
     proposal_id: str | None = None,
     source_row_updates: dict[str, Any] | None = None,
     item_snapshot: dict[str, Any] | None = None,
+    price_at_creation: float | None = None,
 ) -> dict[str, Any]:
     """Crea/actualiza una propuesta interna real sobre producto migrado.
 
@@ -700,8 +708,14 @@ def create_real_price_proposal(
         item_snapshot=item_snapshot,
     )
     proposed_price = _safe_float(new_price, 0.0)
-    validation = _price_safety_preview(item, kind, proposed_price, settings)
-    old_price = validation.get("current_price")
+    authoritative_price = _safe_money(price_at_creation)
+    validation_item = dict(item)
+    if authoritative_price is not None:
+        validation_item["price"] = authoritative_price
+        validation_item["regular_price"] = authoritative_price
+        validation_item["sale_price"] = None
+    validation = _price_safety_preview(validation_item, kind, proposed_price, settings)
+    old_price = authoritative_price if authoritative_price is not None else validation.get("current_price")
     operation_id = new_operation_id("REALPRICE")
     before = None
 
@@ -740,6 +754,28 @@ def create_real_price_proposal(
             )
             write_snapshot(session, snapshot)
 
+        source_updates = dict(source_row_updates or {})
+        source_price = _safe_money(source_updates.get("price_at_creation"))
+        source_proposed = _safe_money(source_updates.get("proposed_price"))
+        if source_price is not None and old_price is not None and abs(source_price - old_price) > 0.009:
+            raise CloudAuditError(
+                "Error interno de integridad: price_at_creation no coincide con old_price."
+            )
+        if source_proposed is not None and abs(source_proposed - proposed_price) > 0.009:
+            raise CloudAuditError(
+                "Error interno de integridad: proposed_price no coincide con new_price."
+            )
+        proposal_price_snapshot = {
+            "price_at_creation": old_price,
+            "proposed_price": proposed_price,
+            "delta": proposed_price - old_price if old_price is not None else None,
+            "source": "canonical_ui_model" if authoritative_price is not None else "legacy_cloud_lookup",
+        }
+        persisted_item_snapshot = _json_safe(item)
+        if isinstance(persisted_item_snapshot, dict):
+            persisted_item_snapshot["price_at_creation"] = old_price
+            persisted_item_snapshot["proposed_price"] = proposed_price
+
         payload = {
             "local_id": int(woo_id),
             "item_kind": kind,
@@ -758,14 +794,29 @@ def create_real_price_proposal(
                 "role": session.role or settings.sync_role,
                 "machine": settings.machine_name,
                 "woo_publish": False,
-                "item_snapshot": _json_safe(item),
+                "item_snapshot": persisted_item_snapshot,
+                "price_at_creation": old_price,
+                "proposed_price": proposed_price,
+                "proposal_price_snapshot": proposal_price_snapshot,
                 "price_safety": _json_safe(validation),
                 "acknowledged_price_warning": bool(acknowledge_price_warning),
-                **(source_row_updates or {}),
+                **source_updates,
             },
         }
 
         if before is None:
+            write_snapshot(session, OperationSnapshot(
+                operation_id=operation_id,
+                module="price_change_proposals",
+                action="worker_real_price_proposal_create",
+                entity_type="price_change_proposal",
+                entity_id=str(woo_id),
+                before_data=_json_safe({
+                    "created_payload": payload,
+                    "proposal_price_snapshot": proposal_price_snapshot,
+                }),
+                reason="Snapshot del payload validado antes de crear propuesta real interna.",
+            ))
             resp = session.client.table("price_change_proposals").insert(payload).execute()
             action = "worker_real_price_proposal_create"
         else:
@@ -890,6 +941,74 @@ def review_latest_real_price_proposal(session, decision: str, proposal_id: str |
         raise
 
 
+def reject_real_price_proposal_group(
+    session,
+    proposal_ids: list[str] | tuple[str, ...],
+    reason: str,
+    settings: Settings | None = None,
+) -> dict[str, Any]:
+    """Rechaza una propuesta lógica completa sin tocar WooCommerce."""
+    settings = settings or load_settings()
+    if (session.role or "").lower() not in {"admin", "worker"}:
+        raise CloudAuditError("Solo admin o worker puede rechazar propuestas.")
+    reason = str(reason or "").strip()
+    if not reason:
+        raise CloudAuditError("El motivo de rechazo es obligatorio.")
+    ids = list(dict.fromkeys(str(value).strip() for value in proposal_ids if str(value).strip()))
+    if not ids:
+        raise CloudAuditError("La propuesta no contiene IDs reales.")
+    response = session.client.table("price_change_proposals").select("*").in_("id", ids).limit(len(ids)).execute()
+    rows = list(getattr(response, "data", None) or [])
+    if len(rows) != len(ids):
+        raise CloudAuditError("No se pudieron cargar todas las líneas de la propuesta.")
+    if any(_is_ui_deleted(row) for row in rows):
+        raise CloudAuditError("La propuesta contiene líneas borradas.")
+    if any(str(row.get("status") or "").strip().lower() != "pending" for row in rows):
+        raise CloudAuditError("Solo se puede rechazar una propuesta completamente pendiente.")
+
+    operation_id = new_operation_id("PRICEREJECT")
+    write_snapshot(session, OperationSnapshot(
+        operation_id=operation_id,
+        module="price_change_proposals",
+        action="user_rejected_price_proposal_group",
+        entity_type="price_proposal_group",
+        entity_id=str(ids[0]),
+        before_data=_json_safe(rows),
+        reason="Snapshot antes de rechazar una propuesta lógica completa.",
+    ))
+    now = datetime.now(timezone.utc).isoformat()
+    for row in rows:
+        source = _source_row_dict(row)
+        update_response = session.client.table("price_change_proposals").update({
+            "status": "rejected",
+            "reviewed_by": session.user_id,
+            "reviewed_at": now,
+            "notes": (row.get("notes") or "") + f"\n[UI-ERP] Rechazada: {reason}",
+            "source_row": {
+                **source,
+                "review_operation_id": operation_id,
+                "review_decision": "rejected",
+                "rejection_reason": reason,
+                "reviewed_by_email": session.email,
+                "reviewed_by_role": session.role,
+                "woo_publish": False,
+            },
+        }).eq("id", row.get("id")).eq("status", "pending").execute()
+        if not (getattr(update_response, "data", None) or []):
+            raise CloudAuditError(f"No se confirmó el rechazo de la línea {row.get('id')}.")
+    write_audit_event(session, AuditEvent(
+        operation_id=operation_id,
+        module="price_change_proposals",
+        action="user_rejected_price_proposal_group",
+        status="OK",
+        severity="INFO",
+        entity_type="price_proposal_group",
+        entity_id=str(ids[0]),
+        before_data=_json_safe(rows),
+        after_data={"proposal_ids": ids, "reason": reason, "status": "rejected"},
+        message="Propuesta lógica rechazada sin escribir en WooCommerce.",
+    ), settings)
+    return {"operation_id": operation_id, "rejected_count": len(rows), "proposal_ids": ids}
 
 
 def delete_real_price_proposal_group(

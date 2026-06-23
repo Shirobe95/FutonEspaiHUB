@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 
-PRICE_PROPOSAL_STATUSES = {"pending", "approved", "publishing", "rejected", "published", "error", "cancelled"}
+PRICE_PROPOSAL_STATUSES = {"pending", "approved", "publishing", "rejected", "published", "rolled_back", "error", "cancelled"}
 
 
 def short_row_value(row: dict[str, Any], *keys: str) -> Any:

@@ -391,3 +391,32 @@ Estado: aprobado por smoke manual mediante `Abrir ERP.bat` el 2026-06-22.
 
 Los diagnosticos temporales masivos se retiraron tras el cierre. Solo permanece
 salida compacta para errores operativos o de integridad.
+
+## Cierre FUNC-002L, FUNC-002L.1 y FUNC-002L.2
+
+Estado: aprobado por smoke manual mediante `Abrir ERP.bat` el 2026-06-23.
+
+- publicacion real de subidas y bajadas para productos, variaciones y packs;
+- lectura en vivo y bloqueo completo ante propuesta `DESACTUALIZADA` o cualquier error;
+- escritura compatible con `regular_price` y `sale_price`, con verificacion posterior;
+- snapshots, audit logs, historial e invalidacion de caches tras guardar, publicar y restaurar;
+- sincronizacion automatica al entrar y sincronizacion explicita mediante `Actualizar`;
+- actualizacion inmediata de `inventory_items.woo_price`;
+- persistencia y rehidratacion separada de `price_at_creation`, `proposed_price`,
+  `price_before_publish`, `published_price` y `restored_price`;
+- restauracion real desde snapshot, estado `rolled_back` y compensacion inversa ante fallo parcial;
+- propuestas publicadas y restauradas permanecen en solo lectura;
+- acciones finales: Aceptar verde, Rechazar rojo, Borrar y Restaurar con contorno;
+- smoke manual completo sin traceback.
+
+Verificacion automatizada final:
+
+```text
+Tests especificos de Cambio de Precios: 198 OK
+Suite completa: 331 OK
+py_compile: OK
+Integridad AST: 111 archivos OK
+```
+
+No se añadieron migraciones, dependencias ni variables de entorno. El flujo de
+publicacion, sincronizacion y restauracion de Cambio de Precios queda cerrado.
