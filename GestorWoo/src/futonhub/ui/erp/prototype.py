@@ -10,6 +10,7 @@ import time
 import unicodedata
 import uuid
 import warnings
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from tkinter import filedialog, messagebox, simpledialog, ttk
 from typing import Any
 
@@ -5679,7 +5680,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         field_data = [
             ("Nombre del pedido", str(order_inputs.get("Nombre del pedido") or order.order_id if order else f"PED-{provider[:3].upper()}-BORRADOR")),
             ("Fecha", str(order_inputs.get("Fecha") or order.date if order else "")),
-            ("Rentabilidad %", str(order_inputs.get("Rentabilidad %") or "")),
+            ("Margen de Venta %", str(order_inputs.get("Margen de Venta %") or order_inputs.get("Rentabilidad %") or "")),
         ]
         if is_heimei:
             field_data.extend(
@@ -5896,7 +5897,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 return number
         return 0.0
 
-    def _parse_rentabilidad_percent(self, value: Any, *, label: str = "Rentabilidad") -> float:
+    def _parse_rentabilidad_percent(self, value: Any, *, label: str = "Margen de Venta", allow_negative: bool = False) -> float:
         text = str(value if value is not None else "").strip().replace("%", "").replace(",", ".")
         if not text:
             return 0.0
@@ -5904,25 +5905,65 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             percent = float(text)
         except Exception as exc:
             raise ValueError(f"{label} debe ser un numero entre 0 y menos de 100.") from exc
-        if percent < 0:
+        if percent < 0 and not allow_negative:
             raise ValueError(f"{label} no puede ser negativa.")
         if percent >= 100:
             raise ValueError(f"{label} debe ser menor que 100.")
         return percent
 
-    def _supplier_order_pvp(self, final_cost: Any, rentabilidad_percent: Any) -> float:
-        cost = self._money_float(final_cost, 0.0)
-        rentabilidad = self._parse_rentabilidad_percent(rentabilidad_percent)
+    def _supplier_order_pvp(self, final_cost: Any, rentabilidad_percent: Any, *, allow_negative: bool = False) -> float:
+        pvp = self._supplier_order_pvp_decimal(final_cost, rentabilidad_percent, allow_negative=allow_negative)
+        return float(pvp)
+
+    def _supplier_order_pvp_decimal(self, final_cost: Any, rentabilidad_percent: Any, *, allow_negative: bool = False) -> Decimal:
+        cost = self._decimal_value(final_cost)
+        rentabilidad = Decimal(str(self._parse_rentabilidad_percent(rentabilidad_percent, label="Margen de Venta", allow_negative=allow_negative)))
         if cost <= 0:
-            return 0.0
-        return round(cost / (1 - rentabilidad / 100), 2)
+            return Decimal("0.00")
+        result = cost / (Decimal("1") - (rentabilidad / Decimal("100")))
+        return result.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+    def _supplier_order_margin_from_pvp(self, final_cost: Any, pvp_unit: Any) -> float:
+        cost = self._decimal_value(final_cost)
+        pvp = self._parse_supplier_order_pvp_unit(pvp_unit)
+        if pvp <= 0:
+            raise ValueError("P.V.P. debe ser mayor que 0.")
+        margin = (Decimal("1") - (cost / pvp)) * Decimal("100")
+        return float(margin.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+
+    def _parse_supplier_order_pvp_unit(self, value: Any) -> Decimal:
+        text = str(value if value is not None else "").strip().replace("€", "").replace("EUR", "").replace(",", ".")
+        if not text:
+            raise ValueError("P.V.P. vacío.")
+        try:
+            pvp = Decimal(text)
+        except (InvalidOperation, ValueError) as exc:
+            raise ValueError("P.V.P. debe ser un número mayor que 0.") from exc
+        if pvp <= 0:
+            raise ValueError("P.V.P. debe ser mayor que 0.")
+        return pvp
+
+    def _decimal_value(self, value: Any) -> Decimal:
+        text = str(value if value is not None else "0").strip().replace("€", "").replace("EUR", "").replace(",", ".")
+        try:
+            return Decimal(text)
+        except (InvalidOperation, ValueError):
+            return Decimal("0")
 
     def _supplier_order_effective_rentabilidad(self, source: dict[str, Any], global_percent: float) -> tuple[float, str]:
         use_global = source.get("use_global_rentability")
         individual = source.get("rentabilidad_individual_percent")
         if use_global is False and individual not in (None, ""):
-            return self._parse_rentabilidad_percent(individual, label="Rentabilidad individual"), "individual"
+            return self._parse_rentabilidad_percent(individual, label="Margen de Venta individual", allow_negative=True), "individual"
         return global_percent, "global"
+
+    def _supplier_order_price_input_source(self, source: dict[str, Any], rentabilidad_source: str) -> str:
+        if rentabilidad_source == "global" or source.get("use_global_rentability") is True:
+            return "global_margin"
+        value = str(source.get("price_input_source") or "").strip().lower()
+        if value in {"pvp", "individual_margin", "global_margin"}:
+            return value
+        return "individual_margin"
 
     def _supplier_order_update_line_rentabilidad(
         self,
@@ -5931,23 +5972,35 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         use_global: bool,
         global_percent: float,
         individual_percent: Any = None,
+        pvp_unit: Any = None,
+        input_source: str = "margin",
         quantity: int = 0,
     ) -> dict[str, Any]:
         updated = dict(source)
-        if use_global:
+        final_unit = self._money_float(updated.get("precio_coste_final") or updated.get("unit_cost"), 0.0)
+        commercial_base = self._supplier_order_commercial_base_cost(updated, quantity)
+        if input_source == "pvp" and commercial_base > 0:
+            effective = self._supplier_order_margin_from_pvp(commercial_base, pvp_unit)
+            updated["rentabilidad_individual_percent"] = effective
+            rentabilidad_source = "individual"
+            price_input_source = "pvp"
+            use_global = False
+        elif use_global:
             updated.pop("rentabilidad_individual_percent", None)
             effective = self._parse_rentabilidad_percent(global_percent)
             rentabilidad_source = "global"
+            price_input_source = "global_margin"
         else:
-            effective = self._parse_rentabilidad_percent(individual_percent, label="Rentabilidad individual")
+            effective = self._parse_rentabilidad_percent(individual_percent, label="Margen de Venta individual", allow_negative=True)
             updated["rentabilidad_individual_percent"] = effective
             rentabilidad_source = "individual"
+            price_input_source = "individual_margin"
         updated["rentabilidad_percent"] = effective
         updated["rentabilidad_source"] = rentabilidad_source
+        updated["price_input_source"] = price_input_source
         updated["use_global_rentability"] = use_global
-        final_unit = self._money_float(updated.get("precio_coste_final") or updated.get("unit_cost"), 0.0)
-        if final_unit > 0:
-            updated["pvp_unit"] = self._supplier_order_pvp(final_unit, effective)
+        if commercial_base > 0:
+            updated["pvp_unit"] = float(self._parse_supplier_order_pvp_unit(pvp_unit)) if input_source == "pvp" else self._supplier_order_pvp(commercial_base, effective, allow_negative=rentabilidad_source == "individual")
             updated["pvp_line"] = round(updated["pvp_unit"] * max(0, int(quantity or 0)), 2)
         return updated
 
@@ -5976,6 +6029,35 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
     def _line_inventory_float(self, source: dict[str, Any], key: str, default: float = 0.0) -> float:
         return self._money_float(source.get(key), default) if hasattr(self, "_money_float") else default
 
+    def _supplier_order_weighted_unit_cost(
+        self,
+        *,
+        final_unit: Any,
+        quantity: Any,
+        current_stock: Any,
+        current_weighted_cost: Any,
+    ) -> float:
+        final = self._money_float(final_unit, 0.0)
+        qty = max(0, int(self._money_float(quantity, 0.0)))
+        stock = self._money_float(current_stock, 0.0)
+        weighted = self._money_float(current_weighted_cost, 0.0)
+        if stock > 0 and weighted > 0:
+            return round(((stock * weighted) + (qty * final)) / (stock + qty), 2) if (stock + qty) else final
+        return final
+
+    def _supplier_order_commercial_base_cost(self, source: dict[str, Any], quantity: Any = 0) -> float:
+        weighted = self._money_float(source.get("precio_ponderado_lote"), 0.0)
+        if weighted > 0:
+            return weighted
+        return self._supplier_order_weighted_unit_cost(
+            final_unit=source.get("precio_coste_final") or source.get("unit_cost"),
+            quantity=quantity,
+            current_stock=source.get("inventory_stock_total") or source.get("stock_total_actual"),
+            current_weighted_cost=source.get("inventory_weighted_average_cost")
+            or source.get("weighted_average_cost")
+            or source.get("weighted_average_cost_actual"),
+        )
+
     def _calculate_supplier_order_in_memory(self, provider: str, values: dict[str, str], items: tuple[OrderItem, ...], raw_lines: list[dict[str, Any]]) -> tuple[tuple[OrderItem, ...], list[dict[str, Any]], dict[str, Any]]:
         """Calcula el pedido en memoria usando fórmulas legacy de coste_pedido.py.
 
@@ -5990,7 +6072,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             for item in items
         ]
         constants = self._current_business_constant_values()
-        rent_percent = self._parse_rentabilidad_percent(values.get("Rentabilidad %"))
+        rent_percent = self._parse_rentabilidad_percent(values.get("Margen de Venta %", values.get("Rentabilidad %")))
 
         # Conteos para fórmula general. M3 total del camión y productos que cuentan.
         total_m3 = sum(self._money_float((raw_lines[i] if i < len(raw_lines) else {}).get("m3_total") or item.m3) for i, item in enumerate(items))
@@ -6061,6 +6143,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         for index, item in enumerate(items):
             source = dict(raw_lines[index] if index < len(raw_lines) and isinstance(raw_lines[index], dict) else {})
             effective_rent_percent, rentabilidad_source = self._supplier_order_effective_rentabilidad(source, rent_percent)
+            price_input_source = self._supplier_order_price_input_source(source, rentabilidad_source)
             qty = max(0, int(item.quantity or 0))
             m3_total_line = self._money_float(source.get("m3_total") or item.m3)
             m3_unit = self._money_float(source.get("m3_und")) or (m3_total_line / qty if qty else 0.0)
@@ -6132,21 +6215,30 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                         "coste_almacenaje_iva": coste_almacenaje_iva,
                         "coste_picking_iva": coste_picking_iva,
                     }
-                pvp_unit = self._supplier_order_pvp(final_unit, effective_rent_percent)
                 line_cost = round(final_unit * qty, 2)
-                pvp_line = round(pvp_unit * qty, 2)
                 status = "Calculado"
+                stock_total_actual = self._money_float(source.get("inventory_stock_total"), 0.0)
+                weighted_current = self._money_float(source.get("inventory_weighted_average_cost") or source.get("weighted_average_cost"), 0.0)
+                precio_ponderado_lote = self._supplier_order_weighted_unit_cost(
+                    final_unit=final_unit,
+                    quantity=qty,
+                    current_stock=stock_total_actual,
+                    current_weighted_cost=weighted_current,
+                )
+                if price_input_source == "pvp":
+                    pvp_unit = float(self._parse_supplier_order_pvp_unit(source.get("pvp_unit")))
+                    effective_rent_percent = self._supplier_order_margin_from_pvp(precio_ponderado_lote, pvp_unit)
+                    rentabilidad_source = "individual"
+                else:
+                    pvp_unit = self._supplier_order_pvp(precio_ponderado_lote, effective_rent_percent, allow_negative=rentabilidad_source == "individual")
+                pvp_line = round(pvp_unit * qty, 2)
                 ok += 1
                 total_cost += line_cost
 
-            stock_total_actual = self._money_float(source.get("inventory_stock_total"), 0.0)
-            weighted_current = self._money_float(source.get("inventory_weighted_average_cost") or source.get("weighted_average_cost"), 0.0)
-            precio_ponderado_lote = 0.0
-            if status == "Calculado" and final_unit > 0:
-                if stock_total_actual > 0 and weighted_current > 0:
-                    precio_ponderado_lote = round(((stock_total_actual * weighted_current) + (qty * final_unit)) / (stock_total_actual + qty), 2) if (stock_total_actual + qty) else final_unit
-                else:
-                    precio_ponderado_lote = final_unit
+            if status != "Calculado":
+                stock_total_actual = self._money_float(source.get("inventory_stock_total"), 0.0)
+                weighted_current = self._money_float(source.get("inventory_weighted_average_cost") or source.get("weighted_average_cost"), 0.0)
+                precio_ponderado_lote = 0.0
 
             enriched_source = {
                 **source,
@@ -6172,11 +6264,14 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 "rentabilidad_percent": effective_rent_percent,
                 "rentabilidad_global_percent": rent_percent,
                 "rentabilidad_source": rentabilidad_source,
+                "price_input_source": price_input_source,
                 "use_global_rentability": rentabilidad_source == "global",
                 "cuenta_para_descarga": "Sí" if self._order_line_counts_for_download(item, source) else "No",
                 "cuenta_reparto_descarga": self._order_line_counts_for_download(item, source),
                 "cuenta_pedido": "Sí" if self._order_line_counts_for_download(item, source) else "No",
             }
+            if rentabilidad_source == "individual":
+                enriched_source["rentabilidad_individual_percent"] = effective_rent_percent
             calculated_raw.append(enriched_source)
             calculated.append(
                 OrderItem(
@@ -6403,9 +6498,9 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 "ID",
                 "Nombre",
                 "Coste Final",
-                "Rentabilidad",
-                "P.V.P.",
                 "Ponderado",
+                "P.V.P.",
+                "Margen de Venta",
                 "Color",
                 "Und.",
                 "Cuenta para descarga",
@@ -6432,9 +6527,9 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 "ID": 95,
                 "Nombre": 260,
                 "Coste Final": 130,
-                "Rentabilidad": 115,
-                "P.V.P.": 130,
                 "Ponderado": 130,
+                "P.V.P.": 130,
+                "Margen de Venta": 140,
                 "Color": 105,
                 "Und.": 70,
                 "Cuenta para descarga": 145,
@@ -6462,9 +6557,9 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 "ID",
                 "Nombre",
                 "Coste Final",
-                "Rentabilidad",
-                "P.V.P.",
                 "Ponderado",
+                "P.V.P.",
+                "Margen de Venta",
                 "Color",
                 "Und.",
                 "Cuenta para descarga",
@@ -6485,9 +6580,9 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 "ID": 95,
                 "Nombre": 260,
                 "Coste Final": 130,
-                "Rentabilidad": 115,
-                "P.V.P.": 130,
                 "Ponderado": 130,
+                "P.V.P.": 130,
+                "Margen de Venta": 140,
                 "Color": 105,
                 "Und.": 70,
                 "Cuenta para descarga": 145,
@@ -6549,6 +6644,15 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         tree.bind("<Double-1>", on_double_click)
         return frame
 
+    def _supplier_order_editor_window_metrics(self, screen_width: int, screen_height: int) -> tuple[int, int, int, int]:
+        safe_width = max(520, int(screen_width) - 80)
+        safe_height = max(420, int(screen_height) - 120)
+        width = min(700, safe_width)
+        height = min(640, safe_height)
+        min_width = min(640, width)
+        min_height = min(520, height)
+        return width, height, min_width, min_height
+
     def _open_order_item_missing_editor(self, item: OrderItem, on_save: Any | None = None) -> None:
         """ERP version of the old double-click editor from coste_pedido.py.
 
@@ -6561,19 +6665,34 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         win.configure(bg=BG)
         win.transient(self)
         win.grab_set()
-        center_window(win, 700, 700)
-        win.minsize(640, 620)
         win.columnconfigure(0, weight=1)
+        win.rowconfigure(1, weight=1)
+        width, height, min_width, min_height = self._supplier_order_editor_window_metrics(
+            win.winfo_screenwidth(),
+            win.winfo_screenheight(),
+        )
+        center_window(win, width, height)
+        win.minsize(min_width, min_height)
 
-        card = self._card(win)
-        card.pack(fill=tk.BOTH, expand=True, padx=18, pady=18)
-        header = tk.Frame(card, bg=CARD, highlightbackground=SOFT, highlightthickness=1)
-        header.pack(fill=tk.X)
+        header = tk.Frame(win, bg=CARD, highlightbackground=SOFT, highlightthickness=1)
+        header.grid(row=0, column=0, sticky="ew", padx=18, pady=(18, 0))
         tk.Label(header, text="Completar datos para calcular", bg=CARD, fg=TEXT, font=("Segoe UI", 15, "bold")).pack(anchor=tk.W, padx=18, pady=(16, 4))
         tk.Label(header, text=f"{item.code} - {item.name}", bg=CARD, fg=MUTED, wraplength=560, justify=tk.LEFT).pack(anchor=tk.W, padx=18, pady=(0, 14))
 
-        form = tk.Frame(card, bg=CARD)
-        form.pack(fill=tk.BOTH, expand=True, padx=18, pady=18)
+        body = tk.Frame(win, bg=CARD, highlightbackground=SOFT, highlightthickness=1)
+        body.grid(row=1, column=0, sticky="nsew", padx=18, pady=(0, 0))
+        body.columnconfigure(0, weight=1)
+        body.rowconfigure(0, weight=1)
+        canvas = tk.Canvas(body, bg=CARD, highlightthickness=0)
+        body_scrollbar = tk.Scrollbar(body, orient=tk.VERTICAL, command=canvas.yview)
+        canvas.configure(yscrollcommand=body_scrollbar.set)
+        canvas.grid(row=0, column=0, sticky="nsew")
+        body_scrollbar.grid(row=0, column=1, sticky="ns")
+        form = tk.Frame(canvas, bg=CARD)
+        form_window = canvas.create_window((0, 0), window=form, anchor="nw")
+        form.bind("<Configure>", lambda _event: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.bind("<Configure>", lambda event: canvas.itemconfigure(form_window, width=event.width))
+        form.configure(padx=18, pady=18)
         for col in range(2):
             form.columnconfigure(col, weight=1)
 
@@ -6626,20 +6745,34 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             0.0,
         )
         has_individual = source.get("rentabilidad_individual_percent") not in (None, "") and source.get("use_global_rentability") is False
+        initial_price_input_source = self._supplier_order_price_input_source(source, "individual" if has_individual else "global")
         use_global_rentability_var = tk.BooleanVar(value=not has_individual)
         individual_rentabilidad_var = tk.StringVar(
             value=str(source.get("rentabilidad_individual_percent") if has_individual else global_rentabilidad)
         )
-        pvp_preview_var = tk.StringVar()
         calculated_final_cost = self._money_float(source.get("precio_coste_final") or source.get("unit_cost"), 0.0)
+        calculated_weighted_cost = self._supplier_order_commercial_base_cost(source, item.quantity)
+        initial_pvp = source.get("pvp_unit")
+        if initial_pvp in (None, "") and calculated_weighted_cost > 0:
+            try:
+                initial_pvp = self._supplier_order_pvp(calculated_weighted_cost, individual_rentabilidad_var.get(), allow_negative=has_individual)
+            except ValueError:
+                initial_pvp = ""
+        pvp_unit_var = tk.StringVar(value="" if initial_pvp in (None, "") else f"{self._money_float(initial_pvp):.2f}")
+        margin_status_var = tk.StringVar(value="")
+        last_price_input_source = {"value": "pvp" if initial_price_input_source == "pvp" else "margin"}
+        live_update = {"active": False}
 
         rent_field = tk.Frame(form, bg=CARD)
         rent_field.grid(row=rent_row, column=0, columnspan=2, sticky="ew", pady=(0, 12))
+        rent_field.columnconfigure(0, weight=1)
         rent_field.columnconfigure(1, weight=1)
-        tk.Label(rent_field, text="RENTABILIDAD", bg=CARD, fg=MUTED, font=("Segoe UI", 8, "bold"), anchor=tk.W).grid(row=0, column=0, sticky="w", columnspan=2, pady=(0, 5))
+        rent_field.columnconfigure(2, weight=1)
+        tk.Label(rent_field, text="MARGEN DE VENTA (%)", bg=CARD, fg=MUTED, font=("Segoe UI", 8, "bold"), anchor=tk.W).grid(row=0, column=0, sticky="w", pady=(0, 5))
+        tk.Label(rent_field, text="P.V.P.", bg=CARD, fg=MUTED, font=("Segoe UI", 8, "bold"), anchor=tk.W).grid(row=0, column=1, sticky="w", pady=(0, 5))
         tk.Label(
             rent_field,
-            text=f"Coste Final calculado: {self._format_eur(calculated_final_cost) if calculated_final_cost > 0 else 'Pendiente'}",
+            text=f"Ponderado calculado: {self._format_eur(calculated_weighted_cost) if calculated_weighted_cost > 0 else 'Pendiente'}",
             bg=CARD,
             fg=MUTED,
             font=("Segoe UI", 8, "bold"),
@@ -6656,36 +6789,78 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             font=("Segoe UI", 10),
         )
         rent_entry.grid(row=1, column=0, sticky="ew", ipady=7, padx=(0, 10))
+        pvp_entry = tk.Entry(
+            rent_field,
+            textvariable=pvp_unit_var,
+            bg=CARD,
+            fg="#334155",
+            relief=tk.FLAT,
+            highlightbackground=LINE,
+            highlightcolor=INDIGO,
+            highlightthickness=1,
+            font=("Segoe UI", 10),
+        )
+        pvp_entry.grid(row=1, column=1, sticky="ew", ipady=7, padx=(0, 10))
         tk.Checkbutton(
             rent_field,
-            text=f"Usar rentabilidad global ({self._format_optional_decimal(global_rentabilidad, default='0')}%)",
+            text=f"Usar margen global ({self._format_optional_decimal(global_rentabilidad, default='0')}%)",
             variable=use_global_rentability_var,
             bg=CARD,
             fg=TEXT,
             activebackground=CARD,
             selectcolor=CARD,
-        ).grid(row=1, column=1, sticky="w")
-        tk.Label(rent_field, textvariable=pvp_preview_var, bg=INDIGO_SOFT, fg=INDIGO, font=("Segoe UI", 9, "bold"), padx=10, pady=7).grid(row=1, column=2, sticky="e")
+        ).grid(row=1, column=2, sticky="w")
+        tk.Label(rent_field, textvariable=margin_status_var, bg=INDIGO_SOFT, fg=INDIGO, font=("Segoe UI", 9, "bold"), padx=10, pady=7).grid(row=2, column=0, columnspan=3, sticky="ew", pady=(8, 0))
 
         def refresh_pvp_preview(*_args: object) -> None:
+            if live_update["active"]:
+                return
+            last_price_input_source["value"] = "margin"
             try:
                 rent = global_rentabilidad if use_global_rentability_var.get() else self._parse_rentabilidad_percent(
                     individual_rentabilidad_var.get(),
-                    label="Rentabilidad individual",
+                    label="Margen de Venta individual",
+                    allow_negative=True,
                 )
-                pvp_preview_var.set(
-                    f"P.V.P.: {self._supplier_order_pvp(calculated_final_cost, rent):.2f} EUR"
-                    if calculated_final_cost > 0
-                    else "P.V.P.: pendiente"
-                )
+                live_update["active"] = True
+                pvp_unit_var.set(f"{self._supplier_order_pvp(calculated_weighted_cost, rent, allow_negative=not use_global_rentability_var.get()):.2f}" if calculated_weighted_cost > 0 else "")
+                live_update["active"] = False
+                margin_status_var.set("P.V.P. recalculado desde margen.")
                 rent_entry.configure(state=tk.DISABLED if use_global_rentability_var.get() else tk.NORMAL)
             except ValueError:
-                pvp_preview_var.set("P.V.P.: rentabilidad invalida")
+                live_update["active"] = False
+                margin_status_var.set("Margen de Venta inválido.")
                 rent_entry.configure(state=tk.NORMAL)
+
+        def refresh_from_pvp(*_args: object) -> None:
+            if live_update["active"]:
+                return
+            if not pvp_unit_var.get().strip():
+                margin_status_var.set("")
+                return
+            last_price_input_source["value"] = "pvp"
+            live_update["active"] = True
+            use_global_rentability_var.set(False)
+            live_update["active"] = False
+            try:
+                margin = self._supplier_order_margin_from_pvp(calculated_weighted_cost, pvp_unit_var.get())
+                live_update["active"] = True
+                individual_rentabilidad_var.set(f"{margin:.2f}")
+                live_update["active"] = False
+                margin_status_var.set("Margen de Venta recalculado desde P.V.P.")
+                rent_entry.configure(state=tk.NORMAL)
+            except ValueError:
+                live_update["active"] = False
+                margin_status_var.set("P.V.P. inválido.")
 
         use_global_rentability_var.trace_add("write", refresh_pvp_preview)
         individual_rentabilidad_var.trace_add("write", refresh_pvp_preview)
-        refresh_pvp_preview()
+        pvp_unit_var.trace_add("write", refresh_from_pvp)
+        if initial_price_input_source == "pvp":
+            rent_entry.configure(state=tk.NORMAL)
+            margin_status_var.set("Margen de Venta recalculado desde P.V.P.")
+        else:
+            refresh_pvp_preview()
 
         cuenta_field = tk.Frame(form, bg=CARD)
         cuenta_field.grid(row=rent_row + 1, column=0, columnspan=2, sticky="ew", pady=(0, 12))
@@ -6724,18 +6899,6 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
 
         mark_if_missing()
 
-        msg = tk.Label(
-            card,
-            text="Los campos marcados en rojo son necesarios. Al aceptar, se actualiza la línea del pedido y, si la referencia coincide con inventory_items.item_id, se guarda M3/medidas/precio de pedido en Supabase con log y snapshot.",
-            bg=INDIGO_SOFT,
-            fg="#4338CA",
-            wraplength=560,
-            justify=tk.LEFT,
-            padx=12,
-            pady=10,
-        )
-        msg.pack(fill=tk.X, padx=18, pady=(0, 14))
-
         def accept_line_changes() -> None:
             mark_if_missing()
             desc = entries["Descripcion"].get().strip()
@@ -6744,16 +6907,22 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             rotation_c = self._money_float(entries["Rotación C"].get())
             packages = int(self._money_float(entries["Bultos"].get()))
             price_provider = self._money_float(entries["Precio proveedor"].get())
-            use_global_rentabilidad = bool(use_global_rentability_var.get())
+            input_source = str(last_price_input_source.get("value") or "margin")
+            use_global_rentabilidad = bool(use_global_rentability_var.get()) and input_source != "pvp"
             try:
-                individual_rentabilidad = (
-                    None
-                    if use_global_rentabilidad
-                    else self._parse_rentabilidad_percent(
-                        individual_rentabilidad_var.get(),
-                        label="Rentabilidad individual",
+                if input_source == "pvp":
+                    self._parse_supplier_order_pvp_unit(pvp_unit_var.get())
+                    individual_rentabilidad = self._supplier_order_margin_from_pvp(calculated_weighted_cost, pvp_unit_var.get())
+                else:
+                    individual_rentabilidad = (
+                        None
+                        if use_global_rentabilidad
+                        else self._parse_rentabilidad_percent(
+                            individual_rentabilidad_var.get(),
+                            label="Margen de Venta individual",
+                            allow_negative=True,
+                        )
                     )
-                )
             except ValueError as exc:
                 messagebox.showwarning("Pedidos", str(exc))
                 return
@@ -6813,6 +6982,8 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 use_global=use_global_rentabilidad,
                 global_percent=global_rentabilidad,
                 individual_percent=individual_rentabilidad,
+                pvp_unit=pvp_unit_var.get(),
+                input_source=input_source,
                 quantity=qty,
             )
             updated_item = OrderItem(
@@ -6846,19 +7017,26 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                         notes="Datos completados desde editor de línea de Pedido. WooCommerce no fue tocado.",
                     )
                     updated_source["inventory_update_status"] = "OK"
+                    updated_source["inventory_update_error"] = ""
                 except Exception as exc:
-                    updated_source["inventory_update_status"] = "ERROR"
-                    updated_source["inventory_update_error"] = str(exc)
-                    messagebox.showwarning(
-                        "Inventario",
-                        "La línea se actualizó en el pedido, pero no se pudo actualizar inventory_items.\n\n" + str(exc),
-                    )
+                    error_text = str(exc)
+                    if "No hay cambios para aplicar" in error_text:
+                        updated_source["inventory_update_status"] = "NO_CHANGES"
+                        updated_source["inventory_update_error"] = ""
+                    else:
+                        updated_source["inventory_update_status"] = "ERROR"
+                        updated_source["inventory_update_error"] = error_text
+                        print(
+                            "[SUPPLIER_ORDER_INVENTORY_UPDATE] "
+                            f"status=ERROR item_id={resolved_inventory_item_id} error={error_text}"
+                        )
             if callable(on_save):
                 on_save(updated_item, updated_source)
             win.destroy()
 
-        buttons = tk.Frame(card, bg=CARD)
-        buttons.pack(fill=tk.X, padx=18, pady=(0, 18))
+        win.bind("<Escape>", lambda _event: win.destroy())
+        buttons = tk.Frame(win, bg=CARD, highlightbackground=SOFT, highlightthickness=1)
+        buttons.grid(row=2, column=0, sticky="ew", padx=18, pady=(0, 18))
         self._button(buttons, "Cancelar", command=win.destroy).pack(side=tk.RIGHT, padx=(8, 0))
         self._button(buttons, "Aceptar", primary=True, command=accept_line_changes).pack(side=tk.RIGHT)
 
@@ -6896,18 +7074,18 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             rentabilidad = source.get("rentabilidad_percent")
             pvp_unit = source.get("pvp_unit")
             if pvp_unit in (None, ""):
-                base_cost = self._money_float(coste_unitario_final, 0.0)
+                base_cost = self._supplier_order_commercial_base_cost(source, item.quantity)
                 try:
-                    pvp_unit = self._supplier_order_pvp(base_cost, rentabilidad) if base_cost else 0.0
+                    pvp_unit = self._supplier_order_pvp(base_cost, rentabilidad, allow_negative=source.get("rentabilidad_source") == "individual") if base_cost else 0.0
                 except ValueError:
                     pvp_unit = 0.0
             leading = (
                 item.code,
                 item.name,
                 eur(coste_unitario_final),
-                num(rentabilidad),
-                eur(pvp_unit),
                 eur(precio_ponderado_lote),
+                eur(pvp_unit),
+                num(rentabilidad),
             )
             common = (
                 str(source.get("color") or "-"),
@@ -7329,9 +7507,9 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             "Almacenaje IVA",
             "Picking IVA",
             "Coste Final Artículo",
-            "Rentabilidad %",
-            "P.V.P.",
             "Precio ponderado lote",
+            "P.V.P.",
+            "Margen de Venta %",
             "Coste Total Cantidad",
             "Estado",
             "Motivos / errores",
@@ -7350,9 +7528,9 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             reasons = source.get("calculation_reasons") or []
             pvp_export_unit = source.get("pvp_unit")
             if pvp_export_unit in (None, ""):
-                base_cost = self._money_float(source.get("precio_coste_final") or source.get("unit_cost"), 0.0)
+                base_cost = self._supplier_order_commercial_base_cost(source, item.quantity)
                 try:
-                    pvp_export_unit = self._supplier_order_pvp(base_cost, source.get("rentabilidad_percent")) if base_cost else None
+                    pvp_export_unit = self._supplier_order_pvp(base_cost, source.get("rentabilidad_percent"), allow_negative=source.get("rentabilidad_source") == "individual") if base_cost else None
                 except ValueError:
                     pvp_export_unit = None
 
@@ -7380,9 +7558,9 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                     self._excel_number(calc_details.get("coste_almacenaje_iva")),
                     self._excel_number(calc_details.get("coste_picking_iva")),
                     self._excel_number(source.get("precio_coste_final") or source.get("unit_cost")),
-                    self._excel_number(source.get("rentabilidad_percent")),
-                    self._excel_number(pvp_export_unit),
                     self._excel_number(source.get("precio_ponderado_lote")),
+                    self._excel_number(pvp_export_unit),
+                    self._excel_number(source.get("rentabilidad_percent")),
                     self._excel_number(source.get("line_cost") or source.get("final_cost")),
                     item.status,
                     ", ".join(str(reason) for reason in reasons) if isinstance(reasons, list) else str(reasons or ""),
@@ -7401,9 +7579,9 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                     for key, value in data.items():
                         ws_detail.append((item.code, item.name, group_name, key, self._audit_value(value)))
 
-        money_cols = (6, 8, 9, 16, 17, 18, 19, 20, 21, 22, 24, 25, 26)
+        money_cols = (6, 8, 9, 16, 17, 18, 19, 20, 21, 22, 23, 24, 26)
         dollar_cols = (7,)
-        percent_cols = (11, 12, 13, 14, 15, 23)
+        percent_cols = (11, 12, 13, 14, 15, 25)
         self._apply_report_sheet_style(ws_lines, freeze="A2", money_cols=money_cols, percent_cols=percent_cols, dollar_cols=dollar_cols)
         self._apply_report_sheet_style(ws_detail, freeze="A2")
 
@@ -9194,7 +9372,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         tk.Label(side, text="Impacto", bg=CARD, fg=TEXT, font=("Segoe UI", 14, "bold")).pack(anchor=tk.W, padx=16, pady=(16, 8))
         tk.Label(
             side,
-            text="Los cambios en constantes afectan cálculo de pedidos, costes finales, rentabilidad y exportaciones. Deben quedar registrados en logs.",
+            text="Los cambios en constantes afectan cálculo de pedidos, costes finales, margen de venta y exportaciones. Deben quedar registrados en logs.",
             bg=AMBER_SOFT,
             fg="#92400E",
             wraplength=300,
