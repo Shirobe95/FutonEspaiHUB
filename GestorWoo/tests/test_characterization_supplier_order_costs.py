@@ -192,6 +192,8 @@ def general_item() -> OrderItem:
         "rotation_c": 1,
         "packages": 1,
         "cuenta_reparto_descarga": True,
+        "price_input_source": "global_margin",
+        "use_global_rentability": True,
     }
     return OrderItem("201014", "Futon prueba", 1, "1", "Pendiente", "OK", raw={"source_row": source})
 
@@ -204,6 +206,8 @@ def heimei_item() -> OrderItem:
         "rotation_c": 1,
         "packages": 1,
         "cuenta_reparto_descarga": True,
+        "price_input_source": "global_margin",
+        "use_global_rentability": True,
     }
     return OrderItem("301014", "Tatami prueba", 1, "1", "Pendiente", "OK", raw={"source_row": source})
 
@@ -218,12 +222,17 @@ def inventory_row(
     item_record_type: str = "simple",
     is_pack: bool = False,
     base_item_code: str = "",
+    woo_id: int = 0,
     woo_item_kind: str = "",
     woo_parent_id: int = 0,
+    woo_link_status: str = "",
     source_row: dict[str, object] | None = None,
     primary_supplier_price: object = 93.65,
     pascal_price: object = 0,
     rotation_c: float = 2,
+    store_stock: object = 0,
+    warehouse_stock: object = 0,
+    weighted_average_cost: object = 0,
 ) -> dict[str, object]:
     return {
         "item_id": item_id,
@@ -234,16 +243,18 @@ def inventory_row(
         "item_record_type": item_record_type,
         "is_pack": is_pack,
         "base_item_code": base_item_code,
+        "woo_id": woo_id,
         "woo_item_kind": woo_item_kind,
         "woo_parent_id": woo_parent_id,
+        "woo_link_status": woo_link_status,
         "primary_supplier_price": primary_supplier_price,
         "pascal_price": pascal_price,
         "cubic_meters": 1,
         "rotation_c": rotation_c,
         "packages": 1,
-        "store_stock": 0,
-        "warehouse_stock": 0,
-        "weighted_average_cost": 0,
+        "store_stock": store_stock,
+        "warehouse_stock": warehouse_stock,
+        "weighted_average_cost": weighted_average_cost,
         "order_calculated_price": 0,
         "updated_at": "2026-06-19T08:00:00+00:00",
         "source_row": source_row or {},
@@ -251,6 +262,36 @@ def inventory_row(
 
 
 class SupplierOrderCostTests(unittest.TestCase):
+    def woo_item(
+        self,
+        *,
+        code: str = "201014",
+        woo_id: int = 123,
+        woo_item_kind: str = "product",
+        woo_parent_id: int | None = None,
+        price_input_source: str | None = None,
+        extra_source: dict[str, object] | None = None,
+    ) -> OrderItem:
+        source: dict[str, object] = {
+            "m3_total": 1,
+            "m3_und": 1,
+            "precio_proveedor": 93.65,
+            "rotation_c": 1,
+            "packages": 1,
+            "cuenta_reparto_descarga": True,
+            "inventory_stock_total": 1,
+            "inventory_weighted_average_cost": 80,
+            "woo_id": woo_id,
+            "woo_item_kind": woo_item_kind,
+        }
+        if woo_parent_id is not None:
+            source["woo_parent_id"] = woo_parent_id
+        if price_input_source is not None:
+            source["price_input_source"] = price_input_source
+        if extra_source:
+            source.update(extra_source)
+        return OrderItem(code, "Futon Woo", 1, "1", "Pendiente", "OK", raw={"source_row": source})
+
     def test_general_supplier_separates_cost_margin_and_pvp(self) -> None:
         ui = app()
 
@@ -338,9 +379,483 @@ class SupplierOrderCostTests(unittest.TestCase):
         source = inspect.getsource(FutonHubErpPrototype._calculate_supplier_order_in_memory)
 
         self.assertIn('price_input_source == "pvp"', source)
+        self.assertIn('price_input_source == "woo_price"', source)
         self.assertIn("_supplier_order_margin_from_pvp(precio_ponderado_lote, pvp_unit)", source)
         self.assertIn("_supplier_order_pvp(precio_ponderado_lote, effective_rent_percent", source)
         self.assertNotIn("* (1 + rent_percent / 100)", source)
+
+    def test_woo_price_is_default_source_and_margin_uses_weighted_cost(self) -> None:
+        ui = app()
+        with patch.object(ui, "_supplier_order_fetch_woo_price", return_value={"price": 120, "checked_at": "now", "woo_price_item_id": 123, "woo_price_item_kind": "product", "woo_price_parent_id": ""}):
+            items, _raw, summary = ui._calculate_supplier_order_in_memory(
+                "ekomat",
+                {"Margen de Venta %": "40", "Coste transporte + IVA": "1"},
+                (self.woo_item(),),
+                [],
+            )
+
+        source = items[0].raw["source_row"]
+        self.assertEqual(source["precio_ponderado_lote"], 90.0)
+        self.assertEqual(source["pvp_unit"], 120.0)
+        self.assertEqual(source["rentabilidad_percent"], 25.0)
+        self.assertEqual(source["price_input_source"], "woo_price")
+        self.assertEqual(source["pvp_source_label"], "WooCommerce")
+        self.assertEqual(summary["total_cost"], 100.0)
+
+    def test_woo_price_does_not_fallback_to_global_margin(self) -> None:
+        ui = app()
+        with patch.object(ui, "_supplier_order_fetch_woo_price", return_value={"price": 120, "checked_at": "now", "woo_price_item_id": 123, "woo_price_item_kind": "product", "woo_price_parent_id": ""}):
+            items, _raw, _summary = ui._calculate_supplier_order_in_memory(
+                "ekomat",
+                {"Margen de Venta %": "40", "Coste transporte + IVA": "1"},
+                (self.woo_item(),),
+                [],
+            )
+
+        source = items[0].raw["source_row"]
+        self.assertEqual(source["pvp_unit"], 120.0)
+        self.assertNotEqual(source["pvp_unit"], 150.0)
+        self.assertEqual(source["rentabilidad_percent"], 25.0)
+
+    def test_missing_woo_price_marks_pvp_and_margin_pending(self) -> None:
+        ui = app()
+        with patch.object(ui, "_supplier_order_fetch_woo_price", return_value={"price": None, "error": "sin price", "checked_at": "now", "woo_price_item_id": 123, "woo_price_item_kind": "product", "woo_price_parent_id": ""}):
+            items, _raw, summary = ui._calculate_supplier_order_in_memory(
+                "ekomat",
+                {"Margen de Venta %": "40", "Coste transporte + IVA": "1"},
+                (self.woo_item(),),
+                [],
+            )
+
+        source = items[0].raw["source_row"]
+        self.assertEqual(items[0].status, "Warning")
+        self.assertIsNone(source["pvp_unit"])
+        self.assertIsNone(source["rentabilidad_percent"])
+        self.assertEqual(source["pvp_source"], "pending")
+        self.assertEqual(source["woo_price_error"], "sin price")
+        self.assertEqual(summary["total_cost"], 100.0)
+
+    def test_zero_woo_price_is_controlled_pending(self) -> None:
+        ui = app()
+        with patch.object(ui, "_supplier_order_fetch_woo_price", return_value={"price": 0, "error": "precio cero", "checked_at": "now", "woo_price_item_id": 123, "woo_price_item_kind": "product", "woo_price_parent_id": ""}):
+            items, _raw, _summary = ui._calculate_supplier_order_in_memory(
+                "ekomat",
+                {"Margen de Venta %": "40", "Coste transporte + IVA": "1"},
+                (self.woo_item(),),
+                [],
+            )
+
+        source = items[0].raw["source_row"]
+        self.assertEqual(items[0].status, "Warning")
+        self.assertIsNone(source["pvp_unit"])
+        self.assertEqual(source["pvp_source_label"], "Pendiente")
+
+    def test_manual_pvp_wins_over_woo(self) -> None:
+        ui = app()
+        with patch.object(ui, "_supplier_order_fetch_woo_price", side_effect=AssertionError("Woo no debe consultarse")):
+            items, _raw, _summary = ui._calculate_supplier_order_in_memory(
+                "ekomat",
+                {"Margen de Venta %": "40", "Coste transporte + IVA": "1"},
+                (self.woo_item(price_input_source="pvp", extra_source={"pvp_unit": 80}),),
+                [],
+            )
+
+        source = items[0].raw["source_row"]
+        self.assertEqual(source["pvp_unit"], 80.0)
+        self.assertEqual(source["rentabilidad_percent"], -12.5)
+        self.assertEqual(source["pvp_source_label"], "Manual P.V.P.")
+
+    def test_manual_margin_wins_over_woo(self) -> None:
+        ui = app()
+        with patch.object(ui, "_supplier_order_fetch_woo_price", side_effect=AssertionError("Woo no debe consultarse")):
+            items, _raw, _summary = ui._calculate_supplier_order_in_memory(
+                "ekomat",
+                {"Margen de Venta %": "10", "Coste transporte + IVA": "1"},
+                (self.woo_item(price_input_source="individual_margin", extra_source={"rentabilidad_individual_percent": 40, "use_global_rentability": False}),),
+                [],
+            )
+
+        source = items[0].raw["source_row"]
+        self.assertEqual(source["pvp_unit"], 150.0)
+        self.assertEqual(source["pvp_source_label"], "Manual Margen")
+
+    def test_explicit_global_margin_wins_over_woo(self) -> None:
+        ui = app()
+        with patch.object(ui, "_supplier_order_fetch_woo_price", side_effect=AssertionError("Woo no debe consultarse")):
+            items, _raw, _summary = ui._calculate_supplier_order_in_memory(
+                "ekomat",
+                {"Margen de Venta %": "40", "Coste transporte + IVA": "1"},
+                (self.woo_item(price_input_source="global_margin", extra_source={"use_global_rentability": True}),),
+                [],
+            )
+
+        source = items[0].raw["source_row"]
+        self.assertEqual(source["pvp_unit"], 150.0)
+        self.assertEqual(source["pvp_source_label"], "Margen global")
+
+    def test_variation_woo_price_uses_variation_endpoint(self) -> None:
+        ui = app()
+
+        class Response:
+            def json(self) -> dict[str, str]:
+                return {"price": "120"}
+
+        class Client:
+            endpoints: list[str] = []
+
+            def __init__(self, *_args: object) -> None:
+                pass
+
+            def get(self, endpoint: str) -> Response:
+                self.endpoints.append(endpoint)
+                return Response()
+
+            def put(self, *_args: object) -> None:
+                raise AssertionError("Woo no debe escribirse")
+
+        with patch.object(prototype_module, "load_settings", return_value=SimpleNamespace(woocommerce_url="https://woo.test", consumer_key="ck", consumer_secret="cs")):
+            with patch.object(prototype_module, "WooCommerceClient", Client):
+                result = ui._supplier_order_fetch_woo_price({"woo_id": 456, "woo_item_kind": "variation", "woo_parent_id": 123})
+
+        self.assertEqual(result["price"], 120.0)
+        self.assertEqual(Client.endpoints, ["products/123/variations/456"])
+
+    def test_product_woo_price_uses_product_endpoint_and_no_writes(self) -> None:
+        ui = app()
+
+        class Response:
+            def json(self) -> dict[str, str]:
+                return {"price": "120"}
+
+        class Client:
+            endpoints: list[str] = []
+
+            def __init__(self, *_args: object) -> None:
+                pass
+
+            def get(self, endpoint: str) -> Response:
+                self.endpoints.append(endpoint)
+                return Response()
+
+            def put(self, *_args: object) -> None:
+                raise AssertionError("Woo no debe escribirse")
+
+        with patch.object(prototype_module, "load_settings", return_value=SimpleNamespace(woocommerce_url="https://woo.test", consumer_key="ck", consumer_secret="cs")):
+            with patch.object(prototype_module, "WooCommerceClient", Client):
+                result = ui._supplier_order_fetch_woo_price({"woo_id": 123, "woo_item_kind": "product"})
+
+        self.assertEqual(result["price"], 120.0)
+        self.assertEqual(Client.endpoints, ["products/123"])
+
+    def test_woo_product_404_returns_clear_pending_error(self) -> None:
+        ui = app()
+
+        class Client:
+            def __init__(self, *_args: object) -> None:
+                pass
+
+            def get(self, _endpoint: str) -> object:
+                raise prototype_module.WooCommerceError("Error WooCommerce 404: not found")
+
+            def put(self, *_args: object) -> None:
+                raise AssertionError("Woo no debe escribirse")
+
+            def post(self, *_args: object) -> None:
+                raise AssertionError("Woo no debe escribirse")
+
+        with patch.object(prototype_module, "load_settings", return_value=SimpleNamespace(woocommerce_url="https://woo.test", consumer_key="ck", consumer_secret="cs")):
+            with patch.object(prototype_module, "WooCommerceClient", Client):
+                result = ui._supplier_order_fetch_woo_price({"woo_id": 123, "woo_item_kind": "product"})
+
+        self.assertIsNone(result["price"])
+        self.assertIn("producto 123", result["error"])
+
+    def test_woo_variation_404_returns_parent_and_variation_ids(self) -> None:
+        ui = app()
+
+        class Client:
+            def __init__(self, *_args: object) -> None:
+                pass
+
+            def get(self, _endpoint: str) -> object:
+                raise prototype_module.WooCommerceError("Error WooCommerce 404: not found")
+
+            def put(self, *_args: object) -> None:
+                raise AssertionError("Woo no debe escribirse")
+
+        with patch.object(prototype_module, "load_settings", return_value=SimpleNamespace(woocommerce_url="https://woo.test", consumer_key="ck", consumer_secret="cs")):
+            with patch.object(prototype_module, "WooCommerceClient", Client):
+                result = ui._supplier_order_fetch_woo_price({"woo_id": 456, "woo_item_kind": "variation", "woo_parent_id": 123})
+
+        self.assertIsNone(result["price"])
+        self.assertIn("variacion 456", result["error"])
+        self.assertIn("producto padre 123", result["error"])
+
+    def test_variation_without_parent_is_pending(self) -> None:
+        ui = app()
+
+        result = ui._supplier_order_fetch_woo_price({"woo_id": 456, "woo_item_kind": "variation"})
+
+        self.assertIsNone(result["price"])
+        self.assertIn("parent Woo", result["error"])
+
+    def test_partial_woo_failure_does_not_break_order(self) -> None:
+        ui = app()
+
+        def fetch(source: dict[str, object]) -> dict[str, object]:
+            if source.get("woo_id") == 1:
+                return {"price": 120, "checked_at": "now", "woo_price_item_id": 1, "woo_price_item_kind": "product", "woo_price_parent_id": ""}
+            return {"price": None, "error": "fallo conexion", "checked_at": "now", "woo_price_item_id": 2, "woo_price_item_kind": "product", "woo_price_parent_id": ""}
+
+        with patch.object(ui, "_supplier_order_fetch_woo_price", side_effect=fetch):
+            items, _raw, summary = ui._calculate_supplier_order_in_memory(
+                "ekomat",
+                {"Margen de Venta %": "40", "Coste transporte + IVA": "1"},
+                (self.woo_item(woo_id=1), self.woo_item(woo_id=2)),
+                [],
+            )
+
+        self.assertEqual(items[0].status, "Calculado")
+        self.assertEqual(items[1].status, "Warning")
+        self.assertEqual(summary["total_cost"], 199.0)
+
+    def test_calculate_loaded_order_uses_background_thread(self) -> None:
+        source = inspect.getsource(FutonHubErpPrototype._open_order_calc_flow)
+
+        self.assertIn("threading.Thread(target=worker, daemon=True).start()", source)
+        self.assertIn("self.after(0, lambda result=result: finish_calculation(result))", source)
+        self.assertIn("set_calculation_buttons_enabled(False)", source)
+        self.assertIn("set_calculation_buttons_enabled(True)", source)
+
+    def test_historical_line_without_marker_uses_woo_but_manual_signal_is_preserved(self) -> None:
+        ui = app()
+        self.assertEqual(ui._supplier_order_price_input_source({"use_global_rentability": True}, "global"), "global_margin")
+        self.assertEqual(ui._supplier_order_price_input_source({"use_global_rentability": False, "rentabilidad_individual_percent": 15}, "individual"), "individual_margin")
+        self.assertEqual(ui._supplier_order_price_input_source({"pvp_source": "manual_pvp", "pvp_unit": 80}, "individual"), "pvp")
+        self.assertEqual(ui._supplier_order_price_input_source({}, "global"), "woo_price")
+
+    def test_editor_initial_global_checkbox_depends_on_price_input_source(self) -> None:
+        ui = app()
+
+        self.assertFalse(ui._supplier_order_initial_use_global("woo_price"))
+        self.assertTrue(ui._supplier_order_initial_use_global("global_margin"))
+        self.assertFalse(ui._supplier_order_initial_use_global("pvp"))
+        self.assertFalse(ui._supplier_order_initial_use_global("individual_margin"))
+
+    def test_calculation_rows_do_not_invent_pvp_before_calculation(self) -> None:
+        ui = app()
+
+        def fail_pvp(*_args: object, **_kwargs: object) -> float:
+            raise AssertionError("_calculation_rows no debe calcular P.V.P.")
+
+        ui._supplier_order_pvp = fail_pvp
+        item = general_item()
+        source = dict(item.raw["source_row"])
+        source.pop("pvp_unit", None)
+        source.pop("status", None)
+        item = OrderItem(item.code, item.name, item.quantity, item.m3, item.final_cost, item.status, raw={"source_row": source})
+
+        rows = ui._calculation_rows((item,), provider="ekomat")
+
+        self.assertEqual(rows[0][4], "Pendiente")
+
+    def test_calculation_rows_show_persisted_pvp_after_calculation(self) -> None:
+        ui = app()
+        item = general_item()
+        source = dict(item.raw["source_row"])
+        source.update({"status": "Calculado", "pvp_unit": 120, "rentabilidad_percent": 25})
+        item = OrderItem(item.code, item.name, item.quantity, item.m3, item.final_cost, "Calculado", raw={"source_row": source})
+
+        rows = ui._calculation_rows((item,), provider="ekomat")
+
+        self.assertTrue(str(rows[0][4]).startswith("120.00"))
+
+    def test_editor_initial_margin_uses_woo_margin_without_global(self) -> None:
+        ui = app()
+
+        source = {"price_input_source": "woo_price", "rentabilidad_percent": 63.92}
+
+        self.assertEqual(ui._supplier_order_editor_initial_margin(source, 0, "woo_price"), "63.92")
+        self.assertFalse(ui._supplier_order_initial_use_global("woo_price"))
+
+    def test_editor_initial_margin_for_woo_without_margin_is_blank(self) -> None:
+        ui = app()
+
+        self.assertEqual(ui._supplier_order_editor_initial_margin({"price_input_source": "woo_price"}, 30, "woo_price"), "")
+
+    def test_editor_initial_margin_respects_global_and_individual_sources(self) -> None:
+        ui = app()
+
+        self.assertEqual(ui._supplier_order_editor_initial_margin({}, 30, "global_margin"), "30")
+        self.assertTrue(ui._supplier_order_initial_use_global("global_margin"))
+        self.assertEqual(
+            ui._supplier_order_editor_initial_margin({"rentabilidad_individual_percent": 22.5}, 30, "individual_margin"),
+            "22.5",
+        )
+
+    def test_editing_margin_on_woo_line_becomes_individual_margin(self) -> None:
+        ui = app()
+        updated = ui._supplier_order_update_line_rentabilidad(
+            {
+                "precio_ponderado_lote": 90,
+                "precio_coste_final": 100,
+                "pvp_unit": 120,
+                "price_input_source": "woo_price",
+                "pvp_source": "woocommerce",
+                "pvp_source_label": "WooCommerce",
+            },
+            use_global=False,
+            global_percent=40,
+            individual_percent=25,
+            input_source="margin",
+            quantity=1,
+        )
+
+        self.assertEqual(updated["price_input_source"], "individual_margin")
+        self.assertEqual(updated["pvp_source_label"], "Manual Margen")
+
+    def test_editor_accepting_woo_line_keeps_dedicated_woo_route(self) -> None:
+        source = inspect.getsource(FutonHubErpPrototype._open_order_item_missing_editor)
+
+        self.assertIn('if input_source == "woo":', source)
+        self.assertIn('updated_source["price_input_source"] = "woo_price"', source)
+        self.assertLess(source.index('if input_source == "woo":'), source.index('else:\n                updated_source = self._supplier_order_update_line_rentabilidad'))
+
+    def test_raw_order_line_inherits_woo_reference_from_resolved_inventory(self) -> None:
+        ui = app()
+        del ui.__dict__["_fill_supplier_prices_for_order_items"]
+        session = MemorySession()
+        session.client.tables["inventory_items"] = [
+            inventory_row(
+                201002,
+                name="Futon Woo vinculado",
+                heca_reference="0201002",
+                woo_id=123,
+                woo_item_kind="product",
+                woo_parent_id=0,
+                woo_sku="SKU-201002",
+                woo_link_status="linked",
+            )
+        ]
+        ui._cloud_session = session
+
+        item = OrderItem("0201002", "Pendiente", 1, "1", "Pendiente", "OK", raw={"source_row": {"m3_total": 1, "m3_und": 1, "cuenta_reparto_descarga": True}})
+        enriched = ui._fill_supplier_prices_for_order_items("ekomat", (item,))
+        source = enriched[0].raw["source_row"]
+
+        self.assertEqual(source["inventory_matched_item_id"], 201002)
+        self.assertEqual(source["woo_id"], 123)
+        self.assertEqual(source["inventory_woo_id"], 123)
+        self.assertEqual(source["woo_item_kind"], "product")
+        self.assertEqual(ui._supplier_order_woo_reference(source), {"woo_id": 123, "woo_item_kind": "product", "woo_parent_id": 0})
+
+    def test_raw_order_line_calculates_pvp_from_live_woo_after_inventory_resolution(self) -> None:
+        ui = app()
+        del ui.__dict__["_fill_supplier_prices_for_order_items"]
+        session = MemorySession()
+        session.client.tables["inventory_items"] = [
+            inventory_row(
+                201002,
+                name="Futon Woo vinculado",
+                heca_reference="0201002",
+                woo_id=123,
+                woo_item_kind="product",
+                primary_supplier_price=93.65,
+                rotation_c=1,
+                store_stock=1,
+                weighted_average_cost=80,
+            )
+        ]
+        ui._cloud_session = session
+        item = OrderItem("0201002", "Pendiente", 1, "1", "Pendiente", "OK", raw={"source_row": {"m3_total": 1, "m3_und": 1, "cuenta_reparto_descarga": True}})
+        enriched = ui._fill_supplier_prices_for_order_items("ekomat", (item,))
+
+        with patch.object(ui, "_supplier_order_fetch_woo_price", return_value={"price": 120, "error": "", "checked_at": "now", "woo_price_item_id": 123, "woo_price_item_kind": "product", "woo_price_parent_id": ""}):
+            calculated, _raw, _summary = ui._calculate_supplier_order_in_memory("ekomat", {"Margen de Venta %": "40", "Coste transporte + IVA": "1"}, enriched, [])
+
+        source = calculated[0].raw["source_row"]
+        self.assertEqual(source["status"], "Calculado")
+        self.assertEqual(source["pvp_unit"], 120.0)
+        self.assertEqual(source["rentabilidad_percent"], 25.0)
+        self.assertEqual(source["price_input_source"], "woo_price")
+        self.assertEqual(source["pvp_source_label"], "WooCommerce")
+        self.assertEqual(source["woo_price_error"], "")
+
+    def test_inventory_without_woo_reference_remains_pending_for_woo_price(self) -> None:
+        ui = app()
+        item = self.woo_item(woo_id=0, extra_source={"woo_item_kind": "", "inventory_woo_id": "", "supplier_price_woo_id": ""})
+
+        calculated, _raw, _summary = ui._calculate_supplier_order_in_memory("ekomat", {"Margen de Venta %": "40", "Coste transporte + IVA": "1"}, (item,), [])
+        source = calculated[0].raw["source_row"]
+
+        self.assertEqual(source["status"], "Warning")
+        self.assertIsNone(source["pvp_unit"])
+        self.assertIsNone(source["rentabilidad_percent"])
+        self.assertIn("No se pudo resolver Woo ID", source["woo_price_error"])
+
+    def test_inventory_variation_reference_uses_parent_endpoint(self) -> None:
+        ui = app()
+
+        class Response:
+            def json(self) -> dict[str, str]:
+                return {"price": "120"}
+
+        class Client:
+            endpoints: list[str] = []
+
+            def __init__(self, *_args: object) -> None:
+                pass
+
+            def get(self, endpoint: str) -> Response:
+                self.endpoints.append(endpoint)
+                return Response()
+
+            def put(self, *_args: object) -> None:
+                raise AssertionError("Woo no debe escribirse")
+
+            def post(self, *_args: object) -> None:
+                raise AssertionError("Woo no debe escribirse")
+
+        with patch.object(prototype_module, "load_settings", return_value=SimpleNamespace(woocommerce_url="https://woo.test", consumer_key="ck", consumer_secret="cs")):
+            with patch.object(prototype_module, "WooCommerceClient", Client):
+                result = ui._supplier_order_fetch_woo_price({"inventory_woo_id": 456, "inventory_woo_item_kind": "variation", "inventory_woo_parent_id": 123})
+
+        self.assertEqual(result["price"], 120.0)
+        self.assertEqual(Client.endpoints, ["products/123/variations/456"])
+
+    def test_inventory_variation_without_parent_is_pending_without_traceback(self) -> None:
+        ui = app()
+
+        result = ui._supplier_order_fetch_woo_price({"inventory_woo_id": 456, "inventory_woo_item_kind": "variation"})
+
+        self.assertIsNone(result["price"])
+        self.assertEqual(result["error"], "Variacion sin parent Woo ID.")
+
+    def test_inventory_supabase_price_is_not_used_as_automatic_pvp(self) -> None:
+        ui = app()
+        item = self.woo_item(extra_source={"inventory_woo_price": 999})
+        with patch.object(ui, "_supplier_order_fetch_woo_price", return_value={"price": 120, "error": "", "checked_at": "now", "woo_price_item_id": 123, "woo_price_item_kind": "product", "woo_price_parent_id": ""}):
+            calculated, _raw, _summary = ui._calculate_supplier_order_in_memory("ekomat", {"Margen de Venta %": "40", "Coste transporte + IVA": "1"}, (item,), [])
+
+        self.assertEqual(calculated[0].raw["source_row"]["pvp_unit"], 120.0)
+        self.assertNotEqual(calculated[0].raw["source_row"]["pvp_unit"], 999)
+
+    def test_partial_raw_inventory_resolution_failure_does_not_break_order(self) -> None:
+        ui = app()
+        item_ok = self.woo_item(woo_id=123)
+        item_missing = self.woo_item(code="201015", woo_id=0, extra_source={"woo_item_kind": ""})
+
+        def fetch(source: dict[str, object]) -> dict[str, object]:
+            reference = ui._supplier_order_woo_reference(source)
+            if reference["woo_id"] == 123:
+                return {"price": 120, "error": "", "checked_at": "now", "woo_price_item_id": 123, "woo_price_item_kind": "product", "woo_price_parent_id": ""}
+            return {"price": None, "error": "No se pudo resolver Woo ID para la linea.", "checked_at": "now", "woo_price_item_id": "", "woo_price_item_kind": "", "woo_price_parent_id": ""}
+
+        with patch.object(ui, "_supplier_order_fetch_woo_price", side_effect=fetch):
+            calculated, _raw, _summary = ui._calculate_supplier_order_in_memory("ekomat", {"Margen de Venta %": "40", "Coste transporte + IVA": "1"}, (item_ok, item_missing), [])
+
+        self.assertEqual(calculated[0].status, "Calculado")
+        self.assertEqual(calculated[1].status, "Warning")
 
     def test_global_margin_validation_accepts_zero_and_blocks_100_or_negative(self) -> None:
         ui = app()
@@ -701,6 +1216,8 @@ class SupplierOrderCostTests(unittest.TestCase):
         self.assertIn("Precio Pascal no disponible", source["supplier_price_warning"])
         self.assertNotIn("falta precio proveedor", ui._order_item_missing_reasons(enriched[0]))
         self.assertEqual(session.client.tables["inventory_items"], before_inventory)
+        enriched[0].raw["source_row"]["price_input_source"] = "global_margin"
+        enriched[0].raw["source_row"]["use_global_rentability"] = True
 
         first, _raw, _summary = ui._calculate_supplier_order_in_memory(
             "Pascal",
@@ -839,6 +1356,8 @@ class SupplierOrderCostTests(unittest.TestCase):
 
         enriched = ui._fill_supplier_prices_for_order_items("ekomat", (original,))
         enriched_source = enriched[0].raw["source_row"]
+        enriched_source["price_input_source"] = "global_margin"
+        enriched_source["use_global_rentability"] = True
         self.assertEqual(enriched[0].code, "0201001")
         self.assertEqual(enriched[0].name, "Futon Canonico")
         self.assertEqual(enriched_source["inventory_rotation_c"], 3)
@@ -1268,7 +1787,7 @@ class SupplierOrderCostTests(unittest.TestCase):
 
         self.assertEqual(row[:6], ("201014", "Futon prueba", "100.00 €", "100.00 €", "142.86 €", "30"))
 
-    def test_legacy_rows_without_pvp_unit_get_display_fallback_only(self) -> None:
+    def test_legacy_rows_without_pvp_unit_do_not_get_visual_pvp_fallback(self) -> None:
         ui = app()
         item = OrderItem(
             "201014",
@@ -1292,7 +1811,7 @@ class SupplierOrderCostTests(unittest.TestCase):
 
         row = ui._calculation_rows((item,), provider="ekomat")[0]
 
-        self.assertEqual(row[:6], ("201014", "Futon antiguo", "100.00 €", "Pendiente", "142.86 €", "30"))
+        self.assertEqual(row[:6], ("201014", "Futon antiguo", "100.00 €", "Pendiente", "Pendiente", "30"))
         self.assertNotIn("pvp_unit", item.raw["source_row"])
 
     def test_save_payload_keeps_real_cost_and_pvp_separate(self) -> None:
@@ -1675,12 +2194,13 @@ class SupplierOrderCostTests(unittest.TestCase):
             wb = load_workbook(path)
             ws = wb["Líneas calculadas"]
             headers = [cell.value for cell in ws[1]]
-            cost_index = headers.index("Coste Final Artículo")
+            cost_index = next(index for index, header in enumerate(headers) if str(header).startswith("Coste Final Art"))
 
-            self.assertEqual(headers[cost_index : cost_index + 4], ["Coste Final Artículo", "Precio ponderado lote", "P.V.P.", "Margen de Venta %"])
+            self.assertEqual(headers[cost_index : cost_index + 5], [headers[cost_index], "Precio ponderado lote", "P.V.P.", "Margen de Venta %", "Origen P.V.P."])
             self.assertEqual(ws.cell(row=2, column=cost_index + 1).value, 100)
             self.assertEqual(ws.cell(row=2, column=cost_index + 3).value, 142.86)
             self.assertEqual(ws.cell(row=2, column=cost_index + 4).value, 30)
+            self.assertEqual(ws.cell(row=2, column=cost_index + 5).value, "Margen global")
 
     def test_weighted_cost_does_not_depend_on_rentabilidad(self) -> None:
         ui = app()
@@ -1715,7 +2235,7 @@ class SupplierOrderCostTests(unittest.TestCase):
         self.assertIn("live_update", source)
         self.assertIn("allow_negative=True", source)
         self.assertIn("initial_price_input_source", source)
-        self.assertIn('last_price_input_source = {"value": "pvp" if initial_price_input_source == "pvp" else "margin"}', source)
+        self.assertIn('last_price_input_source = {"value": "pvp" if initial_price_input_source == "pvp" else "woo" if initial_price_input_source == "woo_price" else "margin"}', source)
         self.assertIn('if initial_price_input_source == "pvp"', source)
         self.assertNotIn("Los campos marcados en rojo", source)
         self.assertIn("_supplier_order_editor_window_metrics", source)

@@ -374,7 +374,7 @@ def migrate_supplier_prices_to_supabase(
 
 SUPPLIER_ORDER_INVENTORY_COLUMNS = (
     "item_id,name,heca_reference,hub_item_code,item_record_type,base_item_code,is_pack,"
-    "woo_sku,woo_item_kind,woo_parent_id,"
+    "woo_id,woo_sku,woo_item_kind,woo_parent_id,woo_link_status,"
     "primary_supplier_price,pascal_price,cubic_meters,rotation_c,packages,"
     "store_stock,warehouse_stock,weighted_average_cost,order_calculated_price,"
     "updated_at,source_row"

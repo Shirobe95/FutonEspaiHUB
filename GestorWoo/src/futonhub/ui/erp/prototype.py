@@ -10,6 +10,7 @@ import time
 import unicodedata
 import uuid
 import warnings
+from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from tkinter import filedialog, messagebox, simpledialog, ttk
 from typing import Any
@@ -18,6 +19,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
+from gestorwoo.woocommerce import WooCommerceClient, WooCommerceError
 from futonhub.cloud.audit import list_audit_logs as legacy_list_audit_logs, list_operation_snapshots as legacy_list_operation_snapshots
 from futonhub.cloud.services.security_logs import (
     build_before_after_diff,
@@ -5108,6 +5110,24 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                     "inventory_matched_item_id": inventory_row.get("item_id"),
                     "inventory_matched_by": supplier_price.get("matched_by"),
                     "inventory_order_original_code": item.code,
+                    "woo_id": inventory_row.get("woo_id"),
+                    "woo_item_kind": inventory_row.get("woo_item_kind"),
+                    "woo_parent_id": inventory_row.get("woo_parent_id"),
+                    "woo_sku": inventory_row.get("woo_sku"),
+                    "woo_link_status": inventory_row.get("woo_link_status"),
+                    "woo_name": inventory_row.get("name"),
+                    "inventory_woo_id": inventory_row.get("woo_id"),
+                    "inventory_woo_item_kind": inventory_row.get("woo_item_kind"),
+                    "inventory_woo_parent_id": inventory_row.get("woo_parent_id"),
+                    "inventory_woo_sku": inventory_row.get("woo_sku"),
+                    "inventory_woo_link_status": inventory_row.get("woo_link_status"),
+                    "supplier_price_woo_id": inventory_row.get("woo_id"),
+                    "supplier_price_woo_item_kind": inventory_row.get("woo_item_kind"),
+                    "supplier_price_woo_parent_id": inventory_row.get("woo_parent_id"),
+                    "matched_woo_id": inventory_row.get("woo_id"),
+                    "matched_woo_item_kind": inventory_row.get("woo_item_kind"),
+                    "matched_woo_parent_id": inventory_row.get("woo_parent_id"),
+                    "matched_inventory_item": inventory_row,
                 }
             )
             # Si el Excel/PDF no trae M3, aprovechamos el M3 del inventario.
@@ -5145,6 +5165,18 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             "manual": "Manual",
             "manual_order_editor": "Manual",
         }.get(str(source.get("supplier_price_source") or "").strip(), str(source.get("supplier_price_source") or ""))
+
+    def _supplier_order_pvp_source_label(self, source: dict[str, Any]) -> str:
+        label = str(source.get("pvp_source_label") or "").strip()
+        if label:
+            return label
+        return {
+            "woocommerce": "WooCommerce",
+            "manual_pvp": "Manual P.V.P.",
+            "manual_margin": "Manual Margen",
+            "global_margin": "Margen global",
+            "pending": "Pendiente",
+        }.get(str(source.get("pvp_source") or "").strip(), "")
 
     def _order_item_missing_reasons(self, item: OrderItem) -> list[str]:
         """Return visible blocking reasons for a supplier order calculation line.
@@ -5715,46 +5747,78 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             highlightthickness=1,
         ).pack(fill=tk.X, pady=(2, 14))
 
+        calculation_running = {"value": False}
+        action_buttons: dict[str, tk.Widget] = {}
+
+        def set_calculation_buttons_enabled(enabled: bool) -> None:
+            state = tk.NORMAL if enabled else tk.DISABLED
+            for button in action_buttons.values():
+                try:
+                    button.configure(state=state)
+                except Exception:
+                    pass
+
         def calculate_loaded_order() -> None:
+            if calculation_running["value"]:
+                return
             values = self._order_calc_values_from_entries(order_entries)
             items = tuple(loaded_order_state.get("items") or tuple())
             raw_lines = list(loaded_order_state.get("raw_lines") or [])
             if not items:
                 messagebox.showinfo("Pedidos", "Carga un Excel/PDF o abre un borrador con líneas antes de calcular.")
                 return
+            calculation_running["value"] = True
+            set_calculation_buttons_enabled(False)
             overlay = self._show_working_overlay(
                 "Calculando pedido",
-                "Aplicando constantes, precios de proveedor, costes, ponderado y validaciones.\nNo cierres esta ventana.",
+                "Consultando WooCommerce y calculando lÃ­neas...\nPuede tardar unos segundos. No cierres esta ventana.",
             )
-            try:
-                calculated_items, calculated_raw_lines, summary = self._calculate_supplier_order_in_memory(provider, values, items, raw_lines)
-            except ValueError as exc:
+
+            def finish_calculation(result: dict[str, Any]) -> None:
                 self._close_working_overlay(overlay)
-                messagebox.showwarning("Pedidos", str(exc))
-                return
-            except Exception as exc:
-                self._close_working_overlay(overlay)
-                messagebox.showerror("Pedidos", f"No se pudo calcular el pedido.\n\n{exc}")
-                return
-            self._close_working_overlay(overlay)
-            loaded_order_state["items"] = calculated_items
-            loaded_order_state["raw_lines"] = calculated_raw_lines
-            loaded_order_state["calculated"] = True
-            loaded_order_state["calculation_summary"] = summary
-            redraw_loaded_table(calculated_items)
-            messagebox.showinfo(
-                "Pedido calculado",
-                f"Calculados: {summary.get('ok', 0)} · Pendientes: {summary.get('pending', 0)} · Coste: {summary.get('total_cost', 0):.2f} €",
-            )
+                calculation_running["value"] = False
+                set_calculation_buttons_enabled(True)
+                if result.get("error_type") == "value":
+                    messagebox.showwarning("Pedidos", str(result.get("error") or ""))
+                    return
+                if result.get("error_type"):
+                    messagebox.showerror("Pedidos", f"No se pudo calcular el pedido.\n\n{result.get('error')}")
+                    return
+                calculated_items, calculated_raw_lines, summary = result["payload"]
+                loaded_order_state["items"] = calculated_items
+                loaded_order_state["raw_lines"] = calculated_raw_lines
+                loaded_order_state["calculated"] = True
+                loaded_order_state["calculation_summary"] = summary
+                redraw_loaded_table(calculated_items)
+                messagebox.showinfo(
+                    "Pedido calculado",
+                    f"Calculados: {summary.get('ok', 0)} · Pendientes: {summary.get('pending', 0)} · Coste: {summary.get('total_cost', 0):.2f} €",
+                )
+
+            def worker() -> None:
+                try:
+                    payload = self._calculate_supplier_order_in_memory(provider, values, items, raw_lines)
+                    result = {"payload": payload}
+                except ValueError as exc:
+                    result = {"error_type": "value", "error": str(exc)}
+                except Exception as exc:
+                    result = {"error_type": "exception", "error": str(exc)}
+                self.after(0, lambda result=result: finish_calculation(result))
+
+            threading.Thread(target=worker, daemon=True).start()
 
         actions_left = tk.Frame(params, bg=CARD)
         actions_left.pack(fill=tk.X, padx=18, pady=(0, 18))
-        self._button(
+        save_button = self._button(
             actions_left,
             "Guardar borrador",
             command=lambda: self._save_supplier_order_draft_from_calc(win, provider, order_entries, loaded_order_state, existing_order=order),
-        ).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 6))
-        self._button(actions_left, "Calcular pedido", primary=True, command=lambda: calculate_loaded_order()).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(6, 0))
+        )
+        save_button.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 6))
+        calc_button = self._button(actions_left, "Calcular pedido", primary=True, command=lambda: calculate_loaded_order())
+        calc_button.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(6, 0))
+        action_buttons["save"] = save_button
+        action_buttons["calculate"] = calc_button
 
         table_card = self._card(body)
         table_card.grid(row=0, column=1, sticky="nsew")
@@ -5958,12 +6022,141 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         return global_percent, "global"
 
     def _supplier_order_price_input_source(self, source: dict[str, Any], rentabilidad_source: str) -> str:
-        if rentabilidad_source == "global" or source.get("use_global_rentability") is True:
-            return "global_margin"
         value = str(source.get("price_input_source") or "").strip().lower()
-        if value in {"pvp", "individual_margin", "global_margin"}:
+        if value in {"pvp", "individual_margin", "global_margin", "woo_price"}:
             return value
-        return "individual_margin"
+        if source.get("use_global_rentability") is True:
+            return "global_margin"
+        if source.get("use_global_rentability") is False and source.get("rentabilidad_individual_percent") not in (None, ""):
+            return "individual_margin"
+        if str(source.get("pvp_source") or "").strip().lower() == "manual_pvp" or source.get("ui_manual_pvp") is True:
+            return "pvp"
+        return "woo_price"
+
+    def _supplier_order_initial_use_global(self, price_input_source: str) -> bool:
+        return str(price_input_source or "").strip().lower() == "global_margin"
+
+    def _supplier_order_editor_initial_margin(self, source: dict[str, Any], global_rentabilidad: float, price_input_source: str) -> str:
+        source_name = str(price_input_source or "").strip().lower()
+        if source_name == "woo_price":
+            value = source.get("rentabilidad_percent")
+            return "" if value in (None, "") else str(value)
+        if source_name == "pvp":
+            value = source.get("rentabilidad_percent")
+            if value in (None, ""):
+                value = source.get("rentabilidad_individual_percent")
+            return "" if value in (None, "") else str(value)
+        if source_name == "individual_margin":
+            value = source.get("rentabilidad_individual_percent")
+            return "" if value in (None, "") else str(value)
+        if source_name == "global_margin":
+            return str(global_rentabilidad)
+        value = source.get("rentabilidad_percent")
+        return str(value) if value not in (None, "") else str(global_rentabilidad)
+
+    def _supplier_order_woo_reference(self, source: dict[str, Any]) -> dict[str, Any]:
+        def first_value(*keys: str) -> Any:
+            for key in keys:
+                value = source.get(key)
+                if value not in (None, "", 0, "0"):
+                    return value
+            return None
+
+        nested: dict[str, Any] = {}
+        for key in ("inventory_item", "inventory_row", "matched_inventory_item"):
+            value = source.get(key)
+            if isinstance(value, dict):
+                nested = value
+                break
+
+        woo_id = first_value(
+            "woo_id",
+            "inventory_woo_id",
+            "supplier_price_woo_id",
+            "matched_woo_id",
+            "item_woo_id",
+            "ui_canonical_woo_id",
+        ) or nested.get("woo_id")
+        kind = str(
+            first_value(
+                "woo_item_kind",
+                "inventory_woo_item_kind",
+                "supplier_price_woo_item_kind",
+                "matched_woo_item_kind",
+                "item_kind",
+            )
+            or nested.get("woo_item_kind")
+            or ""
+        ).strip().lower()
+        parent_id = first_value(
+            "woo_parent_id",
+            "inventory_woo_parent_id",
+            "supplier_price_woo_parent_id",
+            "matched_woo_parent_id",
+            "parent_woo_id",
+        ) or nested.get("woo_parent_id")
+        try:
+            woo_id_int = int(str(woo_id).strip())
+        except Exception:
+            woo_id_int = 0
+        if kind not in {"product", "variation"}:
+            kind = "variation" if parent_id not in (None, "", 0, "0") else "product"
+        try:
+            parent_id_int = int(str(parent_id).strip()) if parent_id not in (None, "", 0, "0") else 0
+        except Exception:
+            parent_id_int = 0
+        return {"woo_id": woo_id_int, "woo_item_kind": kind, "woo_parent_id": parent_id_int}
+
+    def _parse_supplier_order_woo_price(self, value: Any) -> Decimal:
+        if value in (None, ""):
+            raise ValueError("WooCommerce devolvio price vacio.")
+        price = self._parse_supplier_order_pvp_unit(value)
+        if price <= 0:
+            raise ValueError("WooCommerce no devuelve precio efectivo.")
+        return price
+
+    def _supplier_order_woo_not_found_message(self, kind: str, woo_id: int, parent_id: int) -> str:
+        if kind == "variation":
+            return f"WooCommerce no encontro la variacion {woo_id} del producto padre {parent_id}."
+        return f"WooCommerce no encontro el producto {woo_id}."
+
+    def _supplier_order_fetch_woo_price(self, source: dict[str, Any]) -> dict[str, Any]:
+        checked_at = datetime.now(timezone.utc).isoformat()
+        reference = self._supplier_order_woo_reference(source)
+        woo_id = int(reference.get("woo_id") or 0)
+        kind = str(reference.get("woo_item_kind") or "")
+        parent_id = int(reference.get("woo_parent_id") or 0)
+        result = {
+            "price": None,
+            "error": "",
+            "checked_at": checked_at,
+            "woo_price_item_id": woo_id or "",
+            "woo_price_item_kind": kind if woo_id else "",
+            "woo_price_parent_id": parent_id or "",
+        }
+        if woo_id <= 0:
+            result["error"] = "No se pudo resolver Woo ID para la linea."
+            return result
+        if kind == "variation" and parent_id <= 0:
+            result["error"] = "Variacion sin parent Woo ID."
+            return result
+        endpoint = ""
+        try:
+            settings = load_settings()
+            client = WooCommerceClient(settings.woocommerce_url, settings.consumer_key, settings.consumer_secret)
+            endpoint = f"products/{parent_id}/variations/{woo_id}" if kind == "variation" else f"products/{woo_id}"
+            payload = client.get(endpoint).json()
+            result["endpoint"] = endpoint
+            result["price"] = float(self._parse_supplier_order_woo_price(payload.get("price")))
+            return result
+        except WooCommerceError as exc:
+            text = str(exc)
+            result["endpoint"] = endpoint
+            result["error"] = self._supplier_order_woo_not_found_message(kind, woo_id, parent_id) if "404" in text else text
+            return result
+        except (ValueError, Exception) as exc:
+            result["error"] = str(exc)
+            return result
 
     def _supplier_order_update_line_rentabilidad(
         self,
@@ -5999,6 +6192,15 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         updated["rentabilidad_source"] = rentabilidad_source
         updated["price_input_source"] = price_input_source
         updated["use_global_rentability"] = use_global
+        if price_input_source == "pvp":
+            updated["pvp_source"] = "manual_pvp"
+            updated["pvp_source_label"] = "Manual P.V.P."
+        elif price_input_source == "global_margin":
+            updated["pvp_source"] = "global_margin"
+            updated["pvp_source_label"] = "Margen global"
+        else:
+            updated["pvp_source"] = "manual_margin"
+            updated["pvp_source_label"] = "Manual Margen"
         if commercial_base > 0:
             updated["pvp_unit"] = float(self._parse_supplier_order_pvp_unit(pvp_unit)) if input_source == "pvp" else self._supplier_order_pvp(commercial_base, effective, allow_negative=rentabilidad_source == "individual")
             updated["pvp_line"] = round(updated["pvp_unit"] * max(0, int(quantity or 0)), 2)
@@ -6167,12 +6369,15 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 reasons.append("faltan bultos/packages")
 
             line_details: dict[str, Any] = {}
+            pvp_source = "pending"
+            pvp_source_label = "Pendiente"
+            woo_price_trace: dict[str, Any] = {}
             if reasons:
                 status = "Error"
                 final_unit = 0.0
                 line_cost = 0.0
-                pvp_unit = 0.0
-                pvp_line = 0.0
+                pvp_unit = None
+                pvp_line = None
                 pending += 1
             else:
                 if is_heimei:
@@ -6229,13 +6434,41 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                     pvp_unit = float(self._parse_supplier_order_pvp_unit(source.get("pvp_unit")))
                     effective_rent_percent = self._supplier_order_margin_from_pvp(precio_ponderado_lote, pvp_unit)
                     rentabilidad_source = "individual"
+                    pvp_source = "manual_pvp"
+                    pvp_source_label = "Manual P.V.P."
+                elif price_input_source == "woo_price":
+                    woo_price_trace = self._supplier_order_fetch_woo_price(source)
+                    if woo_price_trace.get("price") not in (None, "", 0, 0.0):
+                        pvp_unit = float(woo_price_trace["price"])
+                        effective_rent_percent = self._supplier_order_margin_from_pvp(precio_ponderado_lote, pvp_unit)
+                        rentabilidad_source = "woo"
+                        pvp_source = "woocommerce"
+                        pvp_source_label = "WooCommerce"
+                    else:
+                        pvp_unit = None
+                        effective_rent_percent = None
+                        rentabilidad_source = "pending"
+                        pvp_source = "pending"
+                        pvp_source_label = "Pendiente"
+                        error = str(woo_price_trace.get("error") or "WooCommerce no devuelve precio efectivo.")
+                        reasons.append(error)
+                        status = "Warning"
+                        pending += 1
+                        total_cost += line_cost
                 else:
                     pvp_unit = self._supplier_order_pvp(precio_ponderado_lote, effective_rent_percent, allow_negative=rentabilidad_source == "individual")
-                pvp_line = round(pvp_unit * qty, 2)
-                ok += 1
-                total_cost += line_cost
+                    if price_input_source == "global_margin":
+                        pvp_source = "global_margin"
+                        pvp_source_label = "Margen global"
+                    else:
+                        pvp_source = "manual_margin"
+                        pvp_source_label = "Manual Margen"
+                pvp_line = round(pvp_unit * qty, 2) if pvp_unit not in (None, "") else None
+                if status == "Calculado":
+                    ok += 1
+                    total_cost += line_cost
 
-            if status != "Calculado":
+            if status == "Error":
                 stock_total_actual = self._money_float(source.get("inventory_stock_total"), 0.0)
                 weighted_current = self._money_float(source.get("inventory_weighted_average_cost") or source.get("weighted_average_cost"), 0.0)
                 precio_ponderado_lote = 0.0
@@ -6265,6 +6498,13 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 "rentabilidad_global_percent": rent_percent,
                 "rentabilidad_source": rentabilidad_source,
                 "price_input_source": price_input_source,
+                "pvp_source": pvp_source,
+                "pvp_source_label": pvp_source_label,
+                "woo_price_checked_at": woo_price_trace.get("checked_at", ""),
+                "woo_price_error": woo_price_trace.get("error", ""),
+                "woo_price_item_id": woo_price_trace.get("woo_price_item_id", ""),
+                "woo_price_item_kind": woo_price_trace.get("woo_price_item_kind", ""),
+                "woo_price_parent_id": woo_price_trace.get("woo_price_parent_id", ""),
                 "use_global_rentability": rentabilidad_source == "global",
                 "cuenta_para_descarga": "Sí" if self._order_line_counts_for_download(item, source) else "No",
                 "cuenta_reparto_descarga": self._order_line_counts_for_download(item, source),
@@ -6706,6 +6946,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             ("Bultos", str(source.get("packages") or source.get("inventory_packages") or "1"), False),
             ("Precio proveedor", str(source.get("precio_proveedor") or source.get("precio_excel") or source.get("precio") or ""), False),
             ("Origen precio", self._supplier_order_price_origin_label(source), True),
+            ("Origen P.V.P.", self._supplier_order_pvp_source_label(source), True),
         ]
         entries: dict[str, tk.Entry] = {}
         for index, (label, value, readonly) in enumerate(fields):
@@ -6746,9 +6987,11 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         )
         has_individual = source.get("rentabilidad_individual_percent") not in (None, "") and source.get("use_global_rentability") is False
         initial_price_input_source = self._supplier_order_price_input_source(source, "individual" if has_individual else "global")
-        use_global_rentability_var = tk.BooleanVar(value=not has_individual)
+        initial_use_global = self._supplier_order_initial_use_global(initial_price_input_source)
+        use_global_rentability_var = tk.BooleanVar(value=initial_use_global)
+        initial_margin_value = self._supplier_order_editor_initial_margin(source, global_rentabilidad, initial_price_input_source)
         individual_rentabilidad_var = tk.StringVar(
-            value=str(source.get("rentabilidad_individual_percent") if has_individual else global_rentabilidad)
+            value=initial_margin_value
         )
         calculated_final_cost = self._money_float(source.get("precio_coste_final") or source.get("unit_cost"), 0.0)
         calculated_weighted_cost = self._supplier_order_commercial_base_cost(source, item.quantity)
@@ -6760,7 +7003,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 initial_pvp = ""
         pvp_unit_var = tk.StringVar(value="" if initial_pvp in (None, "") else f"{self._money_float(initial_pvp):.2f}")
         margin_status_var = tk.StringVar(value="")
-        last_price_input_source = {"value": "pvp" if initial_price_input_source == "pvp" else "margin"}
+        last_price_input_source = {"value": "pvp" if initial_price_input_source == "pvp" else "woo" if initial_price_input_source == "woo_price" else "margin"}
         live_update = {"active": False}
 
         rent_field = tk.Frame(form, bg=CARD)
@@ -6859,6 +7102,9 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         if initial_price_input_source == "pvp":
             rent_entry.configure(state=tk.NORMAL)
             margin_status_var.set("Margen de Venta recalculado desde P.V.P.")
+        elif initial_price_input_source == "woo_price":
+            rent_entry.configure(state=tk.NORMAL)
+            margin_status_var.set("P.V.P. obtenido desde WooCommerce.")
         else:
             refresh_pvp_preview()
 
@@ -6913,6 +7159,8 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 if input_source == "pvp":
                     self._parse_supplier_order_pvp_unit(pvp_unit_var.get())
                     individual_rentabilidad = self._supplier_order_margin_from_pvp(calculated_weighted_cost, pvp_unit_var.get())
+                elif input_source == "woo":
+                    individual_rentabilidad = None
                 else:
                     individual_rentabilidad = (
                         None
@@ -6977,15 +7225,21 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 "calculation_reasons": [],
                 "ui_completed_from_order_editor": True,
             })
-            updated_source = self._supplier_order_update_line_rentabilidad(
-                updated_source,
-                use_global=use_global_rentabilidad,
-                global_percent=global_rentabilidad,
-                individual_percent=individual_rentabilidad,
-                pvp_unit=pvp_unit_var.get(),
-                input_source=input_source,
-                quantity=qty,
-            )
+            if input_source == "woo":
+                updated_source["price_input_source"] = "woo_price"
+                updated_source["pvp_source"] = updated_source.get("pvp_source") or "woocommerce"
+                updated_source["pvp_source_label"] = updated_source.get("pvp_source_label") or "WooCommerce"
+                updated_source["use_global_rentability"] = False
+            else:
+                updated_source = self._supplier_order_update_line_rentabilidad(
+                    updated_source,
+                    use_global=use_global_rentabilidad,
+                    global_percent=global_rentabilidad,
+                    individual_percent=individual_rentabilidad,
+                    pvp_unit=pvp_unit_var.get(),
+                    input_source=input_source,
+                    quantity=qty,
+                )
             updated_item = OrderItem(
                 code=item.code,
                 name=desc,
@@ -7073,12 +7327,6 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             coste_unitario_final = source.get("precio_coste_final") or source.get("unit_cost")
             rentabilidad = source.get("rentabilidad_percent")
             pvp_unit = source.get("pvp_unit")
-            if pvp_unit in (None, ""):
-                base_cost = self._supplier_order_commercial_base_cost(source, item.quantity)
-                try:
-                    pvp_unit = self._supplier_order_pvp(base_cost, rentabilidad, allow_negative=source.get("rentabilidad_source") == "individual") if base_cost else 0.0
-                except ValueError:
-                    pvp_unit = 0.0
             leading = (
                 item.code,
                 item.name,
@@ -7488,6 +7736,11 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             "ID",
             "Nombre",
             "Cantidad",
+            "Coste Final ArtÃ­culo",
+            "Precio ponderado lote",
+            "P.V.P.",
+            "Margen de Venta %",
+            "Origen P.V.P.",
             "M3 unidad",
             "M3 total línea",
             "Precio proveedor",
@@ -7506,10 +7759,6 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             "Coste descarga",
             "Almacenaje IVA",
             "Picking IVA",
-            "Coste Final Artículo",
-            "Precio ponderado lote",
-            "P.V.P.",
-            "Margen de Venta %",
             "Coste Total Cantidad",
             "Estado",
             "Motivos / errores",
@@ -7527,7 +7776,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             calc_details = source.get("calculation_details") if isinstance(source.get("calculation_details"), dict) else {}
             reasons = source.get("calculation_reasons") or []
             pvp_export_unit = source.get("pvp_unit")
-            if pvp_export_unit in (None, ""):
+            if pvp_export_unit in (None, "") and source.get("pvp_source") != "pending":
                 base_cost = self._supplier_order_commercial_base_cost(source, item.quantity)
                 try:
                     pvp_export_unit = self._supplier_order_pvp(base_cost, source.get("rentabilidad_percent"), allow_negative=source.get("rentabilidad_source") == "individual") if base_cost else None
@@ -7539,6 +7788,11 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                     item.code,
                     item.name,
                     item.quantity,
+                    self._excel_number(source.get("precio_coste_final") or source.get("unit_cost")),
+                    self._excel_number(source.get("precio_ponderado_lote")),
+                    self._excel_number(pvp_export_unit),
+                    self._excel_number(source.get("rentabilidad_percent")),
+                    self._supplier_order_pvp_source_label(source),
                     self._excel_number(source.get("m3_und")),
                     self._excel_number(source.get("m3_total")),
                     self._excel_number(source.get("precio_proveedor")),
@@ -7557,10 +7811,6 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                     self._excel_number(calc_details.get("coste_descarga")),
                     self._excel_number(calc_details.get("coste_almacenaje_iva")),
                     self._excel_number(calc_details.get("coste_picking_iva")),
-                    self._excel_number(source.get("precio_coste_final") or source.get("unit_cost")),
-                    self._excel_number(source.get("precio_ponderado_lote")),
-                    self._excel_number(pvp_export_unit),
-                    self._excel_number(source.get("rentabilidad_percent")),
                     self._excel_number(source.get("line_cost") or source.get("final_cost")),
                     item.status,
                     ", ".join(str(reason) for reason in reasons) if isinstance(reasons, list) else str(reasons or ""),
@@ -7579,25 +7829,26 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                     for key, value in data.items():
                         ws_detail.append((item.code, item.name, group_name, key, self._audit_value(value)))
 
-        money_cols = (6, 8, 9, 16, 17, 18, 19, 20, 21, 22, 23, 24, 26)
-        dollar_cols = (7,)
-        percent_cols = (11, 12, 13, 14, 15, 25)
+        money_cols = (4, 5, 6, 11, 13, 14, 21, 22, 23, 24, 25, 26, 27)
+        dollar_cols = (12,)
+        percent_cols = (7, 16, 17, 18, 19, 20)
         self._apply_report_sheet_style(ws_lines, freeze="A2", money_cols=money_cols, percent_cols=percent_cols, dollar_cols=dollar_cols)
         self._apply_report_sheet_style(ws_detail, freeze="A2")
 
         # Columnes especiales
         ws_lines.column_dimensions["B"].width = 38
-        ws_lines.column_dimensions["Y"].width = 34
-        ws_lines.column_dimensions["Z"].width = 28
-        ws_lines.column_dimensions["AA"].width = 24
+        ws_lines.column_dimensions["H"].width = 24
+        ws_lines.column_dimensions["AC"].width = 34
+        ws_lines.column_dimensions["AD"].width = 28
+        ws_lines.column_dimensions["AE"].width = 24
 
         # Totales al final de líneas
         total_row = ws_lines.max_row + 2
-        ws_lines.cell(row=total_row, column=21, value="TOTALES")
-        ws_lines.cell(row=total_row, column=22, value=avg_unit_cost)
-        ws_lines.cell(row=total_row, column=23, value="Referencia")
-        ws_lines.cell(row=total_row, column=26, value=total_line_cost)
-        for col in range(21, 27):
+        ws_lines.cell(row=total_row, column=4, value="TOTALES")
+        ws_lines.cell(row=total_row, column=5, value=avg_unit_cost)
+        ws_lines.cell(row=total_row, column=6, value="Referencia")
+        ws_lines.cell(row=total_row, column=27, value=total_line_cost)
+        for col in range(4, 28):
             cell = ws_lines.cell(row=total_row, column=col)
             cell.font = Font(bold=True, color="FFFFFF")
             cell.fill = PatternFill("solid", fgColor="0F172A")
