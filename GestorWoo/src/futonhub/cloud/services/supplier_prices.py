@@ -7,7 +7,10 @@ from pathlib import Path
 from typing import Any
 
 from futonhub.cloud.audit import AuditEvent, OperationSnapshot, new_operation_id, write_audit_event, write_snapshot
-from futonhub.core.codes import is_supplier_order_eligible_inventory_row, normalize_inventory_numeric_code
+from futonhub.core.codes import (
+    normalize_inventory_numeric_code,
+    supplier_order_eligibility_reason,
+)
 from gestorwoo.config import Settings, load_settings
 
 
@@ -32,9 +35,21 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
     try:
         if value is None or value == "":
             return default
-        return float(str(value).replace(",", "."))
+        text = str(value).strip().replace("\u20ac", "").replace("\u00e2\u201a\u00ac", "").replace("$", "").replace("%", "")
+        text = text.replace(".", "").replace(",", ".") if "," in text else text
+        return float(text)
     except Exception:
         return default
+
+
+def _row_value(row: dict[str, Any], key: str) -> Any:
+    value = row.get(key)
+    if value not in (None, ""):
+        return value
+    source_row = row.get("source_row")
+    if isinstance(source_row, dict):
+        return source_row.get(key)
+    return value
 
 
 def _norm_supplier(value: Any) -> str:
@@ -53,8 +68,8 @@ def resolve_supplier_order_effective_price(row: dict[str, Any], supplier: str) -
     """Select a valid supplier price without mutating inventory data."""
     provider = _norm_supplier(supplier)
     requested_provider = provider.lower()
-    primary_price = _safe_float(row.get("primary_supplier_price"), 0.0)
-    pascal_price = _safe_float(row.get("pascal_price"), 0.0)
+    primary_price = _safe_float(_row_value(row, "primary_supplier_price"), 0.0)
+    pascal_price = _safe_float(_row_value(row, "pascal_price"), 0.0)
     if requested_provider == "pascal":
         if pascal_price > 0:
             return {
@@ -77,7 +92,7 @@ def resolve_supplier_order_effective_price(row: dict[str, Any], supplier: str) -
                 "fallback_used": True,
                 "warning": (
                     "Precio Pascal no disponible. "
-                    f"Se usa precio principal: {primary_display} €"
+                    f"Se usa precio principal: {primary_display} EUR"
                 ),
             }
         return {
@@ -304,11 +319,11 @@ def migrate_supplier_prices_to_supabase(
         pass
 
     skipped_missing: list[int] = []
-    # Importante: NO usamos upsert aquí.
-    # Si un item_id local no existe en inventory_items de Supabase, upsert intentaría
+    # Importante: NO usamos upsert aqui.
+    # Si un item_id local no existe en inventory_items de Supabase, upsert intentaria
     # insertar una fila nueva sin columnas obligatorias como `name`, provocando:
     # null value in column "name" violates not-null constraint.
-    # Para esta migración solo queremos actualizar items existentes.
+    # Para esta migracion solo queremos actualizar items existentes.
     for row in payload_rows:
         item_id = row.get("item_id")
         update_data = {k: v for k, v in row.items() if k != "item_id" and v is not None}
@@ -345,7 +360,7 @@ def migrate_supplier_prices_to_supabase(
                 entity_table="inventory_items",
                 entity_id="bulk",
                 status=status,
-                message=f"Migración precios proveedor hacia inventory_items: {migrated}/{len(payload_rows)}",
+                message=f"Migracion precios proveedor hacia inventory_items: {migrated}/{len(payload_rows)}",
                 metadata={
                     "errors": errors[:5],
                     "skipped_missing_count": len(skipped_missing),
@@ -381,6 +396,8 @@ SUPPLIER_ORDER_INVENTORY_COLUMNS = (
 )
 
 SUPPLIER_ORDER_CODE_FIELDS = ("item_id", "heca_reference", "hub_item_code", "woo_sku")
+SUPPLIER_ORDER_DIRECT_PROBE_FIELDS = ("item_id", "hub_item_code", "heca_reference", "woo_sku")
+SUPPLIER_ORDER_SOURCE_ROW_CODE_FIELDS = ("item_id", "hub_item_code", "heca_reference", "codigo", "referencia", "ID")
 SUPPLIER_ORDER_MATCH_LEVELS = (
     ("item_id", "exact"),
     ("item_id", "canonical"),
@@ -391,10 +408,16 @@ SUPPLIER_ORDER_MATCH_LEVELS = (
     ("woo_sku", "exact"),
     ("woo_sku", "canonical"),
 )
+SUPPLIER_ORDER_DEBUG = False
 
 
 class SupplierOrderCodeAmbiguityError(ValueError):
     pass
+
+
+def _supplier_order_debug_log(message: str) -> None:
+    if SUPPLIER_ORDER_DEBUG:
+        print(message)
 
 
 def _supplier_order_inventory_rows(session, page_size: int = 500) -> list[dict[str, Any]]:
@@ -415,10 +438,145 @@ def _supplier_order_inventory_rows(session, page_size: int = 500) -> list[dict[s
         response = query.execute()
         page = [dict(row) for row in (getattr(response, "data", None) or [])]
         rows.extend(page)
+        _supplier_order_debug_log(f"[SUPPLIER_ORDER_BULK_READ] page_start={start} rows={len(page)} total_accum={len(rows)}")
         if not paged or len(page) < page_size:
             break
         start += page_size
     return rows
+
+
+def _supplier_order_code_values(raw_code: str) -> list[str]:
+    values = [str(raw_code or "").strip()]
+    if values[0].isdigit():
+        canonical = normalize_inventory_numeric_code(values[0])
+        if canonical not in values:
+            values.append(canonical)
+    return [value for value in values if value]
+
+
+def _supplier_order_probe_value_for_field(field: str, value: str) -> Any:
+    if field == "item_id":
+        try:
+            return int(str(value).strip())
+        except Exception:
+            return value
+    return value
+
+
+def _supplier_order_probe_sample(row: dict[str, Any]) -> dict[str, Any]:
+    source_row = row.get("source_row") if isinstance(row.get("source_row"), dict) else {}
+    return {
+        "item_id": row.get("item_id"),
+        "hub_item_code": row.get("hub_item_code"),
+        "heca_reference": row.get("heca_reference"),
+        "woo_sku": row.get("woo_sku"),
+        "item_record_type": row.get("item_record_type"),
+        "is_pack": row.get("is_pack"),
+        "base_item_code": row.get("base_item_code"),
+        "primary_supplier_price": row.get("primary_supplier_price"),
+        "pascal_price": row.get("pascal_price"),
+        "rotation_c": row.get("rotation_c"),
+        "cubic_meters": row.get("cubic_meters"),
+        "packages": row.get("packages"),
+        "source_row_keys": sorted(str(key) for key in source_row.keys()),
+    }
+
+
+def _supplier_order_source_row_probe(session, raw_code: str, page_size: int = 500) -> list[tuple[str, dict[str, Any]]]:
+    found: list[tuple[str, dict[str, Any]]] = []
+    seen: set[str] = set()
+    values = {value.lower() for value in _supplier_order_code_values(raw_code)}
+    start = 0
+    while True:
+        query = (
+            session.client.table("inventory_items")
+            .select(SUPPLIER_ORDER_INVENTORY_COLUMNS)
+            .order("item_id", desc=False)
+        )
+        if hasattr(query, "range"):
+            query = query.range(start, start + page_size - 1)
+            paged = True
+        else:
+            query = query.limit(page_size)
+            paged = False
+        response = query.execute()
+        page = [dict(row) for row in (getattr(response, "data", None) or [])]
+        for row in page:
+            source_row = row.get("source_row") if isinstance(row.get("source_row"), dict) else {}
+            for key in SUPPLIER_ORDER_SOURCE_ROW_CODE_FIELDS:
+                value = str(source_row.get(key) or "").strip()
+                if not value:
+                    continue
+                candidates = {value.lower()}
+                if value.isdigit():
+                    candidates.add(normalize_inventory_numeric_code(value).lower())
+                if candidates.intersection(values):
+                    row_key = _supplier_order_row_key(row)
+                    if row_key in seen:
+                        continue
+                    seen.add(row_key)
+                    found.append((f"source_row.{key}", row))
+        if not paged or len(page) < page_size:
+            break
+        start += page_size
+    sample = _supplier_order_probe_sample(found[0][1]) if found else {}
+    _supplier_order_debug_log(f"[SUPPLIER_ORDER_DIRECT_PROBE_RAW] code={raw_code} by=source_row rows={len(found)} sample={sample}")
+    return found
+
+
+def _supplier_order_direct_probe(session, raw_code: str) -> list[tuple[str, dict[str, Any]]]:
+    found: list[tuple[str, dict[str, Any]]] = []
+    seen: set[str] = set()
+    all_rows = 0
+    for field in SUPPLIER_ORDER_DIRECT_PROBE_FIELDS:
+        for value in _supplier_order_code_values(raw_code):
+            if field == "item_id" and not str(value or "").strip().isdigit():
+                _supplier_order_debug_log(f"[SUPPLIER_ORDER_DIRECT_PROBE] code={raw_code} by=item_id skipped=non_numeric")
+                continue
+            probe_value = _supplier_order_probe_value_for_field(field, value)
+            try:
+                response = (
+                    session.client.table("inventory_items")
+                    .select(SUPPLIER_ORDER_INVENTORY_COLUMNS)
+                    .eq(field, probe_value)
+                    .limit(10)
+                    .execute()
+                )
+                rows = [dict(row) for row in (getattr(response, "data", None) or [])]
+            except Exception as exc:
+                print(f"[SUPPLIER_ORDER_DIRECT_PROBE] code={raw_code} by={field} error={exc}")
+                rows = []
+            all_rows += len(rows)
+            sample = rows[0] if rows else {}
+            _supplier_order_debug_log(
+                f"[SUPPLIER_ORDER_DIRECT_PROBE] code={raw_code} by={field} rows={len(rows)} "
+                f"sample_item_id={sample.get('item_id', '')} "
+                f"item_record_type={sample.get('item_record_type', '')} "
+                f"is_pack={sample.get('is_pack', '')} "
+                f"base_item_code={sample.get('base_item_code', '')} "
+                f"hub_item_code={sample.get('hub_item_code', '')} "
+                f"heca_reference={sample.get('heca_reference', '')}"
+            )
+            _supplier_order_debug_log(
+                f"[SUPPLIER_ORDER_DIRECT_PROBE_RAW] code={raw_code} by={field} rows={len(rows)} "
+                f"sample={_supplier_order_probe_sample(sample) if sample else {}}"
+            )
+            for row in rows:
+                row_key = _supplier_order_row_key(row)
+                if row_key in seen:
+                    continue
+                seen.add(row_key)
+                found.append((field, row))
+    if not found:
+        for field, row in _supplier_order_source_row_probe(session, raw_code):
+            row_key = _supplier_order_row_key(row)
+            if row_key in seen:
+                continue
+            seen.add(row_key)
+            found.append((field, row))
+    if all_rows == 0:
+        _supplier_order_debug_log(f"[SUPPLIER_ORDER_DIRECT_PROBE] code={raw_code} rows=0 in all fields")
+    return found
 
 
 def _supplier_order_row_key(row: dict[str, Any]) -> str:
@@ -426,6 +584,60 @@ def _supplier_order_row_key(row: dict[str, Any]) -> str:
     if item_id:
         return f"item_id:{item_id}"
     return "|".join(str(row.get(field) or "").strip().lower() for field in SUPPLIER_ORDER_CODE_FIELDS)
+
+
+def _supplier_order_build_result(raw_code: str, row: dict[str, Any], field: str, match_mode: str, provider: str) -> dict[str, Any]:
+    effective_price = resolve_supplier_order_effective_price(row, provider)
+    return {
+        "item_id": row.get("item_id"),
+        "matched_by": f"{match_mode}:{field}",
+        "matched_value": raw_code,
+        "supplier": provider,
+        "price": effective_price["price"],
+        "currency": "EUR",
+        "source": effective_price["source"],
+        "source_label": effective_price["source_label"],
+        "column": effective_price["column"],
+        "requested_provider": effective_price["requested_provider"],
+        "fallback_used": effective_price["fallback_used"],
+        "warning": effective_price["warning"],
+        "item": row,
+    }
+
+
+def _supplier_order_direct_fallback(session, raw_code: str, provider: str) -> dict[str, Any] | None:
+    candidates = _supplier_order_direct_probe(session, raw_code)
+    eligible: dict[str, tuple[str, dict[str, Any]]] = {}
+    rejected_reasons: list[str] = []
+    for field, row in candidates:
+        is_eligible, reason = supplier_order_eligibility_reason(row)
+        _supplier_order_debug_log(
+            f"[SUPPLIER_ORDER_ELIGIBILITY] code={raw_code} item_id={row.get('item_id', '')} "
+            f"eligible={str(is_eligible).lower()} reason={reason}"
+        )
+        if not is_eligible:
+            rejected_reasons.append(reason)
+            continue
+        eligible[_supplier_order_row_key(row)] = (field, row)
+    if len(eligible) > 1:
+        candidate_ids = sorted(str(row.get("item_id") or "") for _field, row in eligible.values())
+        raise SupplierOrderCodeAmbiguityError(
+            f"Codigo de pedido ambiguo {raw_code!r} en fallback directo: "
+            f"coincide con inventory_items {', '.join(candidate_ids)}."
+        )
+    if len(eligible) == 1:
+        field, row = next(iter(eligible.values()))
+        result = _supplier_order_build_result(raw_code, row, field, f"direct", provider)
+        print(
+            f"[SUPPLIER_ORDER_DIRECT_RESOLVED] code={raw_code} "
+            f"matched_by={result.get('matched_by')} price={result.get('price')} "
+            f"rotation_c={row.get('rotation_c', '')}"
+        )
+        return result
+    if candidates:
+        reason = rejected_reasons[0] if rejected_reasons else "rejected:unknown"
+        _supplier_order_debug_log(f"[SUPPLIER_ORDER_DIRECT_PROBE] code={raw_code} usable=false reason={reason}")
+    return None
 
 
 def resolve_supplier_order_inventory_items(
@@ -443,8 +655,26 @@ def resolve_supplier_order_inventory_items(
         level: {} for level in SUPPLIER_ORDER_MATCH_LEVELS
     }
 
-    for row in _supplier_order_inventory_rows(session):
-        if not is_supplier_order_eligible_inventory_row(row):
+    inventory_rows = _supplier_order_inventory_rows(session)
+    requested_code_values = {code: set(_supplier_order_code_values(code)) for code in requested}
+    for code, values in requested_code_values.items():
+        matching_rows = [
+            row
+            for row in inventory_rows
+            if any(str(row.get(field) or "").strip() in values for field in SUPPLIER_ORDER_CODE_FIELDS)
+        ]
+        if matching_rows:
+            sample = matching_rows[0]
+            _supplier_order_debug_log(
+                f"[SUPPLIER_ORDER_BULK_READ_CHECK] code={code} present=true "
+                f"item_id={sample.get('item_id', '')}"
+            )
+        else:
+            _supplier_order_debug_log(f"[SUPPLIER_ORDER_BULK_READ_CHECK] code={code} present=false")
+
+    for row in inventory_rows:
+        is_eligible, reason = supplier_order_eligibility_reason(row)
+        if not is_eligible:
             continue
         row_key = _supplier_order_row_key(row)
         for field in SUPPLIER_ORDER_CODE_FIELDS:
@@ -474,7 +704,7 @@ def resolve_supplier_order_inventory_items(
             if not candidates:
                 continue
             if len(candidates) > 1:
-                candidate_ids = sorted(str(row.get("item_id") or "?") for row in candidates.values())
+                candidate_ids = sorted(str(row.get("item_id") or "") for row in candidates.values())
                 raise SupplierOrderCodeAmbiguityError(
                     f"Codigo de pedido ambiguo {raw_code!r} en prioridad {match_mode}:{field}: "
                     f"coincide con inventory_items {', '.join(candidate_ids)}."
@@ -482,24 +712,16 @@ def resolve_supplier_order_inventory_items(
             selected = (field, match_mode, next(iter(candidates.values())))
             break
         if selected is None:
+            fallback = _supplier_order_direct_fallback(session, raw_code, provider)
+            if fallback:
+                resolved[raw_code] = fallback
             continue
         matched_field, match_mode, row = selected
-        effective_price = resolve_supplier_order_effective_price(row, provider)
-        resolved[raw_code] = {
-            "item_id": row.get("item_id"),
-            "matched_by": f"{match_mode}:{matched_field}",
-            "matched_value": raw_code,
-            "supplier": provider,
-            "price": effective_price["price"],
-            "currency": "EUR",
-            "source": effective_price["source"],
-            "source_label": effective_price["source_label"],
-            "column": effective_price["column"],
-            "requested_provider": effective_price["requested_provider"],
-            "fallback_used": effective_price["fallback_used"],
-            "warning": effective_price["warning"],
-            "item": row,
-        }
+        _supplier_order_debug_log(
+            f"[SUPPLIER_ORDER_ELIGIBILITY] code={raw_code} item_id={row.get('item_id', '')} "
+            f"eligible=true reason=eligible"
+        )
+        resolved[raw_code] = _supplier_order_build_result(raw_code, row, matched_field, match_mode, provider)
     return resolved
 
 
@@ -644,7 +866,7 @@ def diagnose_supplier_price_resolution(session, codes: list[str], supplier: str)
 
 
 # ---------------------------------------------------------------------------
-# UI ERP · Gestión visual de precios de proveedor
+# UI ERP - Gestion visual de precios de proveedor
 # ---------------------------------------------------------------------------
 
 def list_supplier_price_inventory_items(session, *, query: str = "", limit: int = 500) -> list[dict[str, Any]]:
@@ -710,7 +932,7 @@ def update_supplier_price_inventory_item(
     try:
         item_int = int(str(item_id).strip())
     except Exception:
-        raise ValueError("item_id inválido para actualizar precios proveedor.")
+        raise ValueError("item_id invalido para actualizar precios proveedor.")
 
     before_resp = (
         session.client.table("inventory_items")
@@ -733,7 +955,7 @@ def update_supplier_price_inventory_item(
         try:
             number = float(text.replace(",", "."))
         except Exception:
-            raise ValueError(f"Precio inválido: {value}")
+            raise ValueError(f"Precio invalido: {value}")
         if number < 0:
             raise ValueError("El precio proveedor no puede ser negativo.")
         return round(number, 4)

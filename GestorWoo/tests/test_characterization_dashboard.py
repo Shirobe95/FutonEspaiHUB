@@ -59,9 +59,9 @@ class DashboardCollectDataTests(unittest.TestCase):
         self.assertEqual(
             data["systems"],
             [
-                ("Supabase", "Sin sesiÃ³n activa", "Warning"),
-                ("WooCommerce", "Pendiente de validar desde mÃ³dulo Woo", "Info"),
-                ("Seguridad", "Sin logs hasta iniciar sesiÃ³n", "Info"),
+                ("Supabase", "Sin sesion activa", "Warning"),
+                ("WooCommerce", "Pendiente de validar desde modulo Woo", "Info"),
+                ("Seguridad", "Sin logs hasta iniciar sesion", "Info"),
             ],
         )
         orders.assert_not_called()
@@ -135,8 +135,8 @@ class DashboardCollectDataTests(unittest.TestCase):
         self.assertEqual(data["validation_order_items"][0][2], "Warning")
         self.assertEqual(data["partial_receipt_items"][0][0], "PED-2")
         self.assertEqual(data["proposal_items"][1][0], "Tatamis")
-        self.assertEqual(data["error_items"][0], ("WooCommerce Â· Publicar precio", "Fallo validado", "Error"))
-        self.assertEqual(data["systems"][0], ("Supabase", "SesiÃ³n activa y lectura operativa", "OK"))
+        self.assertEqual(data["error_items"][0], ("WooCommerce - Publicar precio", "Fallo validado", "Error"))
+        self.assertEqual(data["systems"][0], ("Supabase", "Sesion activa y lectura operativa", "OK"))
         orders.assert_called_once()
         proposals.assert_called_once_with(app._cloud_session, status="pending", limit=80)
         logs.assert_called_once_with(app._cloud_session, filters={}, limit=80)

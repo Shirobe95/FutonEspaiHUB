@@ -107,7 +107,7 @@ class ErpInventoryStockMixin:
                 messagebox.showerror("Preview inventario", f"No se pudo generar preview.\n\n{exc}", parent=win)
                 return
             render_preview(preview_text)
-            if not messagebox.askyesno("Confirmar cambio inventario", preview_text + "\n\nAplicar movimiento interno?", parent=win):
+            if not messagebox.askyesno("Confirmar cambio inventario", preview_text + "\n\nAplicar movimiento interno", parent=win):
                 return
 
             def worker() -> None:

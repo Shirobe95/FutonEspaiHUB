@@ -28,8 +28,8 @@ class ProjectCatalogMixin:
             ProjectAction(
                 name="Gestor WooCommerce",
                 description=(
-                    "Separa la organización visual del catálogo y los cambios de "
-                    "precios para trabajar con más seguridad."
+                    "Separa la organizacion visual del catalogo y los cambios de "
+                    "precios para trabajar con mas seguridad."
                 ),
                 path=ROOT,
                 command=self._app_command("woocommerce-inventory"),
@@ -63,7 +63,7 @@ class ProjectCatalogMixin:
                 ),
                 path=ROOT,
                 command=self._app_command("logs"),
-                window_title="Futon Espai - Seguridad · Logs",
+                window_title="Futon Espai - Seguridad - Logs",
             ),
             ProjectAction(
                 name="Backups y Restauracion",

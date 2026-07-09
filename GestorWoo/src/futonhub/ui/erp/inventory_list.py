@@ -43,7 +43,7 @@ class ErpInventoryListMixin:
         search.grid(row=0, column=0, sticky="ew", ipady=10)
         search.configure()
         self._button(top, "Buscar / recargar", primary=True, command=lambda: self._refresh_inventory(parent, query_var.get(), allow_empty=True)).grid(row=0, column=1, padx=(12, 0), sticky="e")
-        self._button(top, "Crear nuevo artÃ­culo", primary=True, command=self._open_create_inventory_item_modal).grid(row=0, column=2, padx=(8, 0), sticky="e")
+        self._button(top, "Crear nuevo articulo", primary=True, command=self._open_create_inventory_item_modal).grid(row=0, column=2, padx=(8, 0), sticky="e")
         self._button(top, "Exportacion de inventario", command=self._export_inventory_visible).grid(row=0, column=3, padx=(8, 0), sticky="e")
         self._button(top, "Diagnosticar estados", command=self._open_inventory_status_diagnostics_modal).grid(row=0, column=4, padx=(8, 0), sticky="e")
         search.bind("<Return>", lambda _event: self._refresh_inventory(parent, query_var.get(), allow_empty=True))
@@ -88,7 +88,7 @@ class ErpInventoryListMixin:
         for item in items:
             content_preview = self._inventory_pack_contents_text(item, multiline=False)
             if len(content_preview) > 72:
-                content_preview = content_preview[:71].rstrip() + "â€¦"
+                content_preview = content_preview[:71].rstrip() + "..."
             iid = tree.insert(
                 "",
                 tk.END,

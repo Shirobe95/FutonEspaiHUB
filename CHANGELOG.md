@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.4.0-rc.2
+
+- Pedidos: P.V.P. desde WooCommerce con fallback por SKU exacto.
+- Pedidos: carga de precio proveedor, Rotacion C, M3 y bultos desde Inventario.
+- Pedidos: correccion de estado visible/editor para lineas enriquecidas.
+- Pedidos: items comerciales reales con is_pack=True ya no se excluyen si son simples y no derivados.
+- Pedidos: casos 1018005 y 1002010 validados por smoke manual.
+- UI/servicios: limpieza ASCII de textos visibles.
+- Tests: suite completa OK.
+
 ## [0.4.0-rc.1] - 2026-07-03
 
 ### Añadido

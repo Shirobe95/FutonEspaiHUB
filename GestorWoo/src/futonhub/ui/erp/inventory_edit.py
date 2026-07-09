@@ -17,7 +17,7 @@ INVENTORY_DETAIL_EDITABLE_FIELDS: tuple[tuple[str, str], ...] = (
     ("Medidas", "size"),
     ("Materiales", "materials"),
     ("M3 unidad", "cubic_meters"),
-    ("RotaciÃ³n C", "rotation_c"),
+    ("Rotacion C", "rotation_c"),
     ("Bultos", "packages"),
     ("Precio proveedor", "primary_supplier_price"),
     ("Precio Pascal", "pascal_price"),
@@ -29,7 +29,7 @@ INVENTORY_DETAIL_READONLY_RESERVED_FIELDS: tuple[tuple[str, str], ...] = (
     ("HECA reference", "heca_reference"),
     ("Woo SKU", "woo_sku"),
     ("Stock tienda", "store_stock"),
-    ("Stock almacÃ©n", "warehouse_stock"),
+    ("Stock almacen", "warehouse_stock"),
 )
 
 
@@ -109,7 +109,7 @@ class ErpInventoryEditMixin:
         header.grid(row=0, column=0, sticky="ew")
         header.columnconfigure(0, weight=1)
         tk.Label(header, text="Cambios detectados", bg=INDIGO_SOFT, fg=INDIGO, font=("Segoe UI", 9, "bold"), padx=10, pady=4).grid(row=0, column=0, sticky="w", padx=18, pady=(16, 4))
-        tk.Label(header, text=f"{item.name} Â· {item.code}", bg=BG, fg=TEXT, font=("Segoe UI", 16, "bold")).grid(row=1, column=0, sticky="w", padx=18, pady=(0, 16))
+        tk.Label(header, text=f"{item.name} - {item.code}", bg=BG, fg=TEXT, font=("Segoe UI", 16, "bold")).grid(row=1, column=0, sticky="w", padx=18, pady=(0, 16))
 
         table_card = self._card(review)
         table_card.grid(row=1, column=0, sticky="nsew", padx=18, pady=18)

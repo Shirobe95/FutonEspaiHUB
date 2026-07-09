@@ -48,7 +48,7 @@ class ProjectCardsMixin:
         ).grid(row=1, column=0, sticky="w", pady=(8, 12))
 
         if project.name == "Gestor WooCommerce":
-            primary_text = "Gestión de Inventario"
+            primary_text = "Gestion de Inventario"
         elif project.name == "Calculo de coste":
             primary_text = "Abrir Calculo de Coste"
         elif project.name == "Seguridad":
@@ -93,15 +93,15 @@ class ProjectCardsMixin:
                     content,
                     text=label,
                     command=lambda provider=provider, label=label: self._launch_custom(
-                        key=f"Calculo de Coste · {label}",
+                        key=f"Calculo de Coste - {label}",
                         path=ROOT,
                         command=self._app_command("cost-pedido") + ("--proveedor", provider),
-                        window_title=f"FutonSpai · Calculo de Coste de Pedido · {PROVEEDOR_TITULOS.get(provider, label)}",
+                        window_title=f"FutonSpai - Calculo de Coste de Pedido - {PROVEEDOR_TITULOS.get(provider, label)}",
                     ),
                 )
                 pedido_button.grid(row=offset, column=0, sticky="ew", pady=(8, 0))
                 self._register_button(
-                    f"Calculo de Coste · {label}",
+                    f"Calculo de Coste - {label}",
                     pedido_button,
                     label,
                 )

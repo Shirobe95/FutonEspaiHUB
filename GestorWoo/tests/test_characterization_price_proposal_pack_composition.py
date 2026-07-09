@@ -217,7 +217,7 @@ class PriceProposalPackCompositionTests(unittest.TestCase):
             "PackWoo1111191",
             raw={
                 "item_record_type": "woo_pack",
-                "hub_pack_components_multiline": "- 0728003 x1 · Futon\n- 0201001 x2 · Tatami",
+                "hub_pack_components_multiline": "- 0728003 x1 - Futon\n- 0201001 x2 - Tatami",
             },
         )
 
@@ -650,8 +650,8 @@ class PriceProposalPackCompositionTests(unittest.TestCase):
         self.assertIn("orient=tk.HORIZONTAL", source)
         self.assertIn('text="Subida %"', source)
         self.assertIn('text="Valor"', source)
-        self.assertIn('"Añadir"', source)
-        self.assertIn('"Añadir todos"', source)
+        self.assertIn('"Anadir"', source)
+        self.assertIn('"Anadir todos"', source)
         self.assertLess(source.index("tk.Canvas(viewport"), source.index("footer = tk.Frame(card"))
 
     def test_item_result_selection_double_click_and_add_preserve_original_row_values(self) -> None:
@@ -766,7 +766,7 @@ class PriceProposalPackCompositionTests(unittest.TestCase):
 
         results = self.app._price_results_from_items([pack, variation, base, duplicate_variation])
 
-        self.assertEqual([row["type"] for row in results], ["Simple", "Variación", "Pack"])
+        self.assertEqual([row["type"] for row in results], ["Simple", "Variacion", "Pack"])
         self.assertEqual([row["code"] for row in results], ["201001", "101", "9001"])
 
     def test_unified_search_loads_related_variations_in_one_batch(self) -> None:
@@ -812,7 +812,7 @@ class PriceProposalPackCompositionTests(unittest.TestCase):
         items = [self.app._inventory_item_from_cloud_row(row) for row in unified]
         results = self.app._price_results_from_items(items)
 
-        self.assertEqual([row["type"] for row in results], ["Simple", "Variación", "Variación", "Pack"])
+        self.assertEqual([row["type"] for row in results], ["Simple", "Variacion", "Variacion", "Pack"])
         self.assertEqual([row["code"] for row in results], ["201001", "101", "102", "9001"])
         variation_calls = [call for call in data["__calls__"] if call[0] == "product_variations"]
         self.assertEqual(len(variation_calls), 1)
@@ -827,7 +827,7 @@ class PriceProposalPackCompositionTests(unittest.TestCase):
         )
         preview = self.app._price_build_bulk_preview(self.app._price_results_from_items([pack]), "10", "")
 
-        self.assertEqual(preview["rows"][0]["status"], "VÁLIDO")
+        self.assertEqual(preview["rows"][0]["status"], "VALIDO")
         self.assertEqual(preview["rows"][0]["key"], "pack:9001")
         self.assertEqual(preview["rows"][0]["source"]["item_kind"], "pack")
         self.assertEqual(preview["counts"]["packs_included"], 1)
@@ -842,7 +842,7 @@ class PriceProposalPackCompositionTests(unittest.TestCase):
         )
         variation = inventory_item(
             "930000010533",
-            "Variación",
+            "Variacion",
             "110",
             raw={"woo_item_kind": "variation", "woo_id": 101, "item_record_type": "woo_variation"},
         )
@@ -993,7 +993,7 @@ class PriceProposalPackCompositionTests(unittest.TestCase):
         self.assertEqual(len(preview["item"]["hub_pack_components"]), 1)
 
     def test_mixed_variation_and_pack_preflight_failure_persists_zero_rows(self) -> None:
-        variation = ProposalLine("variation:3662", "Variación", "100", "110", "+10%", "up")
+        variation = ProposalLine("variation:3662", "Variacion", "100", "110", "+10%", "up")
         pack = ProposalLine("900000003662", "Pack", "200", "220", "+10%", "up")
         self.app._price_model_put(
             variation,
@@ -1044,7 +1044,7 @@ class PriceProposalPackCompositionTests(unittest.TestCase):
         )
 
     def test_mixed_variation_and_pack_persist_with_distinct_kinds(self) -> None:
-        variation = ProposalLine("variation:3662", "Variación", "100", "110", "+10%", "up")
+        variation = ProposalLine("variation:3662", "Variacion", "100", "110", "+10%", "up")
         pack = ProposalLine("900000003662", "Pack", "200", "220", "+10%", "up")
         self.app._price_model_put(
             variation,
@@ -1105,7 +1105,7 @@ class PriceProposalPackCompositionTests(unittest.TestCase):
             "id": "row-pack",
             "item_kind": "product",
             "item_woo_id": 3662,
-            "name": "Pack histórico",
+            "name": "Pack historico",
             "old_price": 200,
             "new_price": 220,
             "status": "pending",
@@ -1223,8 +1223,8 @@ class PriceProposalPackCompositionTests(unittest.TestCase):
 
         self.assertEqual([line.code for line in self.app._price_edit_lines], ["201001", "201002"])
         self.assertEqual(self.app._price_edit_lines[1].direction, "warning")
-        self.assertIn("Añadidos: 1", self.app._price_edit_notice)
-        self.assertIn("Warnings añadidos: 1", self.app._price_edit_notice)
+        self.assertIn("Anadidos: 1", self.app._price_edit_notice)
+        self.assertIn("Warnings anadidos: 1", self.app._price_edit_notice)
 
     def test_bulk_preview_modal_uses_fixed_header_expandable_table_and_fixed_footer(self) -> None:
         source = inspect.getsource(FutonHubErpPrototype._open_price_bulk_add_preview)
@@ -1309,9 +1309,9 @@ class PriceProposalPackCompositionTests(unittest.TestCase):
         variation_status = self.app._price_classify_result(results[1])
         preview = self.app._price_build_bulk_preview(results, "10", "")
 
-        self.assertEqual(parent_status[:2], ("ERROR", "Producto padre sin precio único"))
-        self.assertEqual(variation_status[0], "VÁLIDO")
-        self.assertEqual([row["status"] for row in preview["rows"]], ["ERROR", "VÁLIDO"])
+        self.assertEqual(parent_status[:2], ("ERROR", "Producto padre sin precio unico"))
+        self.assertEqual(variation_status[0], "VALIDO")
+        self.assertEqual([row["status"] for row in preview["rows"]], ["ERROR", "VALIDO"])
         self.assertEqual(preview["counts"]["total_add"], 1)
 
     def test_pending_empty_and_non_numeric_prices_are_never_eligible(self) -> None:
@@ -1344,7 +1344,7 @@ class PriceProposalPackCompositionTests(unittest.TestCase):
         self.assertEqual(self.app._price_edit_lines, [])
         self.assertEqual(
             error.call_args.args[1],
-            "Este producto padre no tiene un precio Woo único.\nSelecciona una variación concreta.",
+            "Este producto padre no tiene un precio Woo unico.\nSelecciona una variacion concreta.",
         )
 
     def test_refresh_groups_same_save_token_and_deduplicates_same_real_id(self) -> None:
@@ -1424,7 +1424,7 @@ class PriceProposalPackCompositionTests(unittest.TestCase):
                 "new_price": 110,
                 "status": "pending",
                 "created_at": "2025-06-01T10:00:00",
-                "source_row": {"ui_proposal_name": "Histórica", "ui_proposal_id": "header-1", "ui_line_name": "Tatami"},
+                "source_row": {"ui_proposal_name": "Historica", "ui_proposal_id": "header-1", "ui_line_name": "Tatami"},
             },
             {
                 "id": "line-2",
@@ -1435,7 +1435,7 @@ class PriceProposalPackCompositionTests(unittest.TestCase):
                 "new_price": 130,
                 "status": "pending",
                 "created_at": "2025-06-01T10:00:00",
-                "source_row": {"ui_proposal_name": "Histórica", "ui_proposal_id": "header-1", "ui_line_name": "Tatami 90"},
+                "source_row": {"ui_proposal_name": "Historica", "ui_proposal_id": "header-1", "ui_line_name": "Tatami 90"},
             },
         ]
 
@@ -1453,7 +1453,7 @@ class PriceProposalPackCompositionTests(unittest.TestCase):
             "old_price": 100,
             "new_price": 110,
             "created_at": "2025-06-01T10:00:00",
-            "source_row": {"ui_proposal_name": "Mismo nombre histórico"},
+            "source_row": {"ui_proposal_name": "Mismo nombre historico"},
         }
         rows = [
             {**base, "id": "legacy-1", "item_woo_id": 10, "status": "error"},
@@ -1464,7 +1464,7 @@ class PriceProposalPackCompositionTests(unittest.TestCase):
 
         self.assertEqual(len(grouped), 2)
         self.assertEqual([proposal.raw["ui_member_ids"] for proposal in grouped], [["legacy-1"], ["legacy-2"]])
-        self.assertEqual([proposal.status for proposal in grouped], ["Error crítico", "Restaurada"])
+        self.assertEqual([proposal.status for proposal in grouped], ["Error critico", "Restaurada"])
 
     def test_historical_error_pending_and_restored_states_remain_visible(self) -> None:
         rows = [
@@ -1485,7 +1485,7 @@ class PriceProposalPackCompositionTests(unittest.TestCase):
         grouped = self.app._price_group_cloud_proposals(rows)
 
         self.assertEqual(len(grouped), 3)
-        self.assertEqual([proposal.status for proposal in grouped], ["Pendiente", "Error crítico", "Restaurada"])
+        self.assertEqual([proposal.status for proposal in grouped], ["Pendiente", "Error critico", "Restaurada"])
 
     def test_refresh_loads_maximum_service_window_and_renders_once_after_worker(self) -> None:
         source = inspect.getsource(FutonHubErpPrototype._refresh_price_proposals)
@@ -1606,7 +1606,7 @@ class PriceProposalPackCompositionTests(unittest.TestCase):
                 return {
                     "price_safety": {
                         "status": "ERROR",
-                        "messages": ["ERROR: el producto padre variable no tiene precio vendible único."],
+                        "messages": ["ERROR: el producto padre variable no tiene precio vendible unico."],
                     }
                 }
             return {"price_safety": {"status": "OK", "messages": []}}
@@ -1616,7 +1616,7 @@ class PriceProposalPackCompositionTests(unittest.TestCase):
             patch("futonhub.ui.erp.prototype.preview_real_price_proposal", side_effect=preview),
             patch("futonhub.ui.erp.prototype.create_real_price_proposal", side_effect=lambda *_args, **_kwargs: writes.append(1)),
         ):
-            with self.assertRaisesRegex(ValueError, "Validación de precio bloqueada"):
+            with self.assertRaisesRegex(ValueError, "Validacion de precio bloqueada"):
                 self.app._price_validate_and_persist_entries(entries, "Tatamis", "token-1")
 
         self.assertEqual(writes, [])
@@ -1721,8 +1721,8 @@ class PriceProposalPackCompositionTests(unittest.TestCase):
         delete = inspect.getsource(FutonHubErpPrototype._open_delete_price_proposal_confirmation)
         overlay = inspect.getsource(FutonHubErpPrototype._price_start_working_overlay)
 
-        self.assertIn("Buscando artículos, variaciones y packs", search)
-        self.assertIn("Añadiendo artículo a la propuesta", add)
+        self.assertIn("Buscando articulos, variaciones y packs", search)
+        self.assertIn("Anadiendo articulo a la propuesta", add)
         self.assertIn("Procesando", add_all)
         self.assertIn("Validando y registrando los cambios", save)
         self.assertIn("Eliminando propuesta", delete)
@@ -1733,7 +1733,7 @@ class PriceProposalPackCompositionTests(unittest.TestCase):
         source = inspect.getsource(FutonHubErpPrototype._refresh_price_edit_items)
 
         self.assertIn('self._price_edit_notice = ""', source)
-        self.assertNotIn("Producto padre sin precio único", source)
+        self.assertNotIn("Producto padre sin precio unico", source)
         self.assertNotIn("producto padre", source.lower())
 
     def test_parent_remains_visible_as_non_publishable_without_search_banner(self) -> None:
@@ -1768,8 +1768,8 @@ class PriceProposalPackCompositionTests(unittest.TestCase):
         preview = self.app._price_build_bulk_preview(self.app._price_results_from_items([parent, variation]), "10", "")
 
         self.assertEqual(preview["rows"][0]["status"], "ERROR")
-        self.assertEqual(preview["rows"][0]["reason"], "Producto padre sin precio único")
-        self.assertEqual(preview["rows"][1]["status"], "VÁLIDO")
+        self.assertEqual(preview["rows"][0]["reason"], "Producto padre sin precio unico")
+        self.assertEqual(preview["rows"][1]["status"], "VALIDO")
         self.assertEqual(preview["counts"]["total_add"], 1)
 
     def test_successful_individual_add_clears_previous_banner(self) -> None:
@@ -1792,7 +1792,7 @@ class PriceProposalPackCompositionTests(unittest.TestCase):
         render_source = inspect.getsource(FutonHubErpPrototype._price_items_pick_list)
         add_source = inspect.getsource(FutonHubErpPrototype._price_add_rows_to_proposal)
 
-        self.assertIn('if self._price_classify_result(result)[0] == "VÁLIDO":', render_source)
+        self.assertIn('if self._price_classify_result(result)[0] == "VALIDO":', render_source)
         self.assertIn('self._price_edit_notice = ""', render_source)
         self.assertIn('if status in {"ERROR", "EXCLUIDO"}:', add_source)
         self.assertLess(add_source.index('if status in {"ERROR", "EXCLUIDO"}:'), add_source.index("self._price_model_put("))
@@ -1819,10 +1819,10 @@ class PriceProposalPackCompositionTests(unittest.TestCase):
         self.app._prepare_price_edit_state()
 
         self.assertEqual(self.app._price_edit_lines, [])
-        self.assertEqual(self.app._price_edit_notice, "Producto padre sin precio único")
+        self.assertEqual(self.app._price_edit_notice, "Producto padre sin precio unico")
 
     def test_stale_empty_refresh_cannot_overwrite_newer_historical_results(self) -> None:
-        historical = PriceProposal("Histórica", "2025-01-01", 1, 1, 0, 0, "+10%", "Pendiente", ())
+        historical = PriceProposal("Historica", "2025-01-01", 1, 1, 0, 0, "+10%", "Pendiente", ())
         self.app._cloud_session = type("Session", (), {"user_id": "user-1"})()
         self.app._price_refresh_generation = 2
         self.app._price_refresh_diagnostics = []
@@ -1906,7 +1906,7 @@ class PriceProposalPackCompositionTests(unittest.TestCase):
         self.assertEqual(self.app._price_refresh_diagnostics[-1]["result"], "aplicado")
 
     def test_unverified_empty_result_does_not_erase_cached_history(self) -> None:
-        historical = PriceProposal("Histórica", "2025-01-01", 1, 1, 0, 0, "+10", "Pendiente", ())
+        historical = PriceProposal("Historica", "2025-01-01", 1, 1, 0, 0, "+10", "Pendiente", ())
         self.app._cloud_session = object()
         self.app._price_refresh_generation = 1
         self.app._price_refresh_diagnostics = []
@@ -2152,7 +2152,7 @@ class PriceProposalPackCompositionTests(unittest.TestCase):
                     "ui_deleted_at": "2026-06-22T12:46:18+00:00",
                     "ui_delete_operation_id": "PRICEDEL-MULTI",
                     "ui_save_token": "token-a" if index < 2 else "token-b",
-                    "ui_proposal_name": "Histórica A" if index < 2 else "Histórica B",
+                    "ui_proposal_name": "Historica A" if index < 2 else "Historica B",
                 },
             }
             for index in range(4)
@@ -2209,7 +2209,7 @@ class PriceProposalPackCompositionTests(unittest.TestCase):
                     "ui_deleted_at": "2026-06-22T12:00:00+00:00",
                     "ui_delete_operation_id": operation_id,
                     "ui_save_token": f"{operation_id}-token",
-                    "ui_proposal_name": "Histórica",
+                    "ui_proposal_name": "Historica",
                 },
             } for index in range(count))
 
@@ -2364,7 +2364,7 @@ class PriceProposalPackCompositionTests(unittest.TestCase):
     def test_line_without_reliable_canonical_identity_is_rejected_before_model(self) -> None:
         line = ProposalLine("VISIBLE-ONLY", "Sin Woo", "10", "11", "+10%", "up")
 
-        with self.assertRaisesRegex(ValueError, "identidad Woo canónica fiable"):
+        with self.assertRaisesRegex(ValueError, "identidad Woo canonica fiable"):
             self.app._price_model_put(line, {"item_kind": "variation"})
 
         self.assertEqual(self.app._price_model_entries(), ())
@@ -2373,7 +2373,7 @@ class PriceProposalPackCompositionTests(unittest.TestCase):
         valid = [
             inventory_item(
                 str(1000 + index),
-                f"Variación {index}",
+                f"Variacion {index}",
                 "100",
                 raw={"woo_item_kind": "variation", "woo_id": 1000 + index, "woo_parent_id": 99, "item_record_type": "woo_variation"},
             )
@@ -2410,13 +2410,13 @@ class PriceProposalPackCompositionTests(unittest.TestCase):
     def test_specific_rejected_parent_930000010533_never_enters_model_or_validator(self) -> None:
         parent = inventory_item(
             "930000010533",
-            "ÚNICA UNIDAD - 2 Tatamis de 90 Futón Duo",
+            "UNICA UNIDAD - 2 Tatamis de 90 Futon Duo",
             "Pendiente",
             raw={"woo_item_kind": "product", "woo_id": 930000010533, "type": "variable", "item_record_type": "simple"},
         )
         variation = inventory_item(
             "930000010533",
-            "Variación válida",
+            "Variacion valida",
             "120",
             raw={"woo_item_kind": "variation", "woo_id": 10533, "woo_parent_id": 930000010533, "item_record_type": "woo_variation"},
         )
@@ -2479,8 +2479,8 @@ class PriceProposalPackCompositionTests(unittest.TestCase):
         source = inspect.getsource(FutonHubErpPrototype._price_items_pick_list)
 
         self.assertIn('relief=tk.SOLID', source)
-        self.assertIn('"Añadir", primary=True', source)
-        self.assertIn('"Añadir todos"', source)
+        self.assertIn('"Anadir", primary=True', source)
+        self.assertIn('"Anadir todos"', source)
         self.assertIn("results, percent_entry.get(), exact_entry.get()", source)
         self.assertIn("state=tk.NORMAL if self._price_search_query.strip() and results else tk.DISABLED", source)
 

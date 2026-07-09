@@ -36,7 +36,7 @@ class CloudInventoryBoardMixin:
         ttk.Label(frame, text="Inventario interno", style="Section.TLabel").pack(anchor=tk.W, pady=(0, 6))
         ttk.Label(
             frame,
-            text="Busca items simples, alias y packs por código exacto/componente. Previsualiza cambios de stock solo en Supabase.",
+            text="Busca items simples, alias y packs por codigo exacto/componente. Previsualiza cambios de stock solo en Supabase.",
             style="Muted.TLabel",
         ).pack(anchor=tk.W, pady=(0, 10))
 
@@ -55,13 +55,13 @@ class CloudInventoryBoardMixin:
         tree = ttk.Treeview(table_frame, columns=columns, show="headings", height=13)
         headings = {
             "item_id": "Item ID",
-            "code": "Código",
+            "code": "Codigo",
             "type": "Tipo",
             "name": "Nombre",
-            "relation": "Relación",
+            "relation": "Relacion",
             "contents": "Contenido pack",
             "store": "Stock tienda",
-            "warehouse": "Stock almacén",
+            "warehouse": "Stock almacen",
             "woo": "Woo",
             "link": "Estado link",
         }
@@ -90,7 +90,7 @@ class CloudInventoryBoardMixin:
             text_value = str(value or "")
             if len(text_value) <= max_len:
                 return text_value
-            return text_value[: max_len - 1].rstrip() + "…"
+            return text_value[: max_len - 1].rstrip() + "..."
 
         def _format_qty(value: object) -> str:
             try:
@@ -112,7 +112,7 @@ class CloudInventoryBoardMixin:
         def _load_pack_components_live(row: dict) -> list[dict]:
             """Carga componentes directamente al seleccionar un pack.
 
-            v55.1: el resumen de la tabla puede venir vacío si Supabase/RLS no devuelve
+            v55.1: el resumen de la tabla puede venir vacio si Supabase/RLS no devuelve
             la consulta bulk de enriquecimiento. Esta carga bajo demanda hace visible el
             contenido real del pack en el panel de detalle.
             """
@@ -138,7 +138,7 @@ class CloudInventoryBoardMixin:
                 code = comp.get("component_item_code") or "-"
                 qty = _format_qty(comp.get("quantity") or 1)
                 name = comp.get("component_name") or ""
-                line = f"{code} x{qty}" + (f" · {name}" if name else "")
+                line = f"{code} x{qty}" + (f" - {name}" if name else "")
                 parts.append(line)
             if multiline:
                 return "\n".join(f"- {part}" for part in parts)
@@ -177,14 +177,14 @@ class CloudInventoryBoardMixin:
                 return
             code = _pack_code_from_row(row) or str(row.get("item_id") or "-")
             popup = tk.Toplevel(win)
-            popup.title(f"Contenido pack · {code}")
+            popup.title(f"Contenido pack - {code}")
             center_window(popup, 820, 420)
             popup.minsize(720, 340)
             popup.configure(bg=C_BG)
             apply_theme(popup)
             box = ttk.Frame(popup, padding=14)
             box.pack(fill=tk.BOTH, expand=True)
-            ttk.Label(box, text=f"{code} · {row.get('name') or row.get('woo_name') or '-'}", style="Section.TLabel").pack(anchor=tk.W, pady=(0, 8))
+            ttk.Label(box, text=f"{code} - {row.get('name') or row.get('woo_name') or '-'}", style="Section.TLabel").pack(anchor=tk.W, pady=(0, 8))
             txt = tk.Text(box, height=14, wrap=tk.WORD, bg="#ffffff", relief=tk.FLAT)
             txt.pack(fill=tk.BOTH, expand=True)
             components = _load_pack_components_live(row) if _is_pack_row(row) else []
@@ -194,12 +194,12 @@ class CloudInventoryBoardMixin:
             else:
                 fallback = row.get("hub_pack_components_multiline") or _components_from_woo_sku(row, multiline=True)
                 if fallback:
-                    txt.insert(tk.END, "Contenido visible por SKU/relación:\n")
+                    txt.insert(tk.END, "Contenido visible por SKU/relacion:\n")
                     txt.insert(tk.END, str(fallback))
-                    txt.insert(tk.END, "\n\nNota: si faltan nombres, la tabla de componentes no devolvió detalle al HUB, pero el SKU compuesto permite ver los códigos.")
+                    txt.insert(tk.END, "\n\nNota: si faltan nombres, la tabla de componentes no devolvio detalle al HUB, pero el SKU compuesto permite ver los codigos.")
                 else:
-                    txt.insert(tk.END, "No encontré componentes para este item.\n\n")
-                    txt.insert(tk.END, f"Código usado: {code}\n")
+                    txt.insert(tk.END, "No encontre componentes para este item.\n\n")
+                    txt.insert(tk.END, f"Codigo usado: {code}\n")
                     txt.insert(tk.END, f"Tipo: {row.get('hub_search_record_type') or row.get('item_record_type') or '-'}\n")
                     txt.insert(tk.END, f"Woo ID: {row.get('woo_id') or '-'}\n")
                     txt.insert(tk.END, f"Woo SKU: {row.get('woo_sku') or '-'}\n")
@@ -216,7 +216,7 @@ class CloudInventoryBoardMixin:
             else:
                 code = row.get("hub_search_code") or row.get("hub_item_code") or row.get("heca_reference") or row.get("item_id")
                 record_type = row.get("hub_search_record_type") or row.get("item_record_type") or "simple"
-                detail_text.insert(tk.END, f"{code} · {record_type} · item_id={row.get('item_id')}\n")
+                detail_text.insert(tk.END, f"{code} - {record_type} - item_id={row.get('item_id')}\n")
                 detail_text.insert(tk.END, f"Nombre: {row.get('name') or row.get('woo_name') or '-'}\n")
                 contents = row.get("hub_pack_components_multiline") or row.get("hub_pack_components_text")
                 if _is_pack_row(row):
@@ -228,16 +228,16 @@ class CloudInventoryBoardMixin:
                     elif not contents:
                         contents = _components_from_woo_sku(row, multiline=True)
                 if contents:
-                    detail_text.insert(tk.END, "Contenido del pack / relación:\n")
+                    detail_text.insert(tk.END, "Contenido del pack / relacion:\n")
                     detail_text.insert(tk.END, str(contents))
                     detail_text.insert(tk.END, "\n")
                 elif _is_pack_row(row):
-                    detail_text.insert(tk.END, "Contenido del pack: no visible todavía. Usa el botón Ver contenido pack para abrirlo en ventana aparte.\n")
+                    detail_text.insert(tk.END, "Contenido del pack: no visible todavia. Usa el boton Ver contenido pack para abrirlo en ventana aparte.\n")
                 related = row.get("hub_search_related_code")
                 if related:
                     qty = row.get("hub_search_relation_quantity") or ""
                     detail_text.insert(tk.END, f"Encontrado por: {row.get('hub_search_relation_type') or 'rel'} {related} x{qty}\n")
-                detail_text.insert(tk.END, f"Woo: {row.get('woo_id') or '-'} · SKU: {row.get('woo_sku') or '-'}")
+                detail_text.insert(tk.END, f"Woo: {row.get('woo_id') or '-'} - SKU: {row.get('woo_sku') or '-'}")
             detail_text.configure(state=tk.DISABLED)
 
         def reload_rows() -> None:
@@ -265,8 +265,8 @@ class CloudInventoryBoardMixin:
                     relation_text = row.get("hub_search_match_type") or "directo"
                 contents_text = row.get("hub_pack_components_text") or ""
                 if not contents_text and _is_pack_row(row):
-                    contents_text = _components_from_woo_sku(row, multiline=False) or "Selecciona / botón Ver contenido"
-                woo_text = f"[{row.get('woo_item_kind') or record_type or '-'}] {row.get('woo_id') or '-'} · {row.get('woo_name') or row.get('name') or '-'}"
+                    contents_text = _components_from_woo_sku(row, multiline=False) or "Selecciona / boton Ver contenido"
+                woo_text = f"[{row.get('woo_item_kind') or record_type or '-'}] {row.get('woo_id') or '-'} - {row.get('woo_name') or row.get('name') or '-'}"
                 iid = tree.insert("", tk.END, values=(
                     row.get("item_id"),
                     code,
@@ -296,16 +296,16 @@ class CloudInventoryBoardMixin:
             item_id = int(row.get("item_id"))
             store_text = simpledialog.askstring(
                 "Cambio inventario",
-                f"Item: {row.get('name') or row.get('woo_name')}\nStock tienda actual: {row.get('store_stock')}\n\nNuevo stock tienda (vacío = no cambiar):",
+                f"Item: {row.get('name') or row.get('woo_name')}\nStock tienda actual: {row.get('store_stock')}\n\nNuevo stock tienda (vacio = no cambiar):",
                 parent=win,
             )
             warehouse_text = simpledialog.askstring(
                 "Cambio inventario",
-                f"Stock almacén actual: {row.get('warehouse_stock')}\n\nNuevo stock almacén (vacío = no cambiar):",
+                f"Stock almacen actual: {row.get('warehouse_stock')}\n\nNuevo stock almacen (vacio = no cambiar):",
                 parent=win,
             )
             if not (store_text or warehouse_text):
-                messagebox.showinfo("Cambio inventario", "No indicaste ningún cambio.", parent=win)
+                messagebox.showinfo("Cambio inventario", "No indicaste ningun cambio.", parent=win)
                 return
             notes = simpledialog.askstring(
                 "Cambio inventario",
@@ -319,7 +319,7 @@ class CloudInventoryBoardMixin:
             except Exception as exc:
                 messagebox.showerror("Preview inventario", f"No se pudo generar preview.\n\n{exc}", parent=win)
                 return
-            if not messagebox.askyesno("Confirmar cambio inventario", preview_text + "\n\n¿Aplicar cambio interno?", parent=win):
+            if not messagebox.askyesno("Confirmar cambio inventario", preview_text + "\n\nAplicar cambio interno", parent=win):
                 return
             try:
                 result = update_internal_inventory_item(self._cloud_session, item_id, store_text or None, warehouse_text or None, notes, load_settings())
@@ -329,7 +329,7 @@ class CloudInventoryBoardMixin:
             messagebox.showinfo(
                 "Inventario actualizado",
                 "Cambio interno aplicado correctamente.\n\n"
-                f"Operación: {result['operation_id']}\n"
+                f"Operacion: {result['operation_id']}\n"
                 f"Item ID: {item_id}\n\n"
                 "Supabase actualizado. WooCommerce no fue tocado.\n"
                 "Caja negra: audit_log + operation_snapshot generados.",

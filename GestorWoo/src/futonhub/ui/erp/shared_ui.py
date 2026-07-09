@@ -197,7 +197,7 @@ STATUS_STYLES = {
     "Borrador": (BLUE, BLUE_SOFT),
     "Pendiente archivo": (AMBER, AMBER_SOFT),
     "Validacion": (AMBER, AMBER_SOFT),
-    "ValidaciÃ³n": (AMBER, AMBER_SOFT),
+    "Validacion": (AMBER, AMBER_SOFT),
     "Calculado": (GREEN, GREEN_SOFT),
     "Guardado": (BLUE, BLUE_SOFT),
     "Recibido parcial": (AMBER, AMBER_SOFT),
@@ -240,7 +240,7 @@ class ErpSharedUiMixin:
         card.pack(fill=tk.BOTH, expand=True, padx=16, pady=16)
         tk.Label(card, text=title, bg=CARD, fg=TEXT, font=("Segoe UI", 15, "bold")).pack(anchor=tk.W, padx=18, pady=(18, 6))
         tk.Label(card, text=message, bg=CARD, fg=MUTED, font=("Segoe UI", 10), justify=tk.LEFT, wraplength=430).pack(anchor=tk.W, padx=18, pady=(0, 12))
-        tk.Label(card, text="Ventana bloqueada mientras termina la operaciÃ³n.", bg=CARD, fg=INDIGO, font=("Segoe UI", 9, "bold")).pack(anchor=tk.W, padx=18, pady=(0, 8))
+        tk.Label(card, text="Ventana bloqueada mientras termina la operacion.", bg=CARD, fg=INDIGO, font=("Segoe UI", 9, "bold")).pack(anchor=tk.W, padx=18, pady=(0, 8))
         progress = ttk.Progressbar(card, mode="indeterminate", length=420)
         progress.pack(fill=tk.X, padx=18, pady=(0, 18))
         progress.start(12)

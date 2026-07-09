@@ -210,7 +210,7 @@ class InventoryCreateTests(unittest.TestCase):
         with patch("futonhub.ui.erp.inventory_create.messagebox.showwarning") as showwarning:
             app._open_create_inventory_item_modal()
 
-        showwarning.assert_called_once_with("Inventario", "Inicia sesión en Supabase para crear artículos.")
+        showwarning.assert_called_once_with("Inventario", "Inicia sesion en Supabase para crear articulos.")
         self.assertEqual(app.buttons, {})
 
     def test_preview_payload_preserves_defaults_and_autocompletes_heca_reference(self) -> None:
@@ -241,7 +241,7 @@ class InventoryCreateTests(unittest.TestCase):
                 "futonhub.ui.erp.inventory_create.preview_create_cloud_inventory_item",
                 return_value={"exists": True, "existing": {"item_id": 201014, "name": "Existente"}, "payload": {}},
             ), patch("futonhub.ui.erp.inventory_create.create_cloud_inventory_item") as create_item, patch("futonhub.ui.erp.inventory_create.messagebox.showwarning"):
-                app.buttons["Crear artículo"].command()
+                app.buttons["Crear articulo"].command()
 
         create_item.assert_not_called()
 
@@ -259,7 +259,7 @@ class InventoryCreateTests(unittest.TestCase):
                 "futonhub.ui.erp.inventory_create.messagebox.askyesno",
                 return_value=True,
             ), patch("futonhub.ui.erp.inventory_create.messagebox.showinfo"):
-                app.buttons["Crear artículo"].command()
+                app.buttons["Crear articulo"].command()
 
         self.assertEqual(preview.call_count, 1)
         create_item.assert_called_once()

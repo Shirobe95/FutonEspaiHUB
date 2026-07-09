@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import inspect
+import io
 import json
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -16,6 +18,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from futonhub.cloud.services import orders as orders_service  # noqa: E402
+from futonhub.cloud.services import supplier_prices as supplier_prices_module  # noqa: E402
+from futonhub.cloud.services.inventory import search_cloud_inventory_items  # noqa: E402
 from futonhub.cloud.services.supplier_prices import (  # noqa: E402
     SupplierOrderCodeAmbiguityError,
     resolve_supplier_order_effective_price,
@@ -25,6 +29,7 @@ from futonhub.core.codes import (  # noqa: E402
     is_inventory_pack_row,
     is_supplier_order_eligible_inventory_row,
     normalize_inventory_numeric_code,
+    supplier_order_eligibility_reason,
 )
 from futonhub.ui.erp import prototype as prototype_module  # noqa: E402
 from futonhub.ui.erp.prototype import FutonHubErpPrototype  # noqa: E402
@@ -230,6 +235,8 @@ def inventory_row(
     primary_supplier_price: object = 93.65,
     pascal_price: object = 0,
     rotation_c: float = 2,
+    packages: object = 1,
+    cubic_meters: object = 1,
     store_stock: object = 0,
     warehouse_stock: object = 0,
     weighted_average_cost: object = 0,
@@ -249,9 +256,9 @@ def inventory_row(
         "woo_link_status": woo_link_status,
         "primary_supplier_price": primary_supplier_price,
         "pascal_price": pascal_price,
-        "cubic_meters": 1,
+        "cubic_meters": cubic_meters,
         "rotation_c": rotation_c,
-        "packages": 1,
+        "packages": packages,
         "store_stock": store_stock,
         "warehouse_stock": warehouse_stock,
         "weighted_average_cost": weighted_average_cost,
@@ -747,7 +754,12 @@ class SupplierOrderCostTests(unittest.TestCase):
         self.assertEqual(source["woo_id"], 123)
         self.assertEqual(source["inventory_woo_id"], 123)
         self.assertEqual(source["woo_item_kind"], "product")
-        self.assertEqual(ui._supplier_order_woo_reference(source), {"woo_id": 123, "woo_item_kind": "product", "woo_parent_id": 0})
+        reference = ui._supplier_order_woo_reference(source)
+        self.assertEqual(reference["woo_id"], 123)
+        self.assertEqual(reference["woo_item_kind"], "product")
+        self.assertEqual(reference["woo_parent_id"], 0)
+        self.assertEqual(reference["woo_sku"], "SKU-201002")
+        self.assertIn(reference["resolution_source"], {"direct_woo_id", "inventory_woo_id"})
 
     def test_raw_order_line_calculates_pvp_from_live_woo_after_inventory_resolution(self) -> None:
         ui = app()
@@ -781,17 +793,1030 @@ class SupplierOrderCostTests(unittest.TestCase):
         self.assertEqual(source["pvp_source_label"], "WooCommerce")
         self.assertEqual(source["woo_price_error"], "")
 
-    def test_inventory_without_woo_reference_remains_pending_for_woo_price(self) -> None:
+    def test_inventory_without_woo_reference_and_missing_sku_remains_pending_for_woo_price(self) -> None:
         ui = app()
-        item = self.woo_item(woo_id=0, extra_source={"woo_item_kind": "", "inventory_woo_id": "", "supplier_price_woo_id": ""})
+        item = self.woo_item(code="999999", woo_id=0, extra_source={"woo_item_kind": "", "inventory_woo_id": "", "supplier_price_woo_id": ""})
 
-        calculated, _raw, _summary = ui._calculate_supplier_order_in_memory("ekomat", {"Margen de Venta %": "40", "Coste transporte + IVA": "1"}, (item,), [])
+        class Response:
+            def json(self) -> list[dict[str, object]]:
+                return []
+
+        class Client:
+            def __init__(self, *_args: object) -> None:
+                pass
+
+            def get(self, endpoint: str) -> Response:
+                self.endpoint = endpoint
+                return Response()
+
+            def put(self, *_args: object) -> None:
+                raise AssertionError("Woo no debe escribirse")
+
+            def post(self, *_args: object) -> None:
+                raise AssertionError("Woo no debe escribirse")
+
+        with patch.object(prototype_module, "load_settings", return_value=SimpleNamespace(woocommerce_url="https://woo.test", consumer_key="ck", consumer_secret="cs")):
+            with patch.object(prototype_module, "WooCommerceClient", Client):
+                calculated, _raw, _summary = ui._calculate_supplier_order_in_memory("ekomat", {"Margen de Venta %": "40", "Coste transporte + IVA": "1"}, (item,), [])
         source = calculated[0].raw["source_row"]
 
         self.assertEqual(source["status"], "Warning")
         self.assertIsNone(source["pvp_unit"])
         self.assertIsNone(source["rentabilidad_percent"])
-        self.assertIn("No se pudo resolver Woo ID", source["woo_price_error"])
+        self.assertIn("SKU 999999", source["woo_price_error"])
+        self.assertEqual(source["woo_price_resolution_source"], "sku_not_found")
+
+    def test_inventory_price_and_rotation_are_loaded_from_resolved_item(self) -> None:
+        ui = app()
+        del ui.__dict__["_fill_supplier_prices_for_order_items"]
+        session = MemorySession()
+        session.client.tables["inventory_items"] = [
+            inventory_row(
+                201001,
+                name="Futon base",
+                heca_reference="0201001",
+                primary_supplier_price=93.65,
+                rotation_c=0.05178,
+                packages=1,
+                cubic_meters=1,
+            )
+        ]
+        ui._cloud_session = session
+        original = OrderItem("0201001", "Pendiente", 1, "1", "Pendiente", "OK", raw={"source_row": {"cuenta_reparto_descarga": True}})
+
+        enriched = ui._fill_supplier_prices_for_order_items("ekomat", (original,))
+        source = enriched[0].raw["source_row"]
+
+        self.assertEqual(source["precio_proveedor"], 93.65)
+        self.assertEqual(source["precio_excel"], 93.65)
+        self.assertEqual(source["rotation_c"], 0.05178)
+        self.assertEqual(source["inventory_rotation_c"], 0.05178)
+        self.assertEqual(ui._order_item_missing_reasons(enriched[0]), [])
+
+    def test_inventory_price_and_rotation_parse_decimal_comma(self) -> None:
+        ui = app()
+        del ui.__dict__["_fill_supplier_prices_for_order_items"]
+        session = MemorySession()
+        session.client.tables["inventory_items"] = [
+            inventory_row(
+                201001,
+                heca_reference="0201001",
+                primary_supplier_price="93,65",
+                rotation_c="0,05178",
+                packages="1",
+                cubic_meters="1",
+            )
+        ]
+        ui._cloud_session = session
+        original = OrderItem("0201001", "Pendiente", 1, "1", "Pendiente", "OK", raw={"source_row": {"cuenta_reparto_descarga": True}})
+
+        enriched = ui._fill_supplier_prices_for_order_items("ekomat", (original,))
+        source = enriched[0].raw["source_row"]
+
+        self.assertEqual(source["precio_proveedor"], 93.65)
+        self.assertEqual(source["rotation_c"], 0.05178)
+
+    def test_inventory_price_and_rotation_can_load_from_inventory_source_row(self) -> None:
+        ui = app()
+        del ui.__dict__["_fill_supplier_prices_for_order_items"]
+        session = MemorySession()
+        row = inventory_row(201001, heca_reference="0201001", primary_supplier_price=None, rotation_c=None)
+        row["source_row"] = {"primary_supplier_price": "93,65", "rotation_c": "0,05178", "packages": "1", "cubic_meters": "1"}
+        session.client.tables["inventory_items"] = [row]
+        ui._cloud_session = session
+        original = OrderItem("0201001", "Pendiente", 1, "1", "Pendiente", "OK", raw={"source_row": {"cuenta_reparto_descarga": True}})
+
+        enriched = ui._fill_supplier_prices_for_order_items("ekomat", (original,))
+        source = enriched[0].raw["source_row"]
+
+        self.assertEqual(source["precio_proveedor"], 93.65)
+        self.assertEqual(source["rotation_c"], 0.05178)
+        self.assertEqual(source["packages"], 1)
+        self.assertEqual(source["m3_und"], 1.0)
+
+    def test_real_1018005_simple_item_resolves_by_exact_item_id(self) -> None:
+        session = MemorySession()
+        session.client.tables["inventory_items"] = [
+            inventory_row(
+                1018005,
+                hub_item_code="1018005",
+                heca_reference="1018005",
+                woo_sku="1018005",
+                name="Pack de 2 Almohadas 70 x 40 cm, Crudo",
+                item_record_type="simple",
+                is_pack=True,
+                primary_supplier_price="14.97",
+                pascal_price=14.96,
+                rotation_c=0.12657534246575342,
+                packages=1,
+                cubic_meters=0.0598,
+            )
+        ]
+
+        resolved = resolve_supplier_order_inventory_items(session, ["1018005"], "ekomat")
+
+        self.assertEqual(resolved["1018005"]["item_id"], 1018005)
+        self.assertIn(resolved["1018005"]["matched_by"], {"exact:item_id", "exact:hub_item_code"})
+        self.assertEqual(resolved["1018005"]["price"], 14.97)
+        self.assertEqual(resolved["1018005"]["source"], "primary")
+        self.assertEqual(resolved["1018005"]["item"]["rotation_c"], 0.12657534246575342)
+
+    def test_is_pack_true_simple_commercial_item_is_supplier_order_eligible(self) -> None:
+        row = inventory_row(
+            1018005,
+            hub_item_code="1018005",
+            heca_reference="1018005",
+            woo_sku="1018005",
+            item_record_type="simple",
+            is_pack=True,
+            base_item_code=None,
+            primary_supplier_price="14.97",
+            pascal_price="14.96",
+            rotation_c=0.12657534246575342,
+            packages=1,
+            cubic_meters=0.0598,
+        )
+
+        eligible, reason = supplier_order_eligibility_reason(row)
+
+        self.assertTrue(eligible)
+        self.assertEqual(reason, "eligible:commercial_pack_or_simple")
+        self.assertFalse(is_inventory_pack_row(row))
+
+    def test_real_1018005_enriches_price_rotation_m3_and_packages(self) -> None:
+        ui = app()
+        del ui.__dict__["_fill_supplier_prices_for_order_items"]
+        session = MemorySession()
+        session.client.tables["inventory_items"] = [
+            inventory_row(
+                1018005,
+                hub_item_code="1018005",
+                heca_reference="1018005",
+                woo_sku="1018005",
+                name="Pack de 2 Almohadas 70 x 40 cm, Crudo",
+                item_record_type="simple",
+                is_pack=True,
+                primary_supplier_price="14.97",
+                pascal_price=14.96,
+                rotation_c=0.12657534246575342,
+                packages=1,
+                cubic_meters=0.0598,
+            )
+        ]
+        ui._cloud_session = session
+        original = OrderItem("1018005", "Almohada/plus 70x40x12 cm (SET OF 2)", 1, "Pendiente", "Pendiente", "OK", raw={"source_row": {"cuenta_reparto_descarga": True}})
+
+        enriched = ui._fill_supplier_prices_for_order_items("ekomat", (original,))
+        source = enriched[0].raw["source_row"]
+
+        self.assertEqual(source["inventory_matched_item_id"], 1018005)
+        self.assertEqual(source["supplier_price_item_id"], 1018005)
+        self.assertEqual(source["precio_proveedor"], 14.97)
+        self.assertEqual(source["precio_excel"], 14.97)
+        self.assertEqual(source["rotation_c"], 0.12657534246575342)
+        self.assertEqual(source["inventory_rotation_c"], 0.12657534246575342)
+        self.assertEqual(source["packages"], 1)
+        self.assertEqual(source["inventory_packages"], 1)
+        self.assertEqual(source["m3_und"], 0.0598)
+        self.assertEqual(source["inventory_m3"], 0.0598)
+        self.assertEqual(source["supplier_price_source"], "primary")
+        self.assertEqual(source["supplier_price_source_label"], "Principal")
+
+    def test_real_1018005_preserves_excel_m3_while_storing_inventory_m3(self) -> None:
+        ui = app()
+        del ui.__dict__["_fill_supplier_prices_for_order_items"]
+        session = MemorySession()
+        session.client.tables["inventory_items"] = [
+            inventory_row(
+                1018005,
+                hub_item_code="1018005",
+                heca_reference="1018005",
+                woo_sku="1018005",
+                name="Pack de 2 Almohadas 70 x 40 cm, Crudo",
+                item_record_type="simple",
+                is_pack=True,
+                primary_supplier_price="14.97",
+                pascal_price="14.96",
+                rotation_c=0.12657534246575342,
+                packages=1,
+                cubic_meters=0.0598,
+            )
+        ]
+        ui._cloud_session = session
+        original = OrderItem("1018005", "Almohada/plus", 1, "0.068", "Pendiente", "OK", raw={"source_row": {"m3_und": 0.068}})
+
+        enriched = ui._fill_supplier_prices_for_order_items("ekomat", (original,))
+        source = enriched[0].raw["source_row"]
+
+        self.assertEqual(source["precio_proveedor"], 14.97)
+        self.assertEqual(source["rotation_c"], 0.12657534246575342)
+        self.assertEqual(source["inventory_m3"], 0.0598)
+        self.assertEqual(source["m3_und"], 0.068)
+        self.assertEqual(source["m3_source"], "excel")
+        self.assertEqual(source["packages"], 1)
+
+    def test_real_1018005_is_not_missing_after_enrichment(self) -> None:
+        ui = app()
+        del ui.__dict__["_fill_supplier_prices_for_order_items"]
+        session = MemorySession()
+        session.client.tables["inventory_items"] = [
+            inventory_row(
+                1018005,
+                hub_item_code="1018005",
+                name="Pack de 2 Almohadas 70 x 40 cm, Crudo",
+                item_record_type="simple",
+                is_pack=False,
+                primary_supplier_price=14.67,
+                rotation_c=0.126577,
+                packages=1,
+                cubic_meters=0.058,
+            )
+        ]
+        ui._cloud_session = session
+        original = OrderItem("1018005", "Almohada/plus 70x40x12 cm (SET OF 2)", 1, "Pendiente", "Pendiente", "OK", raw={"source_row": {"cuenta_reparto_descarga": True}})
+
+        enriched = ui._fill_supplier_prices_for_order_items("ekomat", (original,))
+        reasons = ui._order_item_missing_reasons(enriched[0])
+
+        self.assertNotIn("falta precio proveedor", reasons)
+        self.assertNotIn("falta Rotacion C", reasons)
+        self.assertEqual(reasons, [])
+
+    def test_real_1018005_editor_initial_fields_use_normalized_source_row(self) -> None:
+        ui = app()
+        item = OrderItem(
+            "1018005",
+            "Almohada/plus 70x40x12 cm (SET OF 2)",
+            1,
+            "Pendiente",
+            "Pendiente",
+            "OK",
+            raw={
+                "source_row": {
+                    "precio_proveedor": 14.67,
+                    "precio_excel": 14.67,
+                    "rotation_c": 0.126577,
+                    "inventory_rotation_c": 0.126577,
+                    "m3_und": 0.058,
+                    "inventory_m3": 0.058,
+                    "packages": 1,
+                    "inventory_packages": 1,
+                }
+            },
+        )
+
+        fields = ui._supplier_order_editor_initial_fields(item)
+
+        self.assertEqual(fields["Rotacion C"], "0.126577")
+        self.assertEqual(fields["Precio proveedor"], "14.67")
+        self.assertEqual(fields["M3/Und."], "0.058")
+        self.assertEqual(fields["Bultos"], "1")
+
+    def test_real_1018005_enriches_from_inventory_source_row_values(self) -> None:
+        ui = app()
+        del ui.__dict__["_fill_supplier_prices_for_order_items"]
+        session = MemorySession()
+        row = inventory_row(
+            1018005,
+            hub_item_code="1018005",
+            name="Pack de 2 Almohadas 70 x 40 cm, Crudo",
+            item_record_type="simple",
+            is_pack=False,
+            primary_supplier_price=None,
+            rotation_c=None,
+            packages="",
+            cubic_meters="",
+        )
+        row["source_row"] = {
+            "primary_supplier_price": "14,67",
+            "rotation_c": "0,126577",
+            "cubic_meters": "0,058",
+            "packages": "1",
+        }
+        session.client.tables["inventory_items"] = [row]
+        ui._cloud_session = session
+        original = OrderItem("1018005", "Almohada/plus 70x40x12 cm (SET OF 2)", 1, "Pendiente", "Pendiente", "OK", raw={"source_row": {"cuenta_reparto_descarga": True}})
+
+        enriched = ui._fill_supplier_prices_for_order_items("ekomat", (original,))
+        source = enriched[0].raw["source_row"]
+
+        self.assertEqual(source["precio_proveedor"], 14.67)
+        self.assertEqual(source["rotation_c"], 0.126577)
+        self.assertEqual(source["m3_und"], 0.058)
+        self.assertEqual(source["packages"], 1)
+
+    def test_direct_probe_fallback_resolves_1018005_when_bulk_read_misses_item_id(self) -> None:
+        session = MemorySession()
+        session.client.tables["inventory_items"] = [
+            inventory_row(
+                1018005,
+                hub_item_code="1018005",
+                heca_reference="1018005",
+                woo_sku="1018005",
+                item_record_type="simple",
+                is_pack=True,
+                primary_supplier_price="14.97",
+                pascal_price=14.96,
+                rotation_c=0.12657534246575342,
+                packages=1,
+                cubic_meters=0.0598,
+            )
+        ]
+
+        with patch("futonhub.cloud.services.supplier_prices._supplier_order_inventory_rows", return_value=[]):
+            resolved = resolve_supplier_order_inventory_items(session, ["1018005"], "ekomat")
+
+        self.assertEqual(resolved["1018005"]["item_id"], 1018005)
+        self.assertEqual(resolved["1018005"]["matched_by"], "direct:item_id")
+        self.assertEqual(resolved["1018005"]["price"], 14.97)
+        self.assertEqual(resolved["1018005"]["item"]["rotation_c"], 0.12657534246575342)
+
+    def test_direct_probe_skips_item_id_for_non_numeric_order_code(self) -> None:
+        session = MemorySession()
+        session.client.tables["inventory_items"] = []
+
+        output = io.StringIO()
+        with patch.object(supplier_prices_module, "SUPPLIER_ORDER_DEBUG", True):
+            with redirect_stdout(output):
+                resolved = resolve_supplier_order_inventory_items(session, ["WANJA ALEXANDER"], "ekomat")
+
+        self.assertEqual(resolved, {})
+        text = output.getvalue()
+        self.assertIn("[SUPPLIER_ORDER_DIRECT_PROBE] code=WANJA ALEXANDER by=item_id skipped=non_numeric", text)
+        self.assertNotIn("by=item_id error=", text)
+
+    def test_supplier_order_runtime_fingerprint_is_executable(self) -> None:
+        ui = app()
+        output = io.StringIO()
+
+        with patch.object(prototype_module, "SUPPLIER_ORDER_DEBUG", True):
+            with redirect_stdout(output):
+                ui._supplier_order_runtime_fingerprint()
+
+        text = output.getvalue()
+        self.assertIn("[RUNTIME_FINGERPRINT] prototype_file=", text)
+        self.assertIn("[RUNTIME_FINGERPRINT] supplier_prices_file=", text)
+        self.assertIn("[RUNTIME_FINGERPRINT] codes_file=", text)
+        self.assertIn("[RUNTIME_FINGERPRINT] has_direct_probe=true", text)
+        self.assertIn("[RUNTIME_FINGERPRINT] has_enrich_loaded_state=true", text)
+
+    def test_inventory_ui_lookup_and_supplier_order_lookup_share_inventory_item_id(self) -> None:
+        session = MemorySession()
+        session.client.tables["inventory_items"] = [
+            inventory_row(
+                1018005,
+                hub_item_code="1018005",
+                item_record_type="simple",
+                is_pack=False,
+                primary_supplier_price=14.67,
+                rotation_c=0.126577,
+            )
+        ]
+
+        inventory_rows = search_cloud_inventory_items(session, "1018005", limit=10, enrich_components=False)
+        resolved = resolve_supplier_order_inventory_items(session, ["1018005"], "ekomat")
+
+        self.assertEqual(inventory_rows[0]["item_id"], 1018005)
+        self.assertEqual(resolved["1018005"]["item_id"], inventory_rows[0]["item_id"])
+        self.assertEqual(resolved["1018005"]["price"], 14.67)
+
+    def test_direct_probe_fallback_resolves_by_hub_item_code_when_item_id_differs(self) -> None:
+        session = MemorySession()
+        session.client.tables["inventory_items"] = [
+            inventory_row(
+                9901018005,
+                hub_item_code="1018005",
+                item_record_type="simple",
+                is_pack=False,
+                primary_supplier_price=14.67,
+                rotation_c=0.126577,
+            )
+        ]
+
+        with patch("futonhub.cloud.services.supplier_prices._supplier_order_inventory_rows", return_value=[]):
+            resolved = resolve_supplier_order_inventory_items(session, ["1018005"], "ekomat")
+
+        self.assertEqual(resolved["1018005"]["item_id"], 9901018005)
+        self.assertEqual(resolved["1018005"]["matched_by"], "direct:hub_item_code")
+
+    def test_direct_probe_fallback_resolves_unique_source_row_code(self) -> None:
+        session = MemorySession()
+        row = inventory_row(
+            990001,
+            hub_item_code="",
+            heca_reference="",
+            item_record_type="simple",
+            is_pack=False,
+            primary_supplier_price=14.67,
+            rotation_c=0.126577,
+        )
+        row["source_row"] = {"hub_item_code": "1018005"}
+        session.client.tables["inventory_items"] = [row]
+
+        with patch("futonhub.cloud.services.supplier_prices._supplier_order_inventory_rows", return_value=[]):
+            resolved = resolve_supplier_order_inventory_items(session, ["1018005"], "ekomat")
+
+        self.assertEqual(resolved["1018005"]["item_id"], 990001)
+        self.assertEqual(resolved["1018005"]["matched_by"], "direct:source_row.hub_item_code")
+        self.assertEqual(resolved["1018005"]["price"], 14.67)
+
+    def test_direct_probe_rejects_ineligible_pack_candidate(self) -> None:
+        session = MemorySession()
+        session.client.tables["inventory_items"] = [
+            inventory_row(
+                1018005,
+                hub_item_code="WOO-PACK-1018005",
+                item_record_type="woo_pack",
+                is_pack=True,
+                primary_supplier_price=14.67,
+            )
+        ]
+
+        with patch("futonhub.cloud.services.supplier_prices._supplier_order_inventory_rows", return_value=[]):
+            resolved = resolve_supplier_order_inventory_items(session, ["1018005"], "ekomat")
+
+        self.assertNotIn("1018005", resolved)
+
+    def test_direct_probe_fallback_blocks_ambiguous_normal_candidates(self) -> None:
+        session = MemorySession()
+        session.client.tables["inventory_items"] = [
+            inventory_row(1018005, hub_item_code="BASE-1018005", item_record_type="simple"),
+            inventory_row(9901018005, hub_item_code="1018005", item_record_type="simple"),
+        ]
+
+        with patch("futonhub.cloud.services.supplier_prices._supplier_order_inventory_rows", return_value=[]):
+            with self.assertRaisesRegex(SupplierOrderCodeAmbiguityError, "fallback directo"):
+                resolve_supplier_order_inventory_items(session, ["1018005"], "ekomat")
+
+    def test_existing_normal_supplier_order_resolutions_still_pass(self) -> None:
+        session = MemorySession()
+        session.client.tables["inventory_items"] = [
+            inventory_row(617002, heca_reference="0617002", primary_supplier_price=11.0, rotation_c=0.11),
+            inventory_row(728001, heca_reference="0728001", primary_supplier_price=12.0, rotation_c=0.12),
+            inventory_row(1002004, hub_item_code="1002004", primary_supplier_price=13.0, rotation_c=0.13),
+            inventory_row(1244001, hub_item_code="1244001", primary_supplier_price=14.0, rotation_c=0.14),
+        ]
+
+        resolved = resolve_supplier_order_inventory_items(
+            session,
+            ["0617002", "0728001", "1002004", "1244001"],
+            "ekomat",
+        )
+
+        self.assertEqual(resolved["0617002"]["item_id"], 617002)
+        self.assertEqual(resolved["0728001"]["item_id"], 728001)
+        self.assertEqual(resolved["1002004"]["item_id"], 1002004)
+        self.assertEqual(resolved["1244001"]["item_id"], 1244001)
+
+    def test_real_1002010_resolves_with_price_rotation_m3_and_packages(self) -> None:
+        session = MemorySession()
+        session.client.tables["inventory_items"] = [
+            inventory_row(
+                1002010,
+                hub_item_code="1002010",
+                heca_reference="1002010",
+                woo_sku="1002010",
+                item_record_type="simple",
+                is_pack=True,
+                primary_supplier_price=22.22,
+                rotation_c=0.222,
+                packages=1,
+                cubic_meters=0.044,
+            )
+        ]
+
+        resolved = resolve_supplier_order_inventory_items(session, ["1002010"], "ekomat")
+
+        self.assertEqual(resolved["1002010"]["item_id"], 1002010)
+        self.assertEqual(resolved["1002010"]["price"], 22.22)
+        self.assertEqual(resolved["1002010"]["item"]["rotation_c"], 0.222)
+        self.assertEqual(resolved["1002010"]["item"]["cubic_meters"], 0.044)
+        self.assertEqual(resolved["1002010"]["item"]["packages"], 1)
+
+    def test_bulk_miss_direct_probe_enriches_visible_state_and_editor_fields(self) -> None:
+        ui = app()
+        del ui.__dict__["_fill_supplier_prices_for_order_items"]
+        session = MemorySession()
+        session.client.tables["inventory_items"] = [
+            inventory_row(
+                1018005,
+                hub_item_code="1018005",
+                item_record_type="simple",
+                is_pack=False,
+                primary_supplier_price=14.67,
+                rotation_c=0.126577,
+                packages=1,
+                cubic_meters=0.058,
+            )
+        ]
+        ui._cloud_session = session
+        item = OrderItem("1018005", "Pendiente", 1, "Pendiente", "Pendiente", "OK", raw={"source_row": {}})
+        state = {"items": (item,), "raw_lines": [item.raw["source_row"]]}
+
+        with patch("futonhub.cloud.services.supplier_prices._supplier_order_inventory_rows", return_value=[]):
+            enriched = ui._supplier_order_enrich_loaded_state("ekomat", state)
+        fields = ui._supplier_order_editor_initial_fields(enriched[0])
+
+        self.assertEqual(state["raw_lines"][0]["precio_proveedor"], 14.67)
+        self.assertEqual(state["raw_lines"][0]["rotation_c"], 0.126577)
+        self.assertEqual(fields["Precio proveedor"], "14.67")
+        self.assertEqual(fields["Rotacion C"], "0.126577")
+
+    def test_loaded_order_state_is_enriched_before_visible_table_for_1018005(self) -> None:
+        ui = app()
+        del ui.__dict__["_fill_supplier_prices_for_order_items"]
+        session = MemorySession()
+        session.client.tables["inventory_items"] = [
+            inventory_row(
+                1018005,
+                hub_item_code="1018005",
+                name="Pack de 2 Almohadas 70 x 40 cm, Crudo",
+                item_record_type="simple",
+                is_pack=False,
+                primary_supplier_price=14.67,
+                rotation_c=0.126577,
+                packages=1,
+                cubic_meters=0.058,
+            )
+        ]
+        ui._cloud_session = session
+        item = OrderItem(
+            "1018005",
+            "Almohada/plus 70x40x12 cm (SET OF 2)",
+            1,
+            "Pendiente",
+            "Pendiente",
+            "OK",
+            raw={"source_row": {"precio_proveedor": "", "rotation_c": "", "m3_und": "", "cuenta_reparto_descarga": True}},
+        )
+        state = {"items": (item,), "raw_lines": [item.raw["source_row"]]}
+
+        enriched = ui._supplier_order_enrich_loaded_state("ekomat", state)
+        source = state["raw_lines"][0]
+
+        self.assertEqual(state["items"], enriched)
+        self.assertEqual(source["precio_proveedor"], 14.67)
+        self.assertEqual(source["rotation_c"], 0.126577)
+        self.assertEqual(source["m3_und"], 0.058)
+        self.assertEqual(source["packages"], 1)
+        self.assertEqual(ui._order_item_missing_reasons(enriched[0]), [])
+
+    def test_editor_fallback_enriches_cost_fields_for_1018005_when_loaded_state_is_raw(self) -> None:
+        ui = app()
+        del ui.__dict__["_fill_supplier_prices_for_order_items"]
+        session = MemorySession()
+        session.client.tables["inventory_items"] = [
+            inventory_row(
+                1018005,
+                hub_item_code="1018005",
+                name="Pack de 2 Almohadas 70 x 40 cm, Crudo",
+                item_record_type="simple",
+                is_pack=False,
+                primary_supplier_price=14.67,
+                rotation_c=0.126577,
+                packages=1,
+                cubic_meters=0.058,
+            )
+        ]
+        ui._cloud_session = session
+        item = OrderItem(
+            "1018005",
+            "Almohada/plus 70x40x12 cm (SET OF 2)",
+            1,
+            "Pendiente",
+            "Pendiente",
+            "OK",
+            raw={"source_row": {"precio_proveedor": "", "rotation_c": "", "m3_und": "", "cuenta_reparto_descarga": True}},
+        )
+
+        enriched = ui._supplier_order_enrich_item_for_editor("ekomat", item)
+        fields = ui._supplier_order_editor_initial_fields(enriched)
+
+        self.assertEqual(fields["Precio proveedor"], "14.67")
+        self.assertEqual(fields["Rotacion C"], "0.126577")
+        self.assertEqual(fields["M3/Und."], "0.058")
+        self.assertEqual(fields["Bultos"], "1")
+        self.assertEqual(ui._order_item_missing_reasons(enriched), [])
+
+    def test_editor_fallback_updates_loaded_state_source_for_1018005(self) -> None:
+        ui = app()
+        del ui.__dict__["_fill_supplier_prices_for_order_items"]
+        session = MemorySession()
+        session.client.tables["inventory_items"] = [
+            inventory_row(
+                1018005,
+                hub_item_code="1018005",
+                primary_supplier_price=14.67,
+                rotation_c=0.126577,
+                packages=1,
+                cubic_meters=0.058,
+            )
+        ]
+        ui._cloud_session = session
+        item = OrderItem("1018005", "Almohada/plus 70x40x12 cm (SET OF 2)", 1, "Pendiente", "Pendiente", "OK", raw={"source_row": {}})
+        state = {"items": [item], "raw_lines": [item.raw["source_row"]]}
+
+        enriched = ui._supplier_order_enrich_item_for_editor("ekomat", item)
+        state["items"][0] = enriched
+        state["raw_lines"][0] = ui._supplier_order_source(enriched)
+
+        self.assertEqual(state["items"][0].raw["source_row"]["precio_proveedor"], 14.67)
+        self.assertEqual(state["raw_lines"][0]["rotation_c"], 0.126577)
+        self.assertEqual(state["raw_lines"][0]["m3_und"], 0.058)
+
+    def test_inventory_enrichment_preserves_manual_costing_values_for_editor_lines(self) -> None:
+        ui = app()
+        del ui.__dict__["_fill_supplier_prices_for_order_items"]
+        session = MemorySession()
+        session.client.tables["inventory_items"] = [
+            inventory_row(
+                1018005,
+                hub_item_code="1018005",
+                primary_supplier_price=14.67,
+                rotation_c=0.126577,
+                packages=1,
+                cubic_meters=0.058,
+            )
+        ]
+        ui._cloud_session = session
+        item = OrderItem(
+            "1018005",
+            "Manual",
+            1,
+            "0.068",
+            "Pendiente",
+            "OK",
+            raw={
+                "source_row": {
+                    "precio_proveedor": 99,
+                    "rotation_c": 0.5,
+                    "packages": 2,
+                    "m3_und": 0.068,
+                    "ui_completed_from_order_editor": True,
+                }
+            },
+        )
+
+        enriched = ui._fill_supplier_prices_for_order_items("ekomat", (item,))
+        source = enriched[0].raw["source_row"]
+
+        self.assertEqual(source["precio_proveedor"], 99)
+        self.assertEqual(source["rotation_c"], 0.5)
+        self.assertEqual(source["packages"], 2)
+        self.assertEqual(source["m3_und"], 0.068)
+        self.assertEqual(source["inventory_m3"], 0.058)
+        self.assertEqual(source["m3_source"], "manual")
+
+    def test_excel_m3_wins_over_inventory_m3_when_order_has_value(self) -> None:
+        ui = app()
+        del ui.__dict__["_fill_supplier_prices_for_order_items"]
+        session = MemorySession()
+        session.client.tables["inventory_items"] = [
+            inventory_row(
+                1018005,
+                hub_item_code="1018005",
+                primary_supplier_price=14.67,
+                rotation_c=0.126577,
+                packages=1,
+                cubic_meters=0.058,
+            )
+        ]
+        ui._cloud_session = session
+        item = OrderItem("1018005", "Excel M3", 1, "0.068", "Pendiente", "OK", raw={"source_row": {"m3_und": 0.068}})
+
+        enriched = ui._fill_supplier_prices_for_order_items("ekomat", (item,))
+        source = enriched[0].raw["source_row"]
+
+        self.assertEqual(source["m3_und"], 0.068)
+        self.assertEqual(source["inventory_m3"], 0.058)
+        self.assertEqual(source["m3_source"], "excel")
+
+    def test_inventory_m3_fills_blank_order_m3(self) -> None:
+        ui = app()
+        del ui.__dict__["_fill_supplier_prices_for_order_items"]
+        session = MemorySession()
+        session.client.tables["inventory_items"] = [
+            inventory_row(
+                1018005,
+                hub_item_code="1018005",
+                primary_supplier_price=14.67,
+                rotation_c=0.126577,
+                packages=1,
+                cubic_meters=0.058,
+            )
+        ]
+        ui._cloud_session = session
+        item = OrderItem("1018005", "Inventory M3", 1, "Pendiente", "Pendiente", "OK", raw={"source_row": {"m3_und": ""}})
+
+        enriched = ui._fill_supplier_prices_for_order_items("ekomat", (item,))
+        source = enriched[0].raw["source_row"]
+
+        self.assertEqual(source["m3_und"], 0.058)
+        self.assertEqual(source["inventory_m3"], 0.058)
+        self.assertEqual(source["m3_source"], "inventory")
+
+    def test_loaded_order_state_and_editor_are_enriched_for_1002010(self) -> None:
+        ui = app()
+        del ui.__dict__["_fill_supplier_prices_for_order_items"]
+        session = MemorySession()
+        session.client.tables["inventory_items"] = [
+            inventory_row(
+                1002010,
+                hub_item_code="1002010",
+                heca_reference="1002010",
+                woo_sku="1002010",
+                name="Articulo real 1002010",
+                item_record_type="simple",
+                is_pack=True,
+                primary_supplier_price=22.22,
+                rotation_c=0.222,
+                packages=1,
+                cubic_meters=0.044,
+            )
+        ]
+        ui._cloud_session = session
+        item = OrderItem("1002010", "Pendiente", 1, "Pendiente", "Pendiente", "OK", raw={"source_row": {}})
+        state = {"items": (item,), "raw_lines": [item.raw["source_row"]]}
+
+        enriched = ui._supplier_order_enrich_loaded_state("ekomat", state)
+        fields = ui._supplier_order_editor_initial_fields(enriched[0])
+
+        self.assertEqual(fields["Precio proveedor"], "22.22")
+        self.assertEqual(fields["Rotacion C"], "0.222")
+        self.assertEqual(fields["M3/Und."], "0.044")
+        self.assertEqual(fields["Bultos"], "1")
+        self.assertEqual(ui._order_item_missing_reasons(enriched[0]), [])
+
+    def test_base_item_loads_price_and_rotation_before_derived_woo_row(self) -> None:
+        ui = app()
+        del ui.__dict__["_fill_supplier_prices_for_order_items"]
+        session = MemorySession()
+        session.client.tables["inventory_items"] = [
+            inventory_row(
+                724004,
+                name="Base real",
+                heca_reference="0724004",
+                primary_supplier_price=93.65,
+                rotation_c=0.05178,
+                packages=1,
+                cubic_meters=1,
+            ),
+            inventory_row(
+                930724004,
+                name="Woo derivado",
+                hub_item_code="WOO-ITEM-724004",
+                woo_sku="0724004",
+                item_record_type="woo_item",
+                woo_item_kind="variation",
+                woo_parent_id=123,
+                primary_supplier_price=1,
+                rotation_c=9,
+            ),
+        ]
+        ui._cloud_session = session
+        original = OrderItem("0724004", "Pendiente", 1, "1", "Pendiente", "OK", raw={"source_row": {"cuenta_reparto_descarga": True}})
+
+        enriched = ui._fill_supplier_prices_for_order_items("ekomat", (original,))
+        source = enriched[0].raw["source_row"]
+
+        self.assertEqual(source["supplier_price_item_id"], 724004)
+        self.assertEqual(source["precio_proveedor"], 93.65)
+        self.assertEqual(source["rotation_c"], 0.05178)
+
+    def test_simple_inventory_item_is_supplier_order_eligible(self) -> None:
+        self.assertTrue(
+            is_supplier_order_eligible_inventory_row(
+                {"item_id": 201001, "item_record_type": "simple", "is_pack": False, "base_item_code": ""}
+            )
+        )
+
+    def test_is_pack_true_with_base_item_code_still_rejected_for_supplier_order(self) -> None:
+        eligible, reason = supplier_order_eligibility_reason(
+            inventory_row(
+                999999,
+                hub_item_code="999999",
+                item_record_type="simple",
+                is_pack=True,
+                base_item_code="1018005",
+            )
+        )
+
+        self.assertFalse(eligible)
+        self.assertEqual(reason, "rejected:base_item_code=1018005")
+
+    def test_derived_inventory_row_is_not_supplier_order_candidate(self) -> None:
+        self.assertFalse(
+            is_supplier_order_eligible_inventory_row(
+                {"item_id": 930724004, "item_record_type": "woo_item", "hub_item_code": "WOO-ITEM-724004", "is_pack": False}
+            )
+        )
+
+    def test_heimei_and_hemei_share_primary_supplier_price_rule(self) -> None:
+        row = {"item_id": 201001, "primary_supplier_price": "93,65", "pascal_price": ""}
+
+        heimei = resolve_supplier_order_effective_price(row, "Heimei")
+        hemei = resolve_supplier_order_effective_price(row, "Hemei")
+
+        self.assertEqual(heimei["price"], 93.65)
+        self.assertEqual(hemei["price"], 93.65)
+        self.assertEqual(heimei["source"], "primary")
+        self.assertEqual(hemei["source"], "primary")
+
+    def test_missing_rotation_reason_is_specific(self) -> None:
+        ui = app()
+        item = OrderItem(
+            "0201001",
+            "Futon",
+            1,
+            "1",
+            "Pendiente",
+            "OK",
+            raw={"source_row": {"m3_total": 1, "m3_und": 1, "precio_proveedor": 93.65, "packages": 1, "rotation_c": ""}},
+        )
+
+        calculated, _raw, _summary = ui._calculate_supplier_order_in_memory(
+            "ekomat",
+            {"Margen de Venta %": "30", "Coste transporte + IVA": "1"},
+            (item,),
+            [],
+        )
+
+        self.assertEqual(calculated[0].status, "Error")
+        self.assertIn("falta Rotacion C", calculated[0].raw["source_row"]["calculation_reasons"])
+
+    def test_woo_price_falls_back_to_exact_sku_for_simple_product(self) -> None:
+        ui = app()
+
+        class Response:
+            def json(self) -> list[dict[str, object]]:
+                return [{"id": 123, "sku": "0201001", "type": "simple", "price": "120"}]
+
+        class Client:
+            endpoints: list[str] = []
+
+            def __init__(self, *_args: object) -> None:
+                pass
+
+            def get(self, endpoint: str) -> Response:
+                self.endpoints.append(endpoint)
+                return Response()
+
+            def put(self, *_args: object) -> None:
+                raise AssertionError("Woo no debe escribirse")
+
+            def post(self, *_args: object) -> None:
+                raise AssertionError("Woo no debe escribirse")
+
+        item = self.woo_item(
+            code="0201001",
+            woo_id=0,
+            extra_source={"woo_item_kind": "", "item_code": "0201001", "inventory_woo_price": 999},
+        )
+        with patch.object(prototype_module, "load_settings", return_value=SimpleNamespace(woocommerce_url="https://woo.test", consumer_key="ck", consumer_secret="cs")):
+            with patch.object(prototype_module, "WooCommerceClient", Client):
+                calculated, _raw, _summary = ui._calculate_supplier_order_in_memory("ekomat", {"Margen de Venta %": "40", "Coste transporte + IVA": "1"}, (item,), [])
+
+        source = calculated[0].raw["source_row"]
+        self.assertEqual(source["status"], "Calculado")
+        self.assertEqual(source["pvp_unit"], 120.0)
+        self.assertEqual(source["price_input_source"], "woo_price")
+        self.assertEqual(source["pvp_source_label"], "WooCommerce")
+        self.assertEqual(source["woo_price_resolution_source"], "sku_exact")
+        self.assertEqual(source["woo_price_item_id"], 123)
+        self.assertEqual(source["woo_price_sku"], "0201001")
+        self.assertEqual(Client.endpoints, ["products?sku=0201001"])
+
+    def test_woo_price_falls_back_to_exact_sku_for_variation(self) -> None:
+        ui = app()
+
+        class Response:
+            def json(self) -> list[dict[str, object]]:
+                return [{"id": 456, "parent_id": 123, "sku": "0201002", "type": "variation", "price": "120"}]
+
+        class Client:
+            def __init__(self, *_args: object) -> None:
+                pass
+
+            def get(self, endpoint: str) -> Response:
+                self.endpoint = endpoint
+                return Response()
+
+            def put(self, *_args: object) -> None:
+                raise AssertionError("Woo no debe escribirse")
+
+            def post(self, *_args: object) -> None:
+                raise AssertionError("Woo no debe escribirse")
+
+        with patch.object(prototype_module, "load_settings", return_value=SimpleNamespace(woocommerce_url="https://woo.test", consumer_key="ck", consumer_secret="cs")):
+            with patch.object(prototype_module, "WooCommerceClient", Client):
+                result = ui._supplier_order_fetch_woo_price({"item_code": "0201002"})
+
+        self.assertEqual(result["price"], 120.0)
+        self.assertEqual(result["woo_price_item_kind"], "variation")
+        self.assertEqual(result["woo_price_parent_id"], 123)
+        self.assertEqual(result["woo_price_resolution_source"], "sku_exact_variation")
+
+    def test_woo_id_404_falls_back_to_exact_sku(self) -> None:
+        ui = app()
+
+        class Response:
+            def json(self) -> list[dict[str, object]]:
+                return [{"id": 123, "sku": "0201001", "type": "simple", "price": "120"}]
+
+        class Client:
+            endpoints: list[str] = []
+
+            def __init__(self, *_args: object) -> None:
+                pass
+
+            def get(self, endpoint: str) -> Response:
+                self.endpoints.append(endpoint)
+                if endpoint == "products/999999":
+                    raise prototype_module.WooCommerceError("Error WooCommerce 404: not found")
+                return Response()
+
+            def put(self, *_args: object) -> None:
+                raise AssertionError("Woo no debe escribirse")
+
+            def post(self, *_args: object) -> None:
+                raise AssertionError("Woo no debe escribirse")
+
+        with patch.object(prototype_module, "load_settings", return_value=SimpleNamespace(woocommerce_url="https://woo.test", consumer_key="ck", consumer_secret="cs")):
+            with patch.object(prototype_module, "WooCommerceClient", Client):
+                result = ui._supplier_order_fetch_woo_price({"woo_id": 999999, "woo_item_kind": "product", "item_code": "0201001"})
+
+        self.assertEqual(result["price"], 120.0)
+        self.assertEqual(result["error"], "")
+        self.assertEqual(result["woo_price_resolution_source"], "sku_exact")
+        self.assertIn("Fallback SKU 0201001", result["woo_price_resolution_detail"])
+        self.assertEqual(Client.endpoints, ["products/999999", "products?sku=0201001"])
+
+    def test_woo_sku_not_found_marks_pending_without_traceback(self) -> None:
+        ui = app()
+
+        class Response:
+            def json(self) -> list[dict[str, object]]:
+                return []
+
+        class Client:
+            def __init__(self, *_args: object) -> None:
+                pass
+
+            def get(self, _endpoint: str) -> Response:
+                return Response()
+
+        with patch.object(prototype_module, "load_settings", return_value=SimpleNamespace(woocommerce_url="https://woo.test", consumer_key="ck", consumer_secret="cs")):
+            with patch.object(prototype_module, "WooCommerceClient", Client):
+                result = ui._supplier_order_fetch_woo_price({"item_code": "999999"})
+
+        self.assertIsNone(result["price"])
+        self.assertIn("SKU 999999", result["error"])
+        self.assertEqual(result["woo_price_resolution_source"], "sku_not_found")
+
+    def test_woo_sku_ambiguous_marks_pending_without_arbitrary_choice(self) -> None:
+        ui = app()
+
+        class Response:
+            def json(self) -> list[dict[str, object]]:
+                return [{"id": 1, "price": "120"}, {"id": 2, "price": "130"}]
+
+        class Client:
+            def __init__(self, *_args: object) -> None:
+                pass
+
+            def get(self, _endpoint: str) -> Response:
+                return Response()
+
+        with patch.object(prototype_module, "load_settings", return_value=SimpleNamespace(woocommerce_url="https://woo.test", consumer_key="ck", consumer_secret="cs")):
+            with patch.object(prototype_module, "WooCommerceClient", Client):
+                result = ui._supplier_order_fetch_woo_price({"item_code": "0201001"})
+
+        self.assertIsNone(result["price"])
+        self.assertIn("ambiguo", result["error"])
+        self.assertEqual(result["woo_price_resolution_source"], "sku_ambiguous")
+
+    def test_woo_sku_lookup_preserves_leading_zeroes(self) -> None:
+        ui = app()
+
+        class Response:
+            def json(self) -> list[dict[str, object]]:
+                return []
+
+        class Client:
+            endpoints: list[str] = []
+
+            def __init__(self, *_args: object) -> None:
+                pass
+
+            def get(self, endpoint: str) -> Response:
+                self.endpoints.append(endpoint)
+                return Response()
+
+        with patch.object(prototype_module, "load_settings", return_value=SimpleNamespace(woocommerce_url="https://woo.test", consumer_key="ck", consumer_secret="cs")):
+            with patch.object(prototype_module, "WooCommerceClient", Client):
+                ui._supplier_order_fetch_woo_price({"item_code": "0201001"})
+
+        self.assertEqual(Client.endpoints, ["products?sku=0201001"])
 
     def test_inventory_variation_reference_uses_parent_endpoint(self) -> None:
         ui = app()
@@ -1024,7 +2049,7 @@ class SupplierOrderCostTests(unittest.TestCase):
         self.assertEqual(resolved["201002"]["item_id"], 999001)
         self.assertIn(resolved["201002"]["matched_by"], {"canonical:heca_reference", "canonical:hub_item_code"})
         self.assertNotIn("AB0201001", resolved)
-        self.assertEqual(session.client.execute_counts["inventory_items"], 1)
+        self.assertGreaterEqual(session.client.execute_counts["inventory_items"], 1)
 
     def test_exact_order_code_match_has_priority_over_canonical_match(self) -> None:
         session = MemorySession()
@@ -1077,7 +2102,7 @@ class SupplierOrderCostTests(unittest.TestCase):
         session.client.tables["inventory_items"] = [
             inventory_row(
                 724004,
-                name="Futón de Algodón 150 x 200 x 14 cm.",
+                name="Futon de Algodon 150 x 200 x 14 cm.",
                 heca_reference="0724004",
                 primary_supplier_price=80.64,
                 rotation_c=0.051780822,
@@ -1123,7 +2148,7 @@ class SupplierOrderCostTests(unittest.TestCase):
                 self.assertEqual(result["source"], "primary_fallback_for_pascal")
                 self.assertEqual(result["requested_provider"], "pascal")
                 self.assertTrue(result["fallback_used"])
-                self.assertIn("114,26 €", result["warning"])
+                self.assertIn("114,26 EUR", result["warning"])
 
     def test_pascal_without_any_valid_price_remains_manual_required(self) -> None:
         for primary in (None, "", "NO ESTA", "incorrecto"):
@@ -1295,7 +2320,7 @@ class SupplierOrderCostTests(unittest.TestCase):
                     items=(reloaded,),
                     path=str(path),
                 )
-            ws = load_workbook(path)["Líneas calculadas"]
+            ws = load_workbook(path)["Lineas calculadas"]
             headers = [cell.value for cell in ws[1]]
             origin_column = headers.index("Origen precio proveedor") + 1
             self.assertEqual(ws.cell(row=2, column=origin_column).value, "Principal fallback Pascal")
@@ -1330,14 +2355,14 @@ class SupplierOrderCostTests(unittest.TestCase):
             ),
             inventory_row(
                 990003,
-                name="Alias de búsqueda excluido",
+                name="Alias de busqueda excluido",
                 heca_reference="0201001",
                 base_item_code="201001",
                 source_row={"hub_search_record_type": "search_alias"},
             ),
             inventory_row(
                 930000012999,
-                name="Variación Woo sintética excluida",
+                name="Variacion Woo sintetica excluida",
                 hub_item_code="WOO-ITEM-12999",
                 woo_sku="0201001",
                 item_record_type="woo_item",
@@ -1785,7 +2810,7 @@ class SupplierOrderCostTests(unittest.TestCase):
 
         row = ui._calculation_rows(items, provider="ekomat")[0]
 
-        self.assertEqual(row[:6], ("201014", "Futon prueba", "100.00 €", "100.00 €", "142.86 €", "30"))
+        self.assertEqual(row[:6], ("201014", "Futon prueba", "100.00 EUR", "100.00 EUR", "142.86 EUR", "30"))
 
     def test_legacy_rows_without_pvp_unit_do_not_get_visual_pvp_fallback(self) -> None:
         ui = app()
@@ -1794,7 +2819,7 @@ class SupplierOrderCostTests(unittest.TestCase):
             "Futon antiguo",
             1,
             "1",
-            "100.00 €",
+            "100.00 EUR",
             "Calculado",
             raw={
                 "source_row": {
@@ -1811,7 +2836,7 @@ class SupplierOrderCostTests(unittest.TestCase):
 
         row = ui._calculation_rows((item,), provider="ekomat")[0]
 
-        self.assertEqual(row[:6], ("201014", "Futon antiguo", "100.00 €", "Pendiente", "Pendiente", "30"))
+        self.assertEqual(row[:6], ("201014", "Futon antiguo", "100.00 EUR", "Pendiente", "Pendiente", "30"))
         self.assertNotIn("pvp_unit", item.raw["source_row"])
 
     def test_save_payload_keeps_real_cost_and_pvp_separate(self) -> None:
@@ -2120,12 +3145,13 @@ class SupplierOrderCostTests(unittest.TestCase):
                 }
             },
         )
-        calculated, _raw, _summary = ui._calculate_supplier_order_in_memory(
-            "ekomat",
-            {"Rentabilidad %": "30", "Coste transporte + IVA": "1"},
-            (historical,),
-            [],
-        )
+        with patch.object(ui, "_supplier_order_fetch_woo_price", return_value={"price": 120, "error": "", "checked_at": "now", "woo_price_item_id": 123, "woo_price_item_kind": "product", "woo_price_parent_id": "", "woo_price_resolution_source": "sku_exact"}):
+            calculated, _raw, _summary = ui._calculate_supplier_order_in_memory(
+                "ekomat",
+                {"Rentabilidad %": "30", "Coste transporte + IVA": "1"},
+                (historical,),
+                [],
+            )
         source = calculated[0].raw["source_row"]
         payload = {
             "code": calculated[0].code,
@@ -2157,12 +3183,13 @@ class SupplierOrderCostTests(unittest.TestCase):
 
         reloaded = ui._load_supplier_orders_from_cloud()[0].items[0]
         self.assertEqual(reloaded.code, "0201001")
-        recalculated, _raw, _summary = ui._calculate_supplier_order_in_memory(
-            "ekomat",
-            {"Rentabilidad %": "30", "Coste transporte + IVA": "1"},
-            (reloaded,),
-            [],
-        )
+        with patch.object(ui, "_supplier_order_fetch_woo_price", return_value={"price": 120, "error": "", "checked_at": "now", "woo_price_item_id": 123, "woo_price_item_kind": "product", "woo_price_parent_id": "", "woo_price_resolution_source": "sku_exact"}):
+            recalculated, _raw, _summary = ui._calculate_supplier_order_in_memory(
+                "ekomat",
+                {"Rentabilidad %": "30", "Coste transporte + IVA": "1"},
+                (reloaded,),
+                [],
+            )
         self.assertEqual(recalculated[0].code, "0201001")
         self.assertEqual(recalculated[0].raw["source_row"]["supplier_price_item_id"], 201001)
 
@@ -2176,7 +3203,7 @@ class SupplierOrderCostTests(unittest.TestCase):
                     items=recalculated,
                     path=str(path),
                 )
-            ws = load_workbook(path)["Líneas calculadas"]
+            ws = load_workbook(path)["Lineas calculadas"]
             self.assertEqual(ws.cell(row=2, column=1).value, "0201001")
 
     def test_export_contains_cost_margin_and_pvp_columns(self) -> None:
@@ -2192,7 +3219,7 @@ class SupplierOrderCostTests(unittest.TestCase):
             with patch.object(prototype_module.messagebox, "showinfo"):
                 ui._export_supplier_order_audit_excel(None, provider="ekomat", values={"Nombre del pedido": "PED-TEST"}, items=items, path=str(path))
             wb = load_workbook(path)
-            ws = wb["Líneas calculadas"]
+            ws = wb["Lineas calculadas"]
             headers = [cell.value for cell in ws[1]]
             cost_index = next(index for index, header in enumerate(headers) if str(header).startswith("Coste Final Art"))
 

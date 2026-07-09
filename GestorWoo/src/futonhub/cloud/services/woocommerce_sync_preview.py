@@ -70,9 +70,9 @@ def normalize_key(value: Any) -> str:
 def normalize_sku(value: Any) -> str:
     """Normaliza un SKU para comparaciones internas estables.
 
-    Usa la misma regla canónica que los índices de inventario: minúsculas,
+    Usa la misma regla canonica que los indices de inventario: minusculas,
     sin acentos, espacios ni separadores. Un SKU formado solo por signos
-    queda vacío y no participa en comparaciones padre/variación.
+    queda vacio y no participa en comparaciones padre/variacion.
     """
     return normalize_key(value)
 
@@ -129,14 +129,14 @@ def clean_dimension(value: str) -> str:
 def extract_size_from_text(text: str) -> str:
     normalized = normalize_text(text).replace(",", ".")
     full = re.search(
-        r"(\d{2,3}(?:\.\d+)?)\s*[x*×]\s*(\d{2,3}(?:\.\d+)?)\s*[x*×]\s*(\d{1,2}(?:\.\d+)?)",
+        r"(\d{2,3}(?:\.\d+)?)\s*[x*x]\s*(\d{2,3}(?:\.\d+)?)\s*[x*x]\s*(\d{1,2}(?:\.\d+)?)",
         normalized,
     )
     if full:
         return "x".join(clean_dimension(part) for part in full.groups())
 
     base = re.search(
-        r"(\d{2,3}(?:\.\d+)?)\s*[x*×]\s*(\d{2,3}(?:\.\d+)?)",
+        r"(\d{2,3}(?:\.\d+)?)\s*[x*x]\s*(\d{2,3}(?:\.\d+)?)",
         normalized,
     )
     thickness = re.search(
@@ -159,7 +159,7 @@ def extract_size_from_text(text: str) -> str:
 def count_distinct_sizes(text: str) -> int:
     normalized = normalize_text(text).replace(",", ".")
     matches = re.findall(
-        r"(\d{2,3}(?:\.\d+)?)\s*[x*×]\s*(\d{2,3}(?:\.\d+)?)(?:\s*[x*×]\s*(\d{1,2}(?:\.\d+)?))?",
+        r"(\d{2,3}(?:\.\d+)?)\s*[x*x]\s*(\d{2,3}(?:\.\d+)?)(?:\s*[x*x]\s*(\d{1,2}(?:\.\d+)?))?",
         normalized,
     )
     normalized_sizes: set[str] = set()
@@ -236,7 +236,7 @@ def classify_woo_item(woo: dict[str, Any]) -> dict[str, Any]:
 
     is_cover_for_futon = bool(re.search(r"\bfundas?\s+(?:de\s+|para\s+)?futones?\b", name_text)) or bool(re.search(r"\bcovers?\s+(?:de\s+|para\s+)?futones?\b", name_text))
     starts_like_cover = bool(re.match(r"^\s*(solo\s+\d+\s+unidades?\s*-\s*)?fundas?\b", name_text))
-    only_cover_product = (starts_like_cover or is_cover_for_futon) and not re.search(r"\+\s*fut[oó]n| con\s+fut[oó]n", name_text)
+    only_cover_product = (starts_like_cover or is_cover_for_futon) and not re.search(r"\+\s*fut[oo]n| con\s+fut[oo]n", name_text)
     explicit_pack_words = _has_any(name_text, ("combinacion", "composicion", "pack", "combo", "conjunto"))
     plus_component = bool(re.search(r"(\+| con | incluye | y ).*(fundas?|cojines?|almohadas?|tatamis?)", name_text))
     name_has_real_futon_product = name_has_futon and not only_cover_product
@@ -254,20 +254,20 @@ def classify_woo_item(woo: dict[str, Any]) -> dict[str, Any]:
     # Main family priority. Attributes must not hijack this.
     if only_cover_product:
         family = "Complementos"
-        subgroup = "Funda futón"
+        subgroup = "Funda futon"
         classification_kind = "single_item"
         is_pack = 0
     elif bundle_product:
         family = "Ofertas / Packs"
         classification_kind = "pack_or_composition"
         if name_has_tatami and name_has_real_futon_product:
-            subgroup = "Pack tatami + futón"
+            subgroup = "Pack tatami + futon"
         elif name_has_real_futon_product and name_has_funda and name_has_cojin:
-            subgroup = "Pack futón + funda + cojines"
+            subgroup = "Pack futon + funda + cojines"
         elif name_has_real_futon_product and name_has_funda:
-            subgroup = "Pack futón + funda"
+            subgroup = "Pack futon + funda"
         elif name_has_real_futon_product and name_has_cojin:
-            subgroup = "Pack futón + cojines"
+            subgroup = "Pack futon + cojines"
         elif name_has_cojin and "pack" in name_text and not name_has_real_futon_product and not name_has_tatami:
             family = "Complementos"
             subgroup = "Cojines"
@@ -276,8 +276,8 @@ def classify_woo_item(woo: dict[str, Any]) -> dict[str, Any]:
         else:
             subgroup = "Pack"
     elif name_has_sofa:
-        family = "Sofás Cama"
-        subgroup = "Sofá cama"
+        family = "Sofas Cama"
+        subgroup = "Sofa cama"
     elif name_has_mesita:
         family = "Complementos"
         subgroup = "Mesita"
@@ -286,7 +286,7 @@ def classify_woo_item(woo: dict[str, Any]) -> dict[str, Any]:
         subgroup = "Topper"
     elif name_has_funda:
         family = "Complementos"
-        subgroup = "Funda futón"
+        subgroup = "Funda futon"
     elif name_has_cojin:
         family = "Complementos"
         subgroup = "Cojines"
@@ -298,10 +298,10 @@ def classify_woo_item(woo: dict[str, Any]) -> dict[str, Any]:
         subgroup = "Tatami"
     elif name_has_real_futon_product:
         family = "Futones"
-        subgroup = "Futón"
-    elif "sofás cama" in categories_text or "sofas cama" in categories_text:
-        family = "Sofás Cama"
-        subgroup = "Sofá cama"
+        subgroup = "Futon"
+    elif "sofas cama" in categories_text or "sofas cama" in categories_text:
+        family = "Sofas Cama"
+        subgroup = "Sofa cama"
     elif "camas japonesas" in categories_text or "bases para tatami" in categories_text:
         family = "Camas Japonesas"
         subgroup = "Cama japonesa"
@@ -310,10 +310,10 @@ def classify_woo_item(woo: dict[str, Any]) -> dict[str, Any]:
         subgroup = "Tatami"
     elif "futones" in categories_text:
         family = "Futones"
-        subgroup = "Futón"
+        subgroup = "Futon"
     elif "fundas" in categories_text:
         family = "Complementos"
-        subgroup = "Funda futón"
+        subgroup = "Funda futon"
     elif "topper" in categories_text:
         family = "Complementos"
         subgroup = "Topper"
@@ -323,16 +323,16 @@ def classify_woo_item(woo: dict[str, Any]) -> dict[str, Any]:
 
     materials: list[str] = []
     material_rules = [
-        ("Algodón", ("algodon", "cotton")),
-        ("Látex", ("latex",)),
+        ("Algodon", ("algodon", "cotton")),
+        ("Latex", ("latex",)),
         ("Lana", ("lana", "wool", "duo")),
         ("Coco", ("coco", "coir")),
-        ("Bambú", ("bambu", "bamboo")),
+        ("Bambu", ("bambu", "bamboo")),
         ("Madera", ("madera", "wood")),
     ]
 
     material_text = support_text
-    if family in {"Sofás Cama", "Camas Japonesas"}:
+    if family in {"Sofas Cama", "Camas Japonesas"}:
         # Furniture material: do not absorb optional futon material lines.
         material_text = " ".join([name_text, categories_text])
         structure_match = re.search(r"(acabado|estructura|madera)[^:]*:\s*([^:]+)", attr_text)
@@ -353,17 +353,17 @@ def classify_woo_item(woo: dict[str, Any]) -> dict[str, Any]:
         confidence = "Baja"
         reasons.append("No se pudo detectar familia.")
     if not size and not (item_kind == "product" and woo_type == "variable" and multiple_sizes):
-        reasons.append("No se detectó medida.")
+        reasons.append("No se detecto medida.")
     if item_kind == "product" and woo_type == "variable" and multiple_sizes:
-        reasons.append("Producto padre variable con múltiples medidas; la medida debe venir de la variación.")
+        reasons.append("Producto padre variable con multiples medidas; la medida debe venir de la variacion.")
     if family == "Futones" and not materials:
-        reasons.append("No se detectó material.")
+        reasons.append("No se detecto material.")
     if classification_kind == "pack_or_composition":
-        reasons.append("Composición/pack detectado; revisar antes de aplicar.")
-    if attr_text and (("funda" in attr_text or "cojin" in attr_text) and family in {"Futones", "Sofás Cama"}):
+        reasons.append("Composicion/pack detectado; revisar antes de aplicar.")
+    if attr_text and (("funda" in attr_text or "cojin" in attr_text) and family in {"Futones", "Sofas Cama"}):
         reasons.append("Atributos contienen complementos; no se usaron para cambiar la familia principal.")
     if _has_negated_component(name_text, ("cojines?", "almohadas?", "fundas?")):
-        reasons.append("Nombre contiene negación de complemento; se ignoró para clasificar familia.")
+        reasons.append("Nombre contiene negacion de complemento; se ignoro para clasificar familia.")
 
     return {
         "family": family,
@@ -396,18 +396,18 @@ def family_aware_size(name_raw: str, attr_raw: str, family: str, subgroup: str, 
     if name_size:
         return name_size
 
-    if family == "Sofás Cama":
-        return extract_labeled_size(attr_raw, ("Medidas sofá", "Medidas estructura", "Medida Interior"))
+    if family == "Sofas Cama":
+        return extract_labeled_size(attr_raw, ("Medidas sofa", "Medidas estructura", "Medida Interior"))
     if family == "Camas Japonesas":
         return extract_labeled_size(attr_raw, ("Medidas estructura", "Medida estructura", "Medida Interior"))
     if family == "Tatamis":
         return extract_labeled_size(attr_raw, ("Medidas estructura", "Medidas tatami"))
-    if subgroup == "Funda futón":
+    if subgroup == "Funda futon":
         return extract_labeled_size(attr_raw, ("Medidas funda",))
     if subgroup in {"Cojines", "Mesita", "Topper"}:
-        return extract_labeled_size(attr_raw, ("Medidas estructura", "Medidas sofá"))
+        return extract_labeled_size(attr_raw, ("Medidas estructura", "Medidas sofa"))
     if family == "Futones":
-        return extract_labeled_size(attr_raw, ("Medidas futón",))
+        return extract_labeled_size(attr_raw, ("Medidas futon",))
     if family == "Ofertas / Packs":
         # Packs stay conservative: name size if present, otherwise leave blank for manual review.
         return ""
@@ -525,12 +525,12 @@ def manual_link_candidate(woo: dict[str, Any], match_method: str, indexes: dict[
     if is_woo_already_linked(woo, indexes):
         return {
             "available": False,
-            "reason": "Este Woo ya está enlazado con otro item Supabase.",
+            "reason": "Este Woo ya esta enlazado con otro item Supabase.",
         }
     if _safe_text(woo.get("item_kind")) == "product" and _safe_text(woo.get("type")) == "variable" and not _safe_text(woo.get("sku")):
         return {
             "available": False,
-            "reason": "Producto padre variable sin SKU; normalmente se enlazan variaciones o un item creado manualmente con revisión.",
+            "reason": "Producto padre variable sin SKU; normalmente se enlazan variaciones o un item creado manualmente con revision.",
         }
     return {
         "available": True,
@@ -636,7 +636,7 @@ def compute_review_flag(
         reasons.append(f"Estado {status}")
         severity = status
     if classification.get("confidence") == "Baja":
-        reasons.append("Clasificación baja")
+        reasons.append("Clasificacion baja")
         if severity == "OK":
             severity = "Warning"
     if not classification.get("family") or classification.get("family") == "Otros / Sin clasificar":
@@ -648,7 +648,7 @@ def compute_review_flag(
         if severity == "OK":
             severity = "Warning"
     if classification.get("classification_kind") == "pack_or_composition":
-        reasons.append("Pack/composición: revisar")
+        reasons.append("Pack/composicion: revisar")
         if severity == "OK":
             severity = "Warning"
     if proposed_update:
@@ -662,8 +662,8 @@ def compute_review_flag(
         if sev in {"Error", "Critical"} and f"Incidencia {sev}" not in reasons:
             reasons.append(f"Incidencia {sev}")
             severity = sev
-        if code in {"low_classification_confidence", "classification_reason"} and "Revisar clasificación" not in reasons:
-            reasons.append("Revisar clasificación")
+        if code in {"low_classification_confidence", "classification_reason"} and "Revisar clasificacion" not in reasons:
+            reasons.append("Revisar clasificacion")
             if severity == "OK":
                 severity = "Warning"
 
@@ -676,7 +676,7 @@ def compute_review_flag(
 
 
 # =====================================================
-# v53 - Enlace manual Woo ↔ Supabase con preview seguro
+# v53 - Enlace manual Woo <-> Supabase con preview seguro
 # =====================================================
 
 def _fetch_inventory_item_by_id(session, item_id: int) -> dict[str, Any] | None:
@@ -760,14 +760,14 @@ def preview_manual_woo_link(session, woo_sync_row: dict[str, Any], item_id: int)
     cls = woo_sync_row.get("classification_after") or {}
     candidate = woo_sync_row.get("manual_link_candidate") or {}
     if not candidate.get("available"):
-        raise RuntimeError(candidate.get("reason") or "Este Woo no está disponible para enlace manual.")
+        raise RuntimeError(candidate.get("reason") or "Este Woo no esta disponible para enlace manual.")
     woo_id = woo.get("woo_id")
     if woo_id in (None, ""):
-        raise RuntimeError("Woo no tiene woo_id válido.")
+        raise RuntimeError("Woo no tiene woo_id valido.")
     already = _rows_with_woo_id(session, woo_id)
     if already:
-        names = ", ".join(f"{r.get('item_id')} · {r.get('name') or r.get('woo_name') or '-'}" for r in already[:5])
-        raise RuntimeError(f"Este Woo ya está enlazado en Supabase: {names}")
+        names = ", ".join(f"{r.get('item_id')} - {r.get('name') or r.get('woo_name') or '-'}" for r in already[:5])
+        raise RuntimeError(f"Este Woo ya esta enlazado en Supabase: {names}")
     before = _fetch_inventory_item_by_id(session, int(item_id))
     if before is None:
         raise RuntimeError(f"No existe inventory_items.item_id={item_id}.")
@@ -784,9 +784,9 @@ def preview_manual_woo_link(session, woo_sync_row: dict[str, Any], item_id: int)
         "woo_price": woo.get("price"),
         "woo_categories": woo.get("categories"),
         "woo_link_status": "Enlazado manual",
-        "woo_link_notes": "Enlace manual desde revisión Woo Sync v53.",
+        "woo_link_notes": "Enlace manual desde revision Woo Sync v53.",
     }
-    # Rellenamos solo huecos de clasificación, nunca pisamos datos existentes del catálogo interno.
+    # Rellenamos solo huecos de clasificacion, nunca pisamos datos existentes del catalogo interno.
     for field in ("family", "subgroup", "size", "materials", "commercial_status", "is_pack"):
         if before.get(field) in (None, "") and cls.get(field) not in (None, ""):
             update_payload[field] = cls.get(field)
@@ -814,21 +814,21 @@ def format_manual_woo_link_preview(preview: dict[str, Any]) -> str:
     woo = preview.get("woo") or {}
     before = preview.get("before") or {}
     lines = [
-        "PREVIEW ENLACE MANUAL WOO ↔ SUPABASE",
+        "PREVIEW ENLACE MANUAL WOO <-> SUPABASE",
         "=" * 48,
-        "No toca WooCommerce. Solo escribirá el enlace en inventory_items si confirmas.",
+        "No toca WooCommerce. Solo escribira el enlace en inventory_items si confirmas.",
         "",
-        f"Woo ID: {woo.get('woo_id')} · Tipo: {woo.get('item_kind') or '-'} · SKU: {woo.get('sku') or '-'}",
+        f"Woo ID: {woo.get('woo_id')} - Tipo: {woo.get('item_kind') or '-'} - SKU: {woo.get('sku') or '-'}",
         f"Woo nombre: {woo.get('name') or '-'}",
         "",
-        f"Item Supabase: {preview.get('item_id')} · {before.get('name') or '-'}",
+        f"Item Supabase: {preview.get('item_id')} - {before.get('name') or '-'}",
         f"Estado Woo actual Supabase: {before.get('woo_link_status') or '-'}",
         "",
         "Cambios propuestos:",
     ]
     for change in preview.get("changes") or []:
-        lines.append(f"- {change.get('field')}: {change.get('before') or '-'} → {change.get('after') or '-'}")
-    lines.extend(["", "Se generará operation_snapshot + audit_log. Confirmación requerida: ENLAZAR"])
+        lines.append(f"- {change.get('field')}: {change.get('before') or '-'} -> {change.get('after') or '-'}")
+    lines.extend(["", "Se generara operation_snapshot + audit_log. Confirmacion requerida: ENLAZAR"])
     return "\n".join(lines)
 
 
@@ -862,7 +862,7 @@ def apply_manual_woo_link(session, woo_sync_row: dict[str, Any], item_id: int, s
         "role": session.role,
         "machine": settings.machine_name,
         "manual_woo_link": True,
-        "note": "Enlace manual Woo ↔ Supabase. WooCommerce no fue tocado.",
+        "note": "Enlace manual Woo <-> Supabase. WooCommerce no fue tocado.",
     }
     resp = session.client.table("inventory_items").update(update_payload).eq("item_id", int(item_id)).execute()
     written_rows = getattr(resp, "data", None) or []
@@ -908,7 +908,7 @@ def apply_manual_classification_edit(row: dict[str, Any], edited: dict[str, Any]
         if key not in editable_fields:
             continue
         if key == "is_pack":
-            normalized[key] = 1 if str(value).strip().lower() in {"1", "true", "sí", "si", "yes", "pack"} else 0
+            normalized[key] = 1 if str(value).strip().lower() in {"1", "true", "si", "si", "yes", "pack"} else 0
         else:
             normalized[key] = str(value or "").strip()
 
@@ -917,7 +917,7 @@ def apply_manual_classification_edit(row: dict[str, Any], edited: dict[str, Any]
         woo[key] = value
 
     reasons = list(cls.get("classification_reasons") or [])
-    reasons.append("Clasificación editada manualmente en preview.")
+    reasons.append("Clasificacion editada manualmente en preview.")
     cls["classification_reasons"] = list(dict.fromkeys(reasons))
     woo["classification_reasons"] = cls["classification_reasons"]
 
@@ -994,14 +994,14 @@ def build_sync_preview(session, *, limit_products: int | None = None) -> dict[st
             issues.append({
                 "severity": "Info",
                 "code": "parent_sku_owned_by_variation",
-                "message": "El SKU del producto padre variable pertenece operativamente a una variación; el padre queda informativo.",
+                "message": "El SKU del producto padre variable pertenece operativamente a una variacion; el padre queda informativo.",
             })
         elif match_method.endswith("conflict"):
             status = "Critical"
             issues.append({
                 "severity": "Critical",
                 "code": match_method,
-                "message": f"Más de un item de Supabase coincide con Woo {woo.get('woo_id')} / SKU {woo.get('sku')}.",
+                "message": f"Mas de un item de Supabase coincide con Woo {woo.get('woo_id')} / SKU {woo.get('sku')}.",
                 "matches": [m.get("item_id") for m in all_matches],
             })
         elif match is None:
@@ -1017,7 +1017,7 @@ def build_sync_preview(session, *, limit_products: int | None = None) -> dict[st
                 issues.append({
                     "severity": "Warning",
                     "code": "no_supabase_match",
-                    "message": "Producto/variación Woo sin enlace claro en inventory_items.",
+                    "message": "Producto/variacion Woo sin enlace claro en inventory_items.",
                 })
         else:
             supabase_snapshot = dict(match)
@@ -1050,11 +1050,11 @@ def build_sync_preview(session, *, limit_products: int | None = None) -> dict[st
         informational_only = ignored_test or informational_parent or parent_sku_owned_by_variation
         if not informational_only:
             if not woo.get("sku"):
-                issues.append({"severity": "Error", "code": "missing_sku", "message": "Woo no tiene SKU. El enlace automático pierde fiabilidad."})
+                issues.append({"severity": "Error", "code": "missing_sku", "message": "Woo no tiene SKU. El enlace automatico pierde fiabilidad."})
             if woo.get("price") in (None, "", "0", "0.0", "0.00") and woo.get("item_kind") != "variation":
-                issues.append({"severity": "Error", "code": "zero_or_empty_woo_price", "message": "Precio Woo vacío o 0 en producto."})
+                issues.append({"severity": "Error", "code": "zero_or_empty_woo_price", "message": "Precio Woo vacio o 0 en producto."})
             if woo.get("confidence") == "Baja":
-                issues.append({"severity": "Warning", "code": "low_classification_confidence", "message": "Autoclasificación con confianza baja."})
+                issues.append({"severity": "Warning", "code": "low_classification_confidence", "message": "Autoclasificacion con confianza baja."})
             for reason in woo.get("classification_reasons") or []:
                 issues.append({"severity": "Warning", "code": "classification_reason", "message": reason})
 

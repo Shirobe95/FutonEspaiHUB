@@ -107,7 +107,7 @@ class InventoryDetailRowsTests(unittest.TestCase):
         rows = app._inventory_detail_rows(item)
 
         self.assertEqual(rows[0], ("ID", "0201001"))
-        self.assertEqual(rows[1], ("CÃ³digo HUB", "PACK-001"))
+        self.assertEqual(rows[1], ("Codigo HUB", "PACK-001"))
         self.assertEqual(rows[3], ("Contenido pack", "0201001 x1; 0201002 x2"))
         self.assertIn(("Precio Woo", "249.00"), rows)
         self.assertIn(("Stock total", "3 unidades"), rows)

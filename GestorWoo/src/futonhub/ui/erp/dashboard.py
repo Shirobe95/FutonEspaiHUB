@@ -18,7 +18,7 @@ class ErpDashboardMixin:
             parent,
             "Principal",
             "Dashboard",
-            "Cabina de mando: atenciÃ³n diaria, actividad reciente y estado del sistema.",
+            "Cabina de mando: atencion diaria, actividad reciente y estado del sistema.",
         )
 
         data = self._dashboard_collect_data()
@@ -27,7 +27,7 @@ class ErpDashboardMixin:
         if errors:
             tk.Label(
                 parent,
-                text=" Â· ".join(errors[:3]),
+                text=" - ".join(errors[:3]),
                 bg=AMBER_SOFT,
                 fg=AMBER,
                 anchor=tk.W,
@@ -41,7 +41,7 @@ class ErpDashboardMixin:
         metrics.pack(fill=tk.X, pady=(0, 18))
         metric_data = [
             ("Pedidos abiertos", str(kpis.get("open_orders", 0)), "Info", "Pedidos abiertos", data.get("open_order_items", []), "calcular"),
-            ("En validaciÃ³n", str(kpis.get("validation_orders", 0)), "Warning" if kpis.get("validation_orders", 0) else "OK", "Pedidos en validaciÃ³n", data.get("validation_order_items", []), "calcular"),
+            ("En validacion", str(kpis.get("validation_orders", 0)), "Warning" if kpis.get("validation_orders", 0) else "OK", "Pedidos en validacion", data.get("validation_order_items", []), "calcular"),
             ("Recepciones parciales", str(kpis.get("partial_receipts", 0)), "Warning" if kpis.get("partial_receipts", 0) else "OK", "Recepciones parciales", data.get("partial_receipt_items", []), "calcular"),
             ("Propuestas pendientes", str(kpis.get("pending_proposals", 0)), "Warning" if kpis.get("pending_proposals", 0) else "OK", "Propuestas pendientes", data.get("proposal_items", []), "precios"),
             ("Errores hoy", str(kpis.get("errors_today", 0)), "Error" if kpis.get("errors_today", 0) else "OK", "Errores hoy", data.get("error_items", []), "seguridad"),
@@ -58,7 +58,7 @@ class ErpDashboardMixin:
 
         # Dashboard responsive:
         # el admin puede tener mucha actividad reciente; por eso el cuerpo va
-        # dentro de un canvas con scroll vertical. AsÃ­ ninguna tarjeta queda
+        # dentro de un canvas con scroll vertical. Asi ninguna tarjeta queda
         # "fuera del mapa" cuando los logs crecen.
         viewport = tk.Frame(parent, bg=BG)
         viewport.pack(fill=tk.BOTH, expand=True)
@@ -92,11 +92,11 @@ class ErpDashboardMixin:
 
         alerts = self._dashboard_attention_card(
             body,
-            "Bloques de atenciÃ³n",
+            "Bloques de atencion",
             [
-                ("Pedidos que necesitan revisiÃ³n", data.get("validation_order_items", []), "calcular", "Warning"),
+                ("Pedidos que necesitan revision", data.get("validation_order_items", []), "calcular", "Warning"),
                 ("Propuestas pendientes", data.get("proposal_items", []), "precios", "Warning"),
-                ("Ãšltimos errores", data.get("error_items", []), "seguridad", "Error"),
+                ("Asltimos errores", data.get("error_items", []), "seguridad", "Error"),
             ],
         )
         alerts.grid(row=0, column=1, sticky="nsew", pady=(0, 14))
@@ -128,9 +128,9 @@ class ErpDashboardMixin:
         }
         if self._cloud_session is None:
             data["systems"] = [
-                ("Supabase", "Sin sesiÃ³n activa", "Warning"),
-                ("WooCommerce", "Pendiente de validar desde mÃ³dulo Woo", "Info"),
-                ("Seguridad", "Sin logs hasta iniciar sesiÃ³n", "Info"),
+                ("Supabase", "Sin sesion activa", "Warning"),
+                ("WooCommerce", "Pendiente de validar desde modulo Woo", "Info"),
+                ("Seguridad", "Sin logs hasta iniciar sesion", "Info"),
             ]
             return data
 
@@ -145,7 +145,7 @@ class ErpDashboardMixin:
                 name = cloud_order_display_name(row)
                 provider = str(row.get("provider") or "-")
                 updated = self._format_datetime_short(row.get("updated_at") or row.get("created_at"))
-                detail = f"{provider} Â· {str(row.get('status') or '-')} Â· {updated}"
+                detail = f"{provider} - {str(row.get('status') or '-')} - {updated}"
                 item = (name, detail, "Warning" if "valid" in status or "parcial" in status else "Info")
                 if status not in {"recibido completo", "received_full", "cancelled", "canceled", "cancelado"}:
                     open_orders.append(item)
@@ -170,7 +170,7 @@ class ErpDashboardMixin:
             for row in proposals:
                 name = str(row.get("name") or row.get("proposal_name") or row.get("item_woo_id") or row.get("id") or "Propuesta")
                 created = self._format_datetime_short(row.get("created_at"))
-                detail = f"{row.get('status') or 'pending'} Â· {created}"
+                detail = f"{row.get('status') or 'pending'} - {created}"
                 proposal_items.append((name, detail, "Warning"))
             data["proposal_items"] = proposal_items[:6]
             data["kpis"]["pending_proposals"] = len(proposal_items)
@@ -190,10 +190,10 @@ class ErpDashboardMixin:
                 time = self._format_datetime_short(row.get("created_at"))
                 status_raw = str(row.get("status") or row.get("severity") or "INFO").upper()
                 status = self._normalize_security_level(status_raw)
-                activity.append((f"{time} Â· {user}", f"{module} Â· {action}", status))
+                activity.append((f"{time} - {user}", f"{module} - {action}", status))
                 is_error = status_raw in {"ERROR", "CRITICAL", "BLOCKED"} or str(row.get("severity") or "").upper() in {"ERROR", "CRITICAL"}
                 if is_error:
-                    error_items.append((f"{module} Â· {action}", str(row.get("message") or row.get("error_detail") or row.get("operation_id") or "-")[:120], "Error"))
+                    error_items.append((f"{module} - {action}", str(row.get("message") or row.get("error_detail") or row.get("operation_id") or "-")[:120], "Error"))
                     try:
                         dt = datetime.fromisoformat(str(row.get("created_at")).replace("Z", "+00:00"))
                         if dt.date() == today:
@@ -207,8 +207,8 @@ class ErpDashboardMixin:
             data["errors"].append(f"Actividad reciente no cargada: {exc}")
 
         data["systems"] = [
-            ("Supabase", "SesiÃ³n activa y lectura operativa", "OK"),
-            ("WooCommerce", "Pendiente de sincronizaciÃ³n completa v48", "Info"),
+            ("Supabase", "Sesion activa y lectura operativa", "OK"),
+            ("WooCommerce", "Pendiente de sincronizacion completa v48", "Info"),
             ("Seguridad", "Logs y rollback activos", "OK"),
         ]
         return data
@@ -227,21 +227,21 @@ class ErpDashboardMixin:
         card.grid(row=1, column=0, sticky="nsew", padx=18, pady=(0, 12))
         card.columnconfigure(0, weight=1)
         if not items:
-            self._status_row(card, "Sin pendientes", "No hay elementos que requieran atenciÃ³n en este bloque.", "OK").pack(fill=tk.X, padx=16, pady=16)
+            self._status_row(card, "Sin pendientes", "No hay elementos que requieran atencion en este bloque.", "OK").pack(fill=tk.X, padx=16, pady=16)
         for index, (label, detail, status) in enumerate(items[:12]):
             self._status_row(card, label, detail, status).pack(fill=tk.X, padx=16, pady=(16 if index == 0 else 6, 0))
         footer = tk.Frame(win, bg=BG)
         footer.grid(row=2, column=0, sticky="ew", padx=18, pady=(0, 18))
-        self._button(footer, "Ir al mÃ³dulo", primary=True, command=lambda: (win.destroy(), self._show_view(target))).pack(side=tk.RIGHT)
+        self._button(footer, "Ir al modulo", primary=True, command=lambda: (win.destroy(), self._show_view(target))).pack(side=tk.RIGHT)
         self._button(footer, "Cerrar", command=win.destroy).pack(side=tk.RIGHT, padx=(0, 8))
 
     def _dashboard_activity_card(self, parent: tk.Misc, activity: list[tuple[str, str, str]]) -> tk.Frame:
         card = self._card(parent)
         card.columnconfigure(0, weight=1)
         tk.Label(card, text="Actividad reciente", bg=CARD, fg=TEXT, font=("Segoe UI", 14, "bold")).grid(row=0, column=0, sticky="w", padx=16, pady=(16, 8))
-        tk.Label(card, text="Ãšltimas acciones auditadas, en formato reducido.", bg=CARD, fg=MUTED).grid(row=1, column=0, sticky="w", padx=16, pady=(0, 8))
+        tk.Label(card, text="Asltimas acciones auditadas, en formato reducido.", bg=CARD, fg=MUTED).grid(row=1, column=0, sticky="w", padx=16, pady=(0, 8))
         if not activity:
-            self._status_row(card, "Sin actividad visible", "TodavÃ­a no hay logs recientes o el rol actual no puede leerlos.", "Info").grid(row=2, column=0, sticky="ew", padx=16, pady=12)
+            self._status_row(card, "Sin actividad visible", "Todavia no hay logs recientes o el rol actual no puede leerlos.", "Info").grid(row=2, column=0, sticky="ew", padx=16, pady=12)
             return card
         for index, (headline, detail, status) in enumerate(activity[:8], start=2):
             self._status_row(card, headline, detail, status).grid(row=index, column=0, sticky="ew", padx=16, pady=(4 if index > 2 else 8, 0))
@@ -273,7 +273,7 @@ class ErpDashboardMixin:
         head.grid(row=0, column=0, sticky="ew", padx=16, pady=(16, 8))
         head.columnconfigure(0, weight=1)
         tk.Label(head, text=title, bg=CARD, fg=TEXT, font=("Segoe UI", 14, "bold")).grid(row=0, column=0, sticky="w")
-        self._button(head, "Ver mÃ³dulo", command=lambda: self._show_view(target)).grid(row=0, column=1, sticky="e")
+        self._button(head, "Ver modulo", command=lambda: self._show_view(target)).grid(row=0, column=1, sticky="e")
         if not items:
             self._status_row(card, "Sin datos", "No hay elementos recientes para este bloque.", "Info").grid(row=1, column=0, sticky="ew", padx=16, pady=10)
             return card
@@ -288,5 +288,5 @@ class ErpDashboardMixin:
         systems = data.get("systems") or []
         for index, (label, detail, status) in enumerate(systems, start=1):
             self._status_row(card, label, detail, status).grid(row=index, column=0, sticky="ew", padx=16, pady=(6, 0))
-        self._status_row(card, "PrÃ³ximo frente", "WooCommerce completo: lectura, autoclasificaciÃ³n y preview de incidencias.", "Info").grid(row=len(systems) + 1, column=0, sticky="ew", padx=16, pady=(12, 16))
+        self._status_row(card, "Proximo frente", "WooCommerce completo: lectura, autoclasificacion y preview de incidencias.", "Info").grid(row=len(systems) + 1, column=0, sticky="ew", padx=16, pady=(12, 16))
         return card

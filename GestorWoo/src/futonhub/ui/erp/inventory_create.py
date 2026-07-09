@@ -11,11 +11,11 @@ from futonhub.ui.erp.shared_ui import BG, CARD, INDIGO_SOFT, LINE, MUTED, TEXT
 class ErpInventoryCreateMixin:
     def _open_create_inventory_item_modal(self) -> None:
         if self._cloud_session is None:
-            messagebox.showwarning("Inventario", "Inicia sesión en Supabase para crear artículos.")
+            messagebox.showwarning("Inventario", "Inicia sesion en Supabase para crear articulos.")
             return
 
         win = tk.Toplevel(self)
-        win.title("Crear nuevo artículo")
+        win.title("Crear nuevo articulo")
         win.configure(bg=BG)
         win.geometry("820x720")
         win.transient(self)
@@ -28,7 +28,7 @@ class ErpInventoryCreateMixin:
 
         tk.Label(
             shell,
-            text="Crear nuevo artículo",
+            text="Crear nuevo articulo",
             bg=BG,
             fg=TEXT,
             font=("Segoe UI", 18, "bold"),
@@ -36,7 +36,7 @@ class ErpInventoryCreateMixin:
 
         subtitle = tk.Label(
             shell,
-            text="Se creará en Supabase inventory_items. No toca WooCommerce ni stock externo.",
+            text="Se creara en Supabase inventory_items. No toca WooCommerce ni stock externo.",
             bg=BG,
             fg=MUTED,
             font=("Segoe UI", 10),
@@ -98,13 +98,13 @@ class ErpInventoryCreateMixin:
         add_entry(3, 0, "size", "Medida")
         add_entry(3, 2, "materials", "Materiales")
         add_entry(4, 0, "cubic_meters", "M3 unidad")
-        add_entry(4, 2, "rotation_c", "Rotación C")
+        add_entry(4, 2, "rotation_c", "Rotacion C")
         add_entry(5, 0, "packages", "Bultos")
         add_entry(5, 2, "primary_supplier_price", "Precio proveedor")
         add_entry(6, 0, "pascal_price", "Precio Pascal")
         add_entry(6, 2, "woo_sku", "Woo SKU")
         add_entry(7, 0, "store_stock", "Stock tienda")
-        add_entry(7, 2, "warehouse_stock", "Stock almacén")
+        add_entry(7, 2, "warehouse_stock", "Stock almacen")
 
         tk.Label(form, text="Notas", bg=CARD, fg=TEXT, font=("Segoe UI", 9, "bold")).grid(
             row=8, column=0, sticky="nw", padx=(18, 8), pady=(12, 8)
@@ -115,7 +115,7 @@ class ErpInventoryCreateMixin:
 
         help_box = tk.Label(
             form,
-            text="Campos obligatorios: ID y Nombre. Si HECA reference queda vacío, se usará el ID con ceros a la izquierda. Bultos por defecto = 1.",
+            text="Campos obligatorios: ID y Nombre. Si HECA reference queda vacio, se usara el ID con ceros a la izquierda. Bultos por defecto = 1.",
             bg=INDIGO_SOFT,
             fg="#3730A3",
             wraplength=720,
@@ -150,18 +150,18 @@ class ErpInventoryCreateMixin:
             try:
                 result = preview_create_cloud_inventory_item(self._cloud_session, get_payload())
             except Exception as exc:
-                messagebox.showerror("Validación", str(exc))
+                messagebox.showerror("Validacion", str(exc))
                 return
             payload = result.get("payload") or {}
             if result.get("exists"):
                 existing = result.get("existing") or {}
                 messagebox.showwarning(
-                    "Artículo existente",
-                    f"Ya existe el item {existing.get('item_id')}:\n{existing.get('name') or '-'}\n\nNo se creará duplicado.",
+                    "Articulo existente",
+                    f"Ya existe el item {existing.get('item_id')}:\n{existing.get('name') or '-'}\n\nNo se creara duplicado.",
                 )
                 return
             lines = [
-                "PREVIEW NUEVO ARTÍCULO",
+                "PREVIEW NUEVO ARTICULO",
                 "",
                 f"ID: {payload.get('item_id')}",
                 f"Nombre: {payload.get('name')}",
@@ -169,7 +169,7 @@ class ErpInventoryCreateMixin:
                 f"Subgrupo: {payload.get('subgroup') or '-'}",
                 f"Medida: {payload.get('size') or '-'}",
                 f"M3: {payload.get('cubic_meters') or '-'}",
-                f"Rotación C: {payload.get('rotation_c') or '-'}",
+                f"Rotacion C: {payload.get('rotation_c') or '-'}",
                 f"Bultos: {payload.get('packages') or '-'}",
                 f"Precio proveedor: {payload.get('primary_supplier_price') or '-'}",
                 f"Precio Pascal: {payload.get('pascal_price') or '-'}",
@@ -182,34 +182,34 @@ class ErpInventoryCreateMixin:
             try:
                 result = preview_create_cloud_inventory_item(self._cloud_session, get_payload())
             except Exception as exc:
-                messagebox.showerror("Validación", str(exc))
+                messagebox.showerror("Validacion", str(exc))
                 return
             if result.get("exists"):
                 existing = result.get("existing") or {}
                 messagebox.showwarning(
-                    "Artículo existente",
+                    "Articulo existente",
                     f"Ya existe el item {existing.get('item_id')}:\n{existing.get('name') or '-'}",
                 )
                 return
             payload = result.get("payload") or {}
             confirm_text = (
-                f"Se creará el artículo {payload.get('item_id')}:\n"
+                f"Se creara el articulo {payload.get('item_id')}:\n"
                 f"{payload.get('name')}\n\n"
-                "Se guardará en Supabase con log y snapshot.\n"
-                "No se tocará WooCommerce.\n\n¿Continuar?"
+                "Se guardara en Supabase con log y snapshot.\n"
+                "No se tocara WooCommerce.\n\nContinuar"
             )
-            if not messagebox.askyesno("Crear artículo", confirm_text):
+            if not messagebox.askyesno("Crear articulo", confirm_text):
                 return
             try:
                 created = create_cloud_inventory_item(self._cloud_session, get_payload())
             except Exception as exc:
-                messagebox.showerror("Crear artículo", f"No se pudo crear el artículo.\n\n{exc}")
+                messagebox.showerror("Crear articulo", f"No se pudo crear el articulo.\n\n{exc}")
                 return
-            messagebox.showinfo("Artículo creado", f"Artículo creado correctamente.\nOperation ID: {created.get('operation_id')}")
+            messagebox.showinfo("Articulo creado", f"Articulo creado correctamente.\nOperation ID: {created.get('operation_id')}")
             win.destroy()
             self._inventory_loaded_once = False
             self._refresh_inventory(self._content, str(payload.get("item_id") or ""), allow_empty=True)
 
         self._button(footer, "Cancelar", command=win.destroy).grid(row=0, column=1, padx=(8, 0), sticky="e")
         self._button(footer, "Preview", command=preview).grid(row=0, column=2, padx=(8, 0), sticky="e")
-        self._button(footer, "Crear artículo", primary=True, command=save).grid(row=0, column=3, padx=(8, 0), sticky="e")
+        self._button(footer, "Crear articulo", primary=True, command=save).grid(row=0, column=3, padx=(8, 0), sticky="e")

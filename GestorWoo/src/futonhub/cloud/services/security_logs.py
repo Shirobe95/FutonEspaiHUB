@@ -106,9 +106,9 @@ def normalize_visual_module(module: Any) -> str:
         "supplier_orders": "Pedidos",
         "pedidos": "Pedidos",
         "precio proveedores": "Precio Proveedores",
-        "business_constants": "Configuración",
-        "configuracion": "Configuración",
-        "configuración": "Configuración",
+        "business_constants": "Configuracion",
+        "configuracion": "Configuracion",
+        "configuracion": "Configuracion",
         "price_proposals": "Cambio de Precios",
         "woocommerce": "WooCommerce",
     }
@@ -119,8 +119,8 @@ def normalize_visual_action(module: Any, action: Any) -> str:
     action_text = _safe_text(action).strip()
     key = f"{_safe_text(module).lower()}::{action_text.lower()}"
     mapping = {
-        "inventory_items::create_inventory_item": "Crear artículo",
-        "inventory_items::inventory_item_field_update": "Editar artículo",
+        "inventory_items::create_inventory_item": "Crear articulo",
+        "inventory_items::inventory_item_field_update": "Editar articulo",
         "supplier_orders::create_draft": "Crear borrador",
         "supplier_orders::update_draft": "Actualizar borrador",
         "supplier_orders::calculate_order": "Calcular pedido",
@@ -161,8 +161,8 @@ def list_audit_logs(session, filters: dict[str, Any] | None = None, limit: int =
             "precio proveedores": ["Precio Proveedores", "precio proveedores", "supplier_prices"],
             "cambio de precios": ["price_proposals", "Cambio de Precios", "precios"],
             "woocommerce": ["woocommerce", "WooCommerce"],
-            "configuración": ["business_constants", "configuración", "configuracion", "Configuración"],
-            "configuracion": ["business_constants", "configuración", "configuracion", "Configuración"],
+            "configuracion": ["business_constants", "configuracion", "configuracion", "Configuracion"],
+            "configuracion": ["business_constants", "configuracion", "configuracion", "Configuracion"],
             "seguridad": ["security", "Seguridad"],
             "sistema": ["system", "Sistema"],
         }
@@ -200,7 +200,7 @@ def enrich_audit_log_row(row: dict[str, Any]) -> dict[str, Any]:
     enriched = dict(row)
     enriched["visual_module"] = normalize_visual_module(module)
     enriched["visual_action"] = normalize_visual_action(module, action)
-    enriched["visual_operation"] = f"{enriched['visual_module']} · {enriched['visual_action']}"
+    enriched["visual_operation"] = f"{enriched['visual_module']} - {enriched['visual_action']}"
     return enriched
 
 
@@ -325,7 +325,7 @@ def export_security_logs_excel(rows: list[dict[str, Any]], snapshots: list[dict[
         bottom=Side(style="thin", color="CBD5E1"),
     )
 
-    ws_summary["A1"] = "FutonHUB · Seguridad / Logs"
+    ws_summary["A1"] = "FutonHUB - Seguridad / Logs"
     ws_summary["A1"].font = Font(size=18, bold=True, color="FFFFFF")
     ws_summary["A1"].fill = title_fill
     ws_summary.merge_cells("A1:E1")
@@ -334,9 +334,9 @@ def export_security_logs_excel(rows: list[dict[str, Any]], snapshots: list[dict[
         [
             ("Eventos hoy", kpis.get("events_today")),
             ("Errores hoy", kpis.get("errors_today")),
-            ("Críticos", kpis.get("critical")),
-            ("Última operación", kpis.get("last_operation")),
-            ("Último usuario", kpis.get("last_user")),
+            ("Criticos", kpis.get("critical")),
+            ("Ultima operacion", kpis.get("last_operation")),
+            ("Ultimo usuario", kpis.get("last_user")),
         ],
         start=3,
     ):
@@ -351,8 +351,8 @@ def export_security_logs_excel(rows: list[dict[str, Any]], snapshots: list[dict[
         "Fecha",
         "Usuario",
         "Rol",
-        "Módulo",
-        "Acción",
+        "Modulo",
+        "Accion",
         "Estado",
         "Severidad",
         "Entidad",
@@ -380,7 +380,7 @@ def export_security_logs_excel(rows: list[dict[str, Any]], snapshots: list[dict[
             ]
         )
 
-    ws_snap.append(["Fecha", "Operation ID", "Módulo", "Acción", "Entidad", "ID Entidad", "Razón", "Before data"])
+    ws_snap.append(["Fecha", "Operation ID", "Modulo", "Accion", "Entidad", "ID Entidad", "Razon", "Before data"])
     for snap in snapshots:
         ws_snap.append(
             [
@@ -476,7 +476,7 @@ def preview_restore_snapshot(session, snapshot: dict[str, Any]) -> dict[str, Any
     if "created_payload" in before_data:
         return {
             "supported": False,
-            "reason": "Este snapshot es de creación. Restaurar implicaría borrar el registro creado y se deja para rollback v2 con reglas específicas.",
+            "reason": "Este snapshot es de creacion. Restaurar implicaria borrar el registro creado y se deja para rollback v2 con reglas especificas.",
             "operation_id": operation_id,
             "changes": [],
         }
@@ -485,7 +485,7 @@ def preview_restore_snapshot(session, snapshot: dict[str, Any]) -> dict[str, Any
     low_entity = entity_type.lower()
     changes: list[dict[str, Any]] = []
 
-    # Publicación Woo: snapshot compuesto con propuesta, espejo cloud y Woo anterior.
+    # Publicacion Woo: snapshot compuesto con propuesta, espejo cloud y Woo anterior.
     if low_module == "woocommerce_publish" or action == "admin_publish_woocommerce_price":
         bundle = before_data
         proposal = _as_dict(bundle.get("proposal"))
@@ -494,7 +494,7 @@ def preview_restore_snapshot(session, snapshot: dict[str, Any]) -> dict[str, Any
         if not proposal or not woo_before:
             return {
                 "supported": False,
-                "reason": "El snapshot de publicación Woo no contiene proposal/woo_before restaurables.",
+                "reason": "El snapshot de publicacion Woo no contiene proposal/woo_before restaurables.",
                 "operation_id": operation_id,
                 "changes": [],
             }
@@ -525,7 +525,7 @@ def preview_restore_snapshot(session, snapshot: dict[str, Any]) -> dict[str, Any
             ],
         }
 
-    # Recepción de pedido: snapshot compuesto con order, lines e inventory.
+    # Recepcion de pedido: snapshot compuesto con order, lines e inventory.
     if (low_module in {"supplier_orders", "pedidos"} and action == "receive_order") or (
         "order" in before_data and "inventory" in before_data
     ):
@@ -548,7 +548,7 @@ def preview_restore_snapshot(session, snapshot: dict[str, Any]) -> dict[str, Any
                     "match_value": line.get("id") if line.get("id") not in (None, "") else line.get("item_code"),
                     "extra_match": {"order_id": order.get("order_id") or entity_id} if line.get("id") in (None, "") else {},
                     "before": line,
-                    "description": f"Restaurar línea {line.get('item_code') or line.get('id')}",
+                    "description": f"Restaurar linea {line.get('item_code') or line.get('id')}",
                 })
         for inv in inventory:
             if isinstance(inv, dict):
@@ -561,7 +561,7 @@ def preview_restore_snapshot(session, snapshot: dict[str, Any]) -> dict[str, Any
                 })
         return {
             "supported": bool(changes),
-            "reason": "" if changes else "No se encontraron datos restaurables en recepción.",
+            "reason": "" if changes else "No se encontraron datos restaurables en recepcion.",
             "operation_id": operation_id,
             "module": module,
             "action": action,
@@ -581,7 +581,7 @@ def preview_restore_snapshot(session, snapshot: dict[str, Any]) -> dict[str, Any
             "match_field": "item_id",
             "match_value": item_id,
             "before": before,
-            "description": f"Restaurar artículo {item_id}",
+            "description": f"Restaurar articulo {item_id}",
         })
         return {
             "supported": True,
@@ -620,7 +620,7 @@ def preview_restore_snapshot(session, snapshot: dict[str, Any]) -> dict[str, Any
 
     return {
         "supported": False,
-        "reason": f"Rollback no soportado todavía para módulo={module}, entidad={entity_type}.",
+        "reason": f"Rollback no soportado todavia para modulo={module}, entidad={entity_type}.",
         "operation_id": operation_id,
         "changes": [],
     }
@@ -632,7 +632,7 @@ def restore_snapshot_to_previous_state(session, snapshot: dict[str, Any]) -> dic
 
     preview = preview_restore_snapshot(session, snapshot)
     if not preview.get("supported"):
-        raise ValueError(preview.get("reason") or "Snapshot no soportado para restauración.")
+        raise ValueError(preview.get("reason") or "Snapshot no soportado para restauracion.")
     settings = load_settings()
     restore_operation_id = new_operation_id("RESTORE")
     restored: list[dict[str, Any]] = []
@@ -658,12 +658,12 @@ def restore_snapshot_to_previous_state(session, snapshot: dict[str, Any]) -> dic
             mirror_table = "products"
         elif kind == "variation":
             if not parent_id:
-                raise ValueError(f"No se pudo determinar parent_woo_id para rollback de variación {woo_id}.")
+                raise ValueError(f"No se pudo determinar parent_woo_id para rollback de variacion {woo_id}.")
             client.update_variation_pricing(int(parent_id), woo_id, payload)
             verified = client.get(f"products/{int(parent_id)}/variations/{woo_id}").json()
             mirror_table = "product_variations"
         else:
-            raise ValueError("item_kind inválido en snapshot Woo.")
+            raise ValueError("item_kind invalido en snapshot Woo.")
 
         expected_regular = str(woo_before.get("regular_price") or "")
         expected_sale = str(woo_before.get("sale_price") or "")
@@ -747,10 +747,10 @@ def restore_snapshot_to_previous_state(session, snapshot: dict[str, Any]) -> dic
             try:
                 session.client.table("price_change_proposals").update(rollback_update).eq("id", proposal_id).execute()
             except Exception as exc:
-                # Compatibilidad con instalaciones cuyo CHECK de status todavía no incluye rolled_back.
-                # Woo ya fue restaurado y verificado, así que no convertimos un rollback exitoso
-                # en un falso fallo de la operación. Conservamos status=published y marcamos
-                # explícitamente el rollback dentro de source_row.
+                # Compatibilidad con instalaciones cuyo CHECK de status todavia no incluye rolled_back.
+                # Woo ya fue restaurado y verificado, asi que no convertimos un rollback exitoso
+                # en un falso fallo de la operacion. Conservamos status=published y marcamos
+                # explicitamente el rollback dentro de source_row.
                 msg = str(exc)
                 if "price_change_proposals_status_check" not in msg and "23514" not in msg:
                     raise
@@ -803,11 +803,11 @@ def restore_snapshot_to_previous_state(session, snapshot: dict[str, Any]) -> dic
         match_value = change.get("match_value")
         before = _strip_non_writable(_as_dict(change.get("before")))
         if not table or not match_field or match_value in (None, "") or not before:
-            errors.append(f"Cambio inválido: {change}")
+            errors.append(f"Cambio invalido: {change}")
             continue
         try:
             payload = dict(before)
-            # Trazabilidad de restauración sin pisar source_row si existe.
+            # Trazabilidad de restauracion sin pisar source_row si existe.
             source_row = payload.get("source_row")
             if not isinstance(source_row, dict):
                 source_row = {}
@@ -850,7 +850,7 @@ def restore_snapshot_to_previous_state(session, snapshot: dict[str, Any]) -> dic
                 entity_id=str(snapshot.get("entity_id") or snapshot.get("operation_id") or ""),
                 before_data={"snapshot": _json_safe(snapshot), "preview": _json_safe(preview)},
                 after_data={"restored": _json_safe(restored), "errors": errors},
-                message=f"Restauración desde snapshot {snapshot.get('operation_id')}",
+                message=f"Restauracion desde snapshot {snapshot.get('operation_id')}",
                 error_detail="; ".join(errors),
             ),
             settings,
@@ -859,7 +859,7 @@ def restore_snapshot_to_previous_state(session, snapshot: dict[str, Any]) -> dic
         pass
 
     if errors:
-        raise ValueError("Restauración con errores: " + "; ".join(errors))
+        raise ValueError("Restauracion con errores: " + "; ".join(errors))
     return {
         "operation_id": restore_operation_id,
         "restored": restored,

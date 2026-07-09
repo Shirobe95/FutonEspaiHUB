@@ -92,8 +92,8 @@ class PackComponentServiceTests(unittest.TestCase):
 
         self.assertEqual(result["source"], "v_inventory_component_search")
         self.assertEqual([row["component_item_code"] for row in result["components"]], ["0201014", "0302001"])
-        self.assertIn("0201014 x1 \u00b7 Futon algodon", result["text"])
-        self.assertIn("0302001 x2 \u00b7 Tatami", result["text"])
+        self.assertIn("0201014 x1 - Futon algodon", result["text"])
+        self.assertIn("0302001 x2 - Tatami", result["text"])
 
     def test_fetch_pack_components_falls_back_to_relation_table_and_name_resolver(self) -> None:
         session = Session(
@@ -122,7 +122,7 @@ class PackComponentServiceTests(unittest.TestCase):
         self.assertEqual(result["source"], "inventory_item_components_fallback")
         self.assertIn("v_inventory_component_search: view missing", result["lookup_error"])
         self.assertEqual(result["components"][0]["component_name"], "Futon algodon resuelto")
-        self.assertEqual(result["text"], "0201014 x1 \u00b7 Futon algodon resuelto")
+        self.assertEqual(result["text"], "0201014 x1 - Futon algodon resuelto")
 
     def test_fetch_pack_components_falls_back_to_compound_woo_sku_tokens(self) -> None:
         session = Session(

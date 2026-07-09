@@ -228,7 +228,7 @@ class PriceProposalPublicationGroupTests(unittest.TestCase):
             {"remote_key": "product:3662", "endpoint": "p", "cloud_item": {}, "woo_id": 3662, "remote_kind": "product", "canonical_key": "pack:3662"},
         ]
         result = self._preview(rows, targets, [100, 100])
-        self.assertEqual([row["status"] for row in result["rows"]], ["VÁLIDO", "VÁLIDO"])
+        self.assertEqual([row["status"] for row in result["rows"]], ["VALIDO", "VALIDO"])
 
     def test_zero_new_price_blocks(self):
         row = proposal("p", "product", 10, new_price=0)
@@ -481,7 +481,7 @@ class PriceProposalPublicationGroupTests(unittest.TestCase):
             patch.object(woocommerce_publish, "write_audit_event"),
             patch.object(woocommerce_publish, "sync_woocommerce_price_inventory_state", return_value={"ok": True}),
         ):
-            with self.assertRaisesRegex(CloudAuditError, "ERROR CRÍTICO"):
+            with self.assertRaisesRegex(CloudAuditError, "ERROR CRITICO"):
                 woocommerce_publish.publish_price_proposal_group(
                     session, proposal_ids=["a", "b"], confirm="PUBLICAR", settings=settings(), client=woo
                 )
@@ -490,7 +490,7 @@ class PriceProposalPublicationGroupTests(unittest.TestCase):
     def test_incomplete_rollback_uses_error_status(self):
         source = inspect.getsource(woocommerce_publish.publish_price_proposal_group)
         self.assertIn('final_status = "pending" if not rollback_failures else "error"', source)
-        self.assertIn("ERROR CRÍTICO", source)
+        self.assertIn("ERROR CRITICO", source)
 
     def test_no_migration_or_new_client_implementation(self):
         source = inspect.getsource(woocommerce_publish.publish_price_proposal_group)

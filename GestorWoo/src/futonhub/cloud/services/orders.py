@@ -28,7 +28,7 @@ SUPPLIER_ORDER_ITEM_COLUMNS = "id,order_id,local_id,item_id,item_code,item_name,
 def list_cloud_supplier_orders(session, limit: int = 100) -> list[dict[str, Any]]:
     """Lee pedidos de proveedor reales desde Supabase.
 
-    No devuelve mock data. La UI decide si muestra estado vacío.
+    No devuelve mock data. La UI decide si muestra estado vacio.
     """
     limit = max(1, min(int(limit or 100), 500))
     try:
@@ -57,7 +57,7 @@ def _is_line_deleted(row: dict[str, Any]) -> bool:
     deleted = source.get("ui_deleted")
     if deleted is True:
         return True
-    if isinstance(deleted, str) and deleted.strip().lower() in {"true", "1", "yes", "si", "sí"}:
+    if isinstance(deleted, str) and deleted.strip().lower() in {"true", "1", "yes", "si", "si"}:
         return True
     if isinstance(deleted, (int, float)) and deleted == 1:
         return True
@@ -96,11 +96,11 @@ def list_cloud_supplier_order_items(session, order_id: str) -> list[dict[str, An
     )
     rows = [row for row in list(getattr(response, "data", None) or []) if not _is_line_deleted(row)]
 
-    # Si RLS no permite borrar físicamente ni marcar como borradas las líneas
+    # Si RLS no permite borrar fisicamente ni marcar como borradas las lineas
     # antiguas, al guardar un pedido calculado pueden quedar duplicadas.
-    # Conservamos la versión más reciente de cada ui_line_index para que
-    # Modificar no duplique visualmente las líneas al reabrir un pedido en
-    # Validación/Calculado.
+    # Conservamos la version mas reciente de cada ui_line_index para que
+    # Modificar no duplique visualmente las lineas al reabrir un pedido en
+    # Validacion/Calculado.
     latest_by_identity: dict[tuple[str, str], dict[str, Any]] = {}
     order_by_identity: dict[tuple[str, str], int] = {}
     for index, row in enumerate(rows):
@@ -123,7 +123,7 @@ def _is_cancelled_or_deleted(row: dict[str, Any]) -> bool:
     deleted = source.get("ui_deleted")
     if deleted is True:
         return True
-    if isinstance(deleted, str) and deleted.strip().lower() in {"true", "1", "yes", "si", "sí"}:
+    if isinstance(deleted, str) and deleted.strip().lower() in {"true", "1", "yes", "si", "si"}:
         return True
     return False
 
@@ -143,7 +143,7 @@ def summarize_order_items(items: list[dict[str, Any]]) -> dict[str, Any]:
         total_qty += qty
         total_cost += line_cost
         total_m3 += m3
-        if status in {"warning", "validacion", "validación"}:
+        if status in {"warning", "validacion", "validacion"}:
             warnings += 1
         if status in {"error", "critical", "bloqueado"}:
             errors += 1
@@ -326,7 +326,7 @@ def update_supplier_order_draft(
     inputs: dict[str, Any] | None = None,
     items: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Actualiza un pedido borrador real y sus líneas.
+    """Actualiza un pedido borrador real y sus lineas.
 
     Se usa desde la ventana Modificar/Calcular pedido cuando el pedido ya existe.
     No calcula, no toca inventario y no toca WooCommerce.
@@ -386,7 +386,7 @@ def update_supplier_order_draft(
         try:
             session.client.table("supplier_order_items").delete().eq("order_id", str(order_id)).execute()
         except Exception:
-            # Si RLS impide delete físico, intentamos limpiar lógicamente las líneas antiguas.
+            # Si RLS impide delete fisico, intentamos limpiar logicamente las lineas antiguas.
             try:
                 session.client.table("supplier_order_items").update({
                     "updated_at": now,
@@ -489,13 +489,13 @@ def update_supplier_order_calculation(
     items: list[dict[str, Any]] | None = None,
     status: str = "Calculado",
 ) -> dict[str, Any]:
-    """Guarda el resultado de cálculo de un pedido y sus líneas.
+    """Guarda el resultado de calculo de un pedido y sus lineas.
 
-    No toca inventario ni WooCommerce. Solo persiste cabecera/líneas calculadas
+    No toca inventario ni WooCommerce. Solo persiste cabecera/lineas calculadas
     para que el pedido pueda cerrarse y reabrirse con costes.
     """
     if not order_id:
-        # Si todavía no existe, lo creamos como pedido calculado básico.
+        # Si todavia no existe, lo creamos como pedido calculado basico.
         order = create_supplier_order_draft(
             session,
             provider=provider,
@@ -633,7 +633,7 @@ def update_supplier_order_calculation(
                     entity_id=str(order_id),
                     before_data=before_order,
                     after_data=payload,
-                    message="No se pudo guardar el cálculo del pedido desde UI ERP.",
+                    message="No se pudo guardar el calculo del pedido desde UI ERP.",
                     error_detail=str(exc),
                 ),
                 settings,
@@ -644,9 +644,9 @@ def update_supplier_order_calculation(
 
 
 def cancel_supplier_order(session, order_id: str, *, reason: str = "") -> dict[str, Any]:
-    """Cancela lógicamente un pedido de proveedor.
+    """Cancela logicamente un pedido de proveedor.
 
-    No borra histórico ni líneas. No toca inventario ni WooCommerce.
+    No borra historico ni lineas. No toca inventario ni WooCommerce.
     """
     order_id = str(order_id or "").strip()
     if not order_id:
@@ -727,7 +727,7 @@ def cancel_supplier_order(session, order_id: str, *, reason: str = "") -> dict[s
 
 
 # =====================================================
-# ERP - Recepción parcial/completa de pedidos
+# ERP - Recepcion parcial/completa de pedidos
 # =====================================================
 
 def _safe_int(value: Any, default: int = 0) -> int:
@@ -745,7 +745,7 @@ def preview_receive_supplier_order(
     destination: str = "warehouse",
     notes: str = "",
 ) -> dict[str, Any]:
-    """Previsualiza la recepción de un pedido.
+    """Previsualiza la recepcion de un pedido.
 
     received_lines:
       [{"line_id": ..., "item_code": ..., "quantity_received_now": ...}]
@@ -756,7 +756,7 @@ def preview_receive_supplier_order(
 
     destination = str(destination or "warehouse").strip().lower()
     if destination not in {"store", "warehouse"}:
-        raise ValueError("Destino inválido. Usa tienda o almacén.")
+        raise ValueError("Destino invalido. Usa tienda o almacen.")
 
     order_resp = session.client.table("supplier_orders").select("*").eq("order_id", order_id).limit(1).execute()
     order_rows = getattr(order_resp, "data", None) or []
@@ -777,7 +777,7 @@ def preview_receive_supplier_order(
         code = str(line.get("item_code") or line.get("code") or "").strip()
         order_line = by_line_id.get(line_id) or by_code.get(code)
         if not order_line:
-            errors.append(f"No se encontró línea para item {code or line_id}.")
+            errors.append(f"No se encontro linea para item {code or line_id}.")
             continue
 
         qty_ordered = _safe_float(order_line.get("quantity_ordered"), 0.0)
@@ -855,7 +855,7 @@ def receive_supplier_order(
     destination: str = "warehouse",
     notes: str = "",
 ) -> dict[str, Any]:
-    """Aplica recepción parcial/completa.
+    """Aplica recepcion parcial/completa.
 
     Actualiza:
     - inventory_items.store_stock o warehouse_stock
@@ -873,7 +873,7 @@ def receive_supplier_order(
         notes=notes,
     )
     if preview.get("errors"):
-        raise ValueError("No se puede aplicar recepción con errores: " + "; ".join(preview["errors"]))
+        raise ValueError("No se puede aplicar recepcion con errores: " + "; ".join(preview["errors"]))
     if not preview.get("lines"):
         raise ValueError("No hay cantidades recibidas para aplicar.")
 
@@ -974,7 +974,7 @@ def receive_supplier_order(
     order_payload = {
         "status": preview["new_status"],
         "updated_at": now,
-        "notes": (str(order.get("notes") or "") + (f"\nRecepción ERP: {notes}" if notes else "\nRecepción ERP registrada.")).strip(),
+        "notes": (str(order.get("notes") or "") + (f"\nRecepcion ERP: {notes}" if notes else "\nRecepcion ERP registrada.")).strip(),
         "source_row": order_source,
     }
     order_resp = session.client.table("supplier_orders").update(order_payload).eq("order_id", str(order_id)).execute()
@@ -999,7 +999,7 @@ def receive_supplier_order(
                     "new_status": preview["new_status"],
                     "total_receive": preview["total_receive"],
                 },
-                message="Pedido recibido desde UI ERP. Se actualizó stock interno Supabase. WooCommerce/Hexa no fueron tocados.",
+                message="Pedido recibido desde UI ERP. Se actualizo stock interno Supabase. WooCommerce/Hexa no fueron tocados.",
             ),
             settings,
         )

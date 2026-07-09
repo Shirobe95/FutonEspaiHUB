@@ -205,8 +205,8 @@ def restore_preview(rows: list[dict], targets: list[dict]) -> dict:
             "published_price": row["new_price"],
             "woo_current_price": row["new_price"],
             "restore_price": row["old_price"],
-            "status": "VÁLIDO",
-            "reason": "Restauración disponible.",
+            "status": "VALIDO",
+            "reason": "Restauracion disponible.",
             "target": resolved_target,
             "woo_current_snapshot": {
                 "price": str(row["new_price"]),
@@ -491,7 +491,7 @@ class PriceProposalRestoreAndSyncTests(unittest.TestCase):
         rows = [proposal("a", "product", 10), proposal("b", "product", 11)]
         targets = [target("product", 10), target("product", 11)]
         woo = FailingWoo({"products/10": [{"price": "100"}], "products/11": []}, fail_on_write=2, fail_compensation=True)
-        with self.assertRaisesRegex(CloudAuditError, "ERROR CRÍTICO"):
+        with self.assertRaisesRegex(CloudAuditError, "ERROR CRITICO"):
             self._execute_restore(rows, targets, woo)
 
     def test_restore_action_is_visible_only_for_published_admin_snapshot(self):

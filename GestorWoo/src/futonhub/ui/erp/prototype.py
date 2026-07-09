@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from tkinter import filedialog, messagebox, simpledialog, ttk
 from typing import Any
+from urllib.parse import quote
 
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
@@ -84,7 +85,10 @@ from futonhub.cloud.services.supplier_prices import (
     resolve_supplier_order_inventory_items,
     update_supplier_price_inventory_item,
 )
+from futonhub.cloud.services import supplier_prices as supplier_prices_module
 from futonhub.cloud.services.business_constants import DEFAULT_BUSINESS_CONSTANTS, list_business_constants, save_business_constants
+from futonhub.core import codes as codes_module
+from futonhub.core.codes import supplier_order_eligibility_reason
 from futonhub.core.config import load_settings
 from futonhub.core.guard import active_locks, stale_locks
 from futonhub.ui.theme import apply_theme
@@ -129,6 +133,8 @@ from futonhub.ui.erp.shared_ui import (
     SupplierOrder,
     WooDifference,
 )
+
+SUPPLIER_ORDER_DEBUG = False
 
 
 INVENTORY_ITEMS = [
@@ -864,7 +870,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             number = float(str(value).replace(",", "."))
         except Exception:
             return str(value)
-        return f"{number:.2f} €"
+        return f"{number:.2f} EUR"
 
     def _is_missing_inventory_value(self, value: Any) -> bool:
         if value is None:
@@ -873,11 +879,11 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         return text == "" or text.lower() in {"none", "null", "nan", "sin definir", "pendiente", "-"}
 
     def _inventory_status_analysis_from_row(self, row: dict[str, Any]) -> tuple[str, tuple[str, ...]]:
-        """Calcula el semáforo de inventario usando valores reales recibidos de Supabase.
+        """Calcula el semaforo de inventario usando valores reales recibidos de Supabase.
 
         Regla base: el precio operativo del item es siempre `woo_price`, porque el precio
         de venta vive en WooCommerce. Los estados Woo desconocidos no deben convertir
-        todo el inventario en Error: primero se muestran como Warning/Info para diagnóstico.
+        todo el inventario en Error: primero se muestran como Warning/Info para diagnostico.
         """
         reasons: list[tuple[str, str]] = []
 
@@ -914,14 +920,14 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         if price_number == 0:
             add("Critical", "Precio Woo igual a 0. Es el precio de venta de la web.")
         elif price_number is None:
-            add("Warning", "Precio Woo pendiente o no numérico.")
+            add("Warning", "Precio Woo pendiente o no numerico.")
 
         if link_status in broken_link_statuses:
-            add("Error", f"Estado vínculo Woo roto: {link_status_raw}.")
+            add("Error", f"Estado vinculo Woo roto: {link_status_raw}.")
         elif link_status in incomplete_link_statuses:
-            add("Warning", f"Vínculo Woo incompleto o pendiente: {link_status_raw}.")
+            add("Warning", f"Vinculo Woo incompleto o pendiente: {link_status_raw}.")
         elif link_status not in accepted_link_statuses:
-            add("Warning", f"Estado vínculo Woo desconocido para el semáforo: {link_status_raw}.")
+            add("Warning", f"Estado vinculo Woo desconocido para el semaforo: {link_status_raw}.")
 
         if self._is_missing_inventory_value(family):
             add("Warning", "Familia sin definir.")
@@ -991,11 +997,11 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
 
     def _open_inventory_status_diagnostics_modal(self) -> None:
         if not self._inventory_items:
-            messagebox.showinfo("Diagnóstico inventario", "No hay items cargados. Pulsa Buscar / recargar para leer Supabase primero.")
+            messagebox.showinfo("Diagnostico inventario", "No hay items cargados. Pulsa Buscar / recargar para leer Supabase primero.")
             return
         diag = self._inventory_status_diagnostics()
         win = tk.Toplevel(self)
-        win.title("Diagnóstico de estados de Inventario")
+        win.title("Diagnostico de estados de Inventario")
         win.configure(bg=BG)
         win.transient(self)
         win.grab_set()
@@ -1006,8 +1012,8 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         header = tk.Frame(win, bg=BG, highlightbackground=LINE, highlightthickness=1)
         header.grid(row=0, column=0, sticky="ew")
         header.columnconfigure(0, weight=1)
-        tk.Label(header, text="Diagnóstico de estados", bg=INDIGO_SOFT, fg=INDIGO, font=("Segoe UI", 9, "bold"), padx=10, pady=4).grid(row=0, column=0, sticky="w", padx=18, pady=(16, 4))
-        tk.Label(header, text=f"Valores reales recibidos desde Supabase · Items cargados: {diag['total']}", bg=BG, fg=TEXT, font=("Segoe UI", 16, "bold")).grid(row=1, column=0, sticky="w", padx=18, pady=(0, 16))
+        tk.Label(header, text="Diagnostico de estados", bg=INDIGO_SOFT, fg=INDIGO, font=("Segoe UI", 9, "bold"), padx=10, pady=4).grid(row=0, column=0, sticky="w", padx=18, pady=(16, 4))
+        tk.Label(header, text=f"Valores reales recibidos desde Supabase - Items cargados: {diag['total']}", bg=BG, fg=TEXT, font=("Segoe UI", 16, "bold")).grid(row=1, column=0, sticky="w", padx=18, pady=(0, 16))
         self._button(header, "Cerrar", command=win.destroy).grid(row=0, column=1, rowspan=2, padx=18, pady=16, sticky="e")
 
         body = tk.Frame(win, bg=BG)
@@ -1030,7 +1036,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         for link, count in sorted((diag["link_counts"] or {}).items(), key=lambda kv: (-kv[1], kv[0])):
             left_table.insert("", tk.END, values=("woo_link_status", link, count))
         for field, count in sorted((diag["missing_counts"] or {}).items()):
-            left_table.insert("", tk.END, values=(f"{field} vacío", "Sí", count))
+            left_table.insert("", tk.END, values=(f"{field} vacio", "Si", count))
         left_table.grid(row=1, column=0, sticky="nsew", padx=16, pady=(0, 16))
 
         right = self._card(body)
@@ -1180,7 +1186,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         if record_type in {"woo_pack", "manual_pack"}:
             return True
         is_pack = raw.get("is_pack")
-        if is_pack is True or str(is_pack or "").strip().lower() in {"1", "true", "yes", "si", "sí"}:
+        if is_pack is True or str(is_pack or "").strip().lower() in {"1", "true", "yes", "si", "si"}:
             return True
         return item.name.lower().startswith("pack woo")
 
@@ -1206,7 +1212,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         if not cleaned:
             return None
         compact = re.match(
-            r"^(?P<qty>\d+(?:[\.,]\d+)?)\s*x\s*(?P<code>\d{4,}|[A-Za-z][^\sx|]*)(?:\s*x\s*(?P<name>.*))?$",
+            r"^(?P<qty>\d{1,3}(?:[\.,]\d+)?)\s*x\s*(?P<code>\d{4,}|[A-Za-z][^\sx|]*)(?:\s*x\s*(?P<name>.*))$",
             cleaned,
             re.IGNORECASE,
         )
@@ -1217,8 +1223,8 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 "quantity": self._price_pack_component_quantity(compact.group("qty")),
             }
         patterns = [
-            r"^(?P<qty>\d+(?:[\.,]\d+)?)\s*×\s*(?P<code>\S+)(?:\s*[·-]\s*(?P<name>.*))?$",
-            r"^(?P<code>\S+)\s*[xX×]\s*(?P<qty>\d+(?:[\.,]\d+)?)(?:\s*[·-]\s*(?P<name>.*))?$",
+            r"^(?P<qty>\d{1,3}(?:[\.,]\d+)?)\s*x\s*(?P<code>\S+)(?:\s*[-]\s*(?P<name>.*))$",
+            r"^(?P<code>\S+)\s*[xX]\s*(?P<qty>\d+(?:[\.,]\d+)?)(?:\s*[-]\s*(?P<name>.*))$",
         ]
         for pattern in patterns:
             match = re.match(pattern, cleaned)
@@ -1336,8 +1342,8 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         text = (query or "").strip()
         if not text:
             return False
-        # Para códigos/SKU usamos búsqueda exacta/rankeada. Evita que un código como
-        # 0201001 active búsquedas contiene sobre todo el inventario y traiga ruido.
+        # Para codigos/SKU usamos busqueda exacta/rankeada. Evita que un codigo como
+        # 0201001 active busquedas contiene sobre todo el inventario y traiga ruido.
         return bool(re.fullmatch(r"[A-Za-z0-9_\-|]+", text))
 
     def _inventory_pack_component_row(self, parent: tk.Misc, quantity: str, code: str, name: str) -> tk.Frame:
@@ -1374,7 +1380,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         if not parent_code and not initial:
             return
 
-        title = "Contenido del pack" if parent_code else "Relación"
+        title = "Contenido del pack" if parent_code else "Relacion"
         tk.Label(parent, text=title, bg=CARD, fg=TEXT, font=("Segoe UI", 11, "bold")).pack(anchor=tk.W, pady=(12, 4))
 
         box = tk.Frame(parent, bg=CARD)
@@ -1411,7 +1417,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 row.pack(fill=tk.X, pady=4)
             hidden = len(components) - len(visible)
             if hidden > 0:
-                tk.Label(box, text=f"+ {hidden} componente(s) más en el detalle completo.", bg=CARD, fg=MUTED, font=("Segoe UI", 8)).pack(anchor=tk.W, pady=(4, 0))
+                tk.Label(box, text=f"+ {hidden} componente(s) mas en el detalle completo.", bg=CARD, fg=MUTED, font=("Segoe UI", 8)).pack(anchor=tk.W, pady=(4, 0))
 
         fallback_components = self._inventory_pack_fallback_components(item)
         if fallback_components:
@@ -1425,7 +1431,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         def worker() -> None:
             try:
                 if self._cloud_session is None:
-                    raise RuntimeError("No hay sesión Supabase activa.")
+                    raise RuntimeError("No hay sesion Supabase activa.")
                 result = fetch_inventory_pack_components(self._cloud_session, parent_code, item.sku_woo)
                 components = list(result.get("components") or [])
                 source = str(result.get("source") or "")
@@ -1449,7 +1455,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
     def _open_inventory_pack_contents_popup(self, item: InventoryItem) -> None:
         parent_code = self._inventory_pack_parent_code(item)
         if not parent_code:
-            messagebox.showinfo("Contenido pack", "Este item no tiene código de pack asociado.")
+            messagebox.showinfo("Contenido pack", "Este item no tiene codigo de pack asociado.")
             return
         win = tk.Toplevel(self)
         win.title(f"Contenido pack - {parent_code}")
@@ -1462,7 +1468,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         header.grid(row=0, column=0, sticky="ew")
         header.columnconfigure(0, weight=1)
         tk.Label(header, text="Contenido del pack", bg=INDIGO_SOFT, fg=INDIGO, font=("Segoe UI", 9, "bold"), padx=10, pady=4).grid(row=0, column=0, sticky="w", padx=18, pady=(14, 4))
-        tk.Label(header, text=f"{parent_code} · {item.name}", bg=BG, fg=TEXT, font=("Segoe UI", 16, "bold"), wraplength=620, justify=tk.LEFT).grid(row=1, column=0, sticky="w", padx=18, pady=(0, 14))
+        tk.Label(header, text=f"{parent_code} - {item.name}", bg=BG, fg=TEXT, font=("Segoe UI", 16, "bold"), wraplength=620, justify=tk.LEFT).grid(row=1, column=0, sticky="w", padx=18, pady=(0, 14))
         self._button(header, "Cerrar", command=win.destroy).grid(row=0, column=1, rowspan=2, sticky="e", padx=18, pady=14)
         box = tk.Text(win, bg="#0F172A", fg="#E2E8F0", insertbackground="#E2E8F0", relief=tk.FLAT, wrap=tk.WORD, font=("Consolas", 10))
         box.grid(row=1, column=0, sticky="nsew", padx=18, pady=18)
@@ -1480,7 +1486,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         def worker() -> None:
             try:
                 if self._cloud_session is None:
-                    raise RuntimeError("No hay sesión Supabase activa.")
+                    raise RuntimeError("No hay sesion Supabase activa.")
                 result = fetch_inventory_pack_components(self._cloud_session, parent_code, item.sku_woo)
                 source = result.get("source") or "-"
                 content = result.get("multiline") or self._inventory_pack_contents_text(item, multiline=True)
@@ -1560,7 +1566,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         title.grid(row=0, column=0, sticky="ew", padx=22, pady=16)
         tk.Label(title, text="Detalle completo - Inventario", bg=INDIGO_SOFT, fg=INDIGO, font=("Segoe UI", 9, "bold"), padx=10, pady=4).pack(anchor=tk.W)
         tk.Label(title, text=item.name, bg=BG, fg=TEXT, font=("Segoe UI", 22, "bold")).pack(anchor=tk.W, pady=(8, 2))
-        tk.Label(title, text=f"ID: {item.code} · Precio Woo: {item.price} · Stock: {item.stock}", bg=BG, fg=MUTED).pack(anchor=tk.W)
+        tk.Label(title, text=f"ID: {item.code} - Precio Woo: {item.price} - Stock: {item.stock}", bg=BG, fg=MUTED).pack(anchor=tk.W)
         self._button(header, "Cerrar", command=close_with_guard).grid(row=0, column=1, padx=22, pady=16, sticky="e")
 
         body = tk.Frame(win, bg=BG)
@@ -1636,7 +1642,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         for reason in item.status_reasons:
             tk.Label(
                 reasons_box,
-                text=f"• {reason}",
+                text=f" {reason}",
                 bg=SOFT,
                 fg=TEXT if item.status == "OK" else (ROSE if item.status == "Critical" else ORANGE if item.status == "Error" else AMBER if item.status == "Warning" else MUTED),
                 font=("Segoe UI", 9, "bold" if item.status in {"Critical", "Error", "Warning"} else "normal"),
@@ -1702,7 +1708,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             column=0,
             sticky="w",
         )
-        tk.Label(header, text="Donde quieres anadir este item?", bg=CARD, fg=TEXT, font=("Segoe UI", 16, "bold")).grid(
+        tk.Label(header, text="Donde quieres anadir este item", bg=CARD, fg=TEXT, font=("Segoe UI", 16, "bold")).grid(
             row=1,
             column=0,
             sticky="w",
@@ -1876,7 +1882,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             source = self._price_source_from_inventory_item(item)
             result = self._price_results_from_items([item])[0]
             eligibility, reason, _price = self._price_classify_result(result)
-            if eligibility == "VÁLIDO":
+            if eligibility == "VALIDO":
                 self._price_edit_lines.insert(0, ProposalLine(item.code, self._price_display_name_for_inventory_item(item), item.price, item.price, "Pendiente", "flat"))
                 self._price_proposal_line_sources[item.code] = source
                 self._price_model_put(self._price_edit_lines[0], source)
@@ -1907,17 +1913,17 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         woo_id = source.get("woo_id")
         if kind not in {"product", "variation", "pack"} or woo_id in (None, ""):
             raise ValueError(
-                f"El artículo {line.code} no tiene una identidad Woo canónica fiable."
+                f"El articulo {line.code} no tiene una identidad Woo canonica fiable."
             )
         try:
             normalized_woo_id = int(woo_id)
         except (TypeError, ValueError) as exc:
             raise ValueError(
-                f"El artículo {line.code} no tiene una identidad Woo canónica fiable."
+                f"El articulo {line.code} no tiene una identidad Woo canonica fiable."
             ) from exc
         if normalized_woo_id <= 0:
             raise ValueError(
-                f"El artículo {line.code} no tiene una identidad Woo canónica fiable."
+                f"El articulo {line.code} no tiene una identidad Woo canonica fiable."
             )
         return f"{kind}:{normalized_woo_id}"
 
@@ -1976,7 +1982,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 f"missing={','.join(missing) or '-'} extra={','.join(extra) or '-'}",
                 flush=True,
             )
-            raise ValueError("Error interno de integridad: panel y modelo canónico no coinciden.")
+            raise ValueError("Error interno de integridad: panel y modelo canonico no coinciden.")
         if "_price_rendered_model_types" in self.__dict__ and rendered_types != model_types:
             print("[PRICE_PROPOSAL_ERROR] integrity type mismatch", flush=True)
             raise ValueError(
@@ -2210,7 +2216,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             return
         self._price_loading = True
         self._price_error = "Cargando propuestas reales..."
-        overlay = self._price_start_working_overlay("Cargando propuestas", "Actualizando el listado de propuestas…")
+        overlay = self._price_start_working_overlay("Cargando propuestas", "Actualizando el listado de propuestas...")
         self._price_record_refresh_diagnostic(source, generation, 0, "iniciado")
 
         def worker() -> None:
@@ -2304,13 +2310,13 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             return
         if not proposals and self._price_proposals and self._price_session_access_mode() != "authenticated_session":
             self._price_loading = False
-            self._price_error = "No se aplicó un resultado vacío sin sesión autenticada."
+            self._price_error = "No se aplico un resultado vacio sin sesion autenticada."
             self._price_record_refresh_diagnostic(source, generation or active_generation, received_rows or 0, "descartado_vacio_no_autorizado", filtered_rows, len(proposals), discarded, repository, query_ok)
             if self._current_key == "precios":
                 self._show_view("precios")
             return
-        # Si hay sesión cloud, una lista vacía es un estado real: no volver a rellenar con mocks.
-        # Los mocks solo sirven cuando no hay sesión/entorno real disponible.
+        # Si hay sesion cloud, una lista vacia es un estado real: no volver a rellenar con mocks.
+        # Los mocks solo sirven cuando no hay sesion/entorno real disponible.
         previous_raw = self._selected_price_proposal.raw if self._selected_price_proposal and isinstance(self._selected_price_proposal.raw, dict) else {}
         previous_key = str(previous_raw.get("ui_group_key") or "")
         self._price_proposals = proposals if self._cloud_session is not None else (proposals or list(SAVED_PROPOSALS))
@@ -2482,7 +2488,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         return "authenticated_session" if getattr(self._cloud_session, "user_id", None) else "unverified_session"
 
     def _price_historical_group_key(self, row: dict[str, Any], source: dict[str, Any]) -> str:
-        """Obtiene una identidad histórica fiable sin fusionar únicamente por nombre."""
+        """Obtiene una identidad historica fiable sin fusionar unicamente por nombre."""
         for key in (
             "ui_save_token",
             "ui_proposal_id",
@@ -2499,7 +2505,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         return f"id:{proposal_id}" if proposal_id else f"legacy-row:{id(row)}"
 
     def _price_group_cloud_proposals(self, rows: list[dict[str, Any]]) -> list[PriceProposal]:
-        """Agrupa propuestas modernas e históricas sin ocultar estados antiguos."""
+        """Agrupa propuestas modernas e historicas sin ocultar estados antiguos."""
         groups: dict[str, list[dict[str, Any]]] = {}
         order: list[str] = []
         seen_ids: set[str] = set()
@@ -2651,7 +2657,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             "rejected": "Rechazada",
             "publishing": "Publicando",
             "published": "Publicada",
-            "error": "Error crítico",
+            "error": "Error critico",
             "rolled_back": "Restaurada",
             "failed": "Fallida",
         }.get(value, str(raw or "-"))
@@ -2720,9 +2726,9 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             tk.Label(
                 scroll,
                 text=(
-                    f"Publicada: {(proposal.raw or {}).get('published_at') or '-'} · "
-                    f"Usuario: {proposal_source.get('published_by_email') or '-'} · "
-                    f"Operación: {proposal_source.get('publish_operation_id') or '-'}"
+                    f"Publicada: {(proposal.raw or {}).get('published_at') or '-'} - "
+                    f"Usuario: {proposal_source.get('published_by_email') or '-'} - "
+                    f"Operacion: {proposal_source.get('publish_operation_id') or '-'}"
                 ),
                 bg=GREEN_SOFT,
                 fg=GREEN,
@@ -2736,9 +2742,9 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             tk.Label(
                 scroll,
                 text=(
-                    f"Restaurada: {proposal_source.get('rolled_back_at') or '-'} · "
-                    f"Usuario: {proposal_source.get('rolled_back_by_email') or '-'} · "
-                    f"Operación: {proposal_source.get('restore_operation_id') or '-'}"
+                    f"Restaurada: {proposal_source.get('rolled_back_at') or '-'} - "
+                    f"Usuario: {proposal_source.get('rolled_back_by_email') or '-'} - "
+                    f"Operacion: {proposal_source.get('restore_operation_id') or '-'}"
                 ),
                 bg=AMBER_SOFT,
                 fg=AMBER,
@@ -2852,32 +2858,32 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         source_row = row.get("source_row") if isinstance(row.get("source_row"), dict) else {}
         proposal_name = str(source_row.get("ui_proposal_name") or proposal.name or "").strip()
         if not proposal_id and proposal in self._price_proposals:
-            if not messagebox.askyesno("Borrar propuesta", f"Borrar la propuesta visual '{proposal.name}'?"):
+            if not messagebox.askyesno("Borrar propuesta", f"Borrar la propuesta visual '{proposal.name}'"):
                 return
             self._price_proposals = [item for item in self._price_proposals if item != proposal]
             self._selected_price_proposal = self._price_proposals[0] if self._price_proposals else None
             self._show_view("precios")
             return
         if not proposal_id or self._cloud_session is None:
-            messagebox.showinfo("Cambio de Precios", "Esta propuesta no tiene ID real o no hay sesión activa.")
+            messagebox.showinfo("Cambio de Precios", "Esta propuesta no tiene ID real o no hay sesion activa.")
             return
         label = proposal_name or f"ID {proposal_id}"
         if not messagebox.askyesno(
             "Borrar propuesta",
-            "Se eliminará la propuesta seleccionada de Cambio de Precios.\n\n"
+            "Se eliminara la propuesta seleccionada de Cambio de Precios.\n\n"
             f"Propuesta: {label}\n"
             f"Fecha: {proposal.date}\n"
             f"Items: {proposal.items}\n"
             f"Referencia: {str(proposal_id)[:12]}\n\n"
-            "Esta acción quedará registrada en Seguridad / Logs.\n\n"
-            "¿Continuar?",
+            "Esta accion quedara registrada en Seguridad / Logs.\n\n"
+            "Continuar",
         ):
             return
         self._price_delete_in_progress = True
         self._price_error = "Borrando propuesta..."
         self._price_delete_target_id = str(proposal_id)
         self._price_delete_target_ids = member_ids
-        overlay = self._price_start_working_overlay("Eliminando propuesta", "Eliminando propuesta…")
+        overlay = self._price_start_working_overlay("Eliminando propuesta", "Eliminando propuesta...")
         self._show_view("precios")
 
         def worker() -> None:
@@ -2980,12 +2986,12 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             return
         member_ids = self._price_proposal_member_ids(proposal)
         if not member_ids or self._cloud_session is None:
-            messagebox.showinfo("Cambio de Precios", "La propuesta no contiene IDs reales o no hay sesión.")
+            messagebox.showinfo("Cambio de Precios", "La propuesta no contiene IDs reales o no hay sesion.")
             return
         self._price_publish_in_progress = True
         overlay = self._price_start_working_overlay(
-            "Preparando publicación",
-            "Preparando publicación y consultando WooCommerce...",
+            "Preparando publicacion",
+            "Preparando publicacion y consultando WooCommerce...",
         )
 
         def worker() -> None:
@@ -3003,7 +3009,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             self._price_stop_working_overlay(overlay)
             if error or preview is None:
                 self._price_publish_in_progress = False
-                messagebox.showerror("Cambio de Precios", f"No se pudo preparar la publicación:\n{error}")
+                messagebox.showerror("Cambio de Precios", f"No se pudo preparar la publicacion:\n{error}")
                 return
             self._render_price_publish_preview(proposal, member_ids, preview)
 
@@ -3037,8 +3043,8 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             summary,
             text=(
                 f"Propuesta: {proposal.name}\n"
-                f"Total: {counts.get('total', 0)} · Válidas: {counts.get('valid', 0)} · "
-                f"Warnings: {counts.get('warnings', 0)} · Errores: {counts.get('errors', 0)} · "
+                f"Total: {counts.get('total', 0)} - Validas: {counts.get('valid', 0)} - "
+                f"Warnings: {counts.get('warnings', 0)} - Errores: {counts.get('errors', 0)} - "
                 f"Desactualizadas: {counts.get('stale', 0)}"
             ),
             bg=CARD,
@@ -3054,7 +3060,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         columns = ("type", "code", "name", "registered", "woo", "new", "delta", "status", "reason")
         tree = ttk.Treeview(host, columns=columns, show="headings", height=16)
         headings = (
-            "Tipo", "ID/Código", "Nombre", "Precio registrado", "Precio Woo",
+            "Tipo", "ID/Codigo", "Nombre", "Precio registrado", "Precio Woo",
             "Precio nuevo", "Diferencia", "Estado", "Motivo",
         )
         widths = (80, 120, 240, 100, 90, 90, 90, 120, 320)
@@ -3098,10 +3104,10 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
 
         def publish() -> None:
             confirmation = simpledialog.askstring(
-                "Confirmar publicación",
+                "Confirmar publicacion",
                 (
-                    f"Se modificarán {counts.get('total', 0)} precios en WooCommerce.\n"
-                    "Se generará snapshot y, ante fallo parcial, se intentará rollback.\n\n"
+                    f"Se modificaran {counts.get('total', 0)} precios en WooCommerce.\n"
+                    "Se generara snapshot y, ante fallo parcial, se intentara rollback.\n\n"
                     "Escribe exactamente PUBLICAR:"
                 ),
                 parent=win,
@@ -3114,7 +3120,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
 
             def report(index: int, total: int, key: str) -> None:
                 self.after(0, lambda: progress_label.configure(
-                    text=f"Publicando precios en WooCommerce... {index}/{total} · {key}"
+                    text=f"Publicando precios en WooCommerce... {index}/{total} - {key}"
                 ))
 
             def publish_worker() -> None:
@@ -3142,7 +3148,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             close_preview()
             messagebox.showinfo(
                 "Cambio de Precios",
-                f"Propuesta publicada y verificada.\nOperación: {operation_id}",
+                f"Propuesta publicada y verificada.\nOperacion: {operation_id}",
             )
             self._price_loaded_once = False
             self._price_last_woo_sync_monotonic = time.monotonic()
@@ -3168,11 +3174,11 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             return
         member_ids = self._price_proposal_member_ids(proposal)
         if not member_ids or self._cloud_session is None:
-            messagebox.showinfo("Cambio de Precios", "La propuesta no contiene IDs reales o no hay sesión.")
+            messagebox.showinfo("Cambio de Precios", "La propuesta no contiene IDs reales o no hay sesion.")
             return
         self._price_restore_in_progress = True
         overlay = self._price_start_working_overlay(
-            "Preparando restauración",
+            "Preparando restauracion",
             "Consultando snapshot y precios actuales en WooCommerce...",
         )
 
@@ -3193,7 +3199,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 self._price_restore_in_progress = False
                 messagebox.showerror(
                     "Cambio de Precios",
-                    f"No se pudo preparar la restauración:\n{error}",
+                    f"No se pudo preparar la restauracion:\n{error}",
                 )
                 return
             self._render_price_restore_preview(proposal, member_ids, preview)
@@ -3228,8 +3234,8 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             summary,
             text=(
                 f"Propuesta: {proposal.name}\n"
-                f"Total: {counts.get('total', 0)} · Válidas: {counts.get('valid', 0)} · "
-                f"Errores: {counts.get('errors', 0)} · "
+                f"Total: {counts.get('total', 0)} - Validas: {counts.get('valid', 0)} - "
+                f"Errores: {counts.get('errors', 0)} - "
                 f"Desactualizadas: {counts.get('stale', 0)}"
             ),
             bg=CARD,
@@ -3245,7 +3251,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         columns = ("type", "code", "name", "before", "current", "restore", "status", "reason")
         tree = ttk.Treeview(host, columns=columns, show="headings", height=16)
         headings = (
-            "Tipo", "ID/Código", "Nombre", "Precio antes de publicar",
+            "Tipo", "ID/Codigo", "Nombre", "Precio antes de publicar",
             "Precio actual Woo", "Precio a restaurar", "Estado", "Motivo",
         )
         widths = (80, 120, 240, 130, 110, 120, 130, 320)
@@ -3292,10 +3298,10 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
 
         def restore() -> None:
             confirmation = simpledialog.askstring(
-                "Confirmar restauración",
+                "Confirmar restauracion",
                 (
-                    f"Se restaurarán {counts.get('total', 0)} precios reales.\n"
-                    "Se utilizará el snapshot previo y se verificará cada restauración.\n\n"
+                    f"Se restauraran {counts.get('total', 0)} precios reales.\n"
+                    "Se utilizara el snapshot previo y se verificara cada restauracion.\n\n"
                     "Escribe exactamente RESTAURAR:"
                 ),
                 parent=win,
@@ -3308,7 +3314,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
 
             def report(index: int, total: int, key: str) -> None:
                 self.after(0, lambda: progress_label.configure(
-                    text=f"Restaurando precios en WooCommerce... {index}/{total} · {key}"
+                    text=f"Restaurando precios en WooCommerce... {index}/{total} - {key}"
                 ))
 
             def restore_worker() -> None:
@@ -3336,7 +3342,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             close_preview()
             messagebox.showinfo(
                 "Cambio de Precios",
-                f"Precios restaurados y verificados.\nOperación: {operation_id}",
+                f"Precios restaurados y verificados.\nOperacion: {operation_id}",
             )
             self._price_loaded_once = False
             self._price_last_woo_sync_monotonic = time.monotonic()
@@ -3393,7 +3399,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 return
             messagebox.showinfo(
                 "Cambio de Precios",
-                f"Propuesta rechazada.\nOperación: {(result or {}).get('operation_id') or '-'}",
+                f"Propuesta rechazada.\nOperacion: {(result or {}).get('operation_id') or '-'}",
             )
             self._price_loaded_once = False
             if self._content is not None:
@@ -3663,8 +3669,8 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         self._price_items_error = ""
         self._price_items_loading = True
         overlay = self._price_start_working_overlay(
-            "Buscando artículos",
-            "Buscando artículos, variaciones y packs…",
+            "Buscando articulos",
+            "Buscando articulos, variaciones y packs...",
         )
         if self._current_key == "precios" and parent.winfo_exists():
             self._show_view("precios")
@@ -3710,7 +3716,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         source = self._price_source_from_inventory_item(item)
         raw_type = str((item.raw or {}).get("item_record_type") or "").strip().lower()
         if source.get("item_kind") == "variation" or raw_type in {"variation", "woo_variation"}:
-            return "Variación"
+            return "Variacion"
         return "Simple"
 
     def _price_result_key(self, item: InventoryItem) -> str:
@@ -3720,7 +3726,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         return f"{self._price_result_type(item)}:{item.code}"
 
     def _price_results_from_items(self, items: list[InventoryItem]) -> list[dict[str, Any]]:
-        groups: dict[str, list[dict[str, Any]]] = {"Simple": [], "Variación": [], "Pack": []}
+        groups: dict[str, list[dict[str, Any]]] = {"Simple": [], "Variacion": [], "Pack": []}
         seen: set[str] = set()
         for item in items:
             key = self._price_result_key(item)
@@ -3737,7 +3743,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 "item": item,
                 "source": self._price_source_from_inventory_item(item),
             })
-        return [*groups["Simple"], *groups["Variación"], *groups["Pack"]]
+        return [*groups["Simple"], *groups["Variacion"], *groups["Pack"]]
 
     def _price_unified_search_rows(self, inventory_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Une bases, variaciones Woo y packs con orden estable y sin consultas por fila."""
@@ -4084,7 +4090,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             key = str(result.get("key") or "")
             selected_var.set(key)
             self._price_edit_selected_code = str(result.get("code") or "")
-            if self._price_classify_result(result)[0] == "VÁLIDO":
+            if self._price_classify_result(result)[0] == "VALIDO":
                 self._price_edit_notice = ""
             for row_key, widget in row_widgets.items():
                 row_bg = INDIGO_SOFT if row_key == key else CARD
@@ -4102,7 +4108,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             eligibility = self._price_classify_result(result)[0]
             visible_type = str(result.get("type") or "")
             if eligibility == "ERROR":
-                visible_type = f"{visible_type} · No publicable"
+                visible_type = f"{visible_type} - No publicable"
             row_bg = INDIGO_SOFT if key == selected_var.get() else CARD
             item = tk.Frame(list_host, bg=row_bg, highlightbackground=LINE, highlightthickness=1, cursor="hand2")
             item.grid(row=index, column=0, sticky="ew")
@@ -4139,13 +4145,13 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
 
         add_all_button = self._button(
             footer,
-            "Añadir todos",
+            "Anadir todos",
             primary=True,
             command=lambda: self._open_price_bulk_add_preview(results, percent_entry.get(), exact_entry.get()),
         )
         add_all_button.configure(state=tk.NORMAL if self._price_search_query.strip() and results else tk.DISABLED, disabledforeground="#CBD5E1")
         add_all_button.pack(side=tk.RIGHT, padx=(6, 0), ipadx=8)
-        add_button = self._button(footer, "Añadir", primary=True, command=add_selected)
+        add_button = self._button(footer, "Anadir", primary=True, command=add_selected)
         add_button.configure(state=tk.NORMAL if selected_var.get() else tk.DISABLED, disabledforeground="#CBD5E1")
         add_button.pack(side=tk.RIGHT, padx=(6, 0))
         for item in row_widgets.values():
@@ -4158,7 +4164,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         if percent and exact:
             raise ValueError(
                 "No se pueden usar Subida % y Valor al mismo tiempo.\n"
-                "Vacía uno de los dos campos para continuar."
+                "Vacia uno de los dos campos para continuar."
             )
         if not percent and not exact:
             raise ValueError("Introduce una Subida % o un Valor para continuar.")
@@ -4175,7 +4181,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         if result_type == "Pack" and not source:
             return "EXCLUIDO", "Pack pendiente de logica masiva", None
         if source.get("item_kind") == "product" and product_type in {"variable", "variable-subscription"}:
-            return "ERROR", "Producto padre sin precio único", None
+            return "ERROR", "Producto padre sin precio unico", None
         if price_text.lower() in {"", "-", "pendiente", "none", "null"}:
             return "ERROR", "Precio Woo pendiente o no calculable.", None
         try:
@@ -4184,7 +4190,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             return "ERROR", "Precio Woo pendiente o no calculable.", None
         if price <= 0 and source.get("item_kind") == "product":
             return "ERROR", "Precio Woo pendiente o no calculable.", None
-        return "VÁLIDO", "Resultado elegible.", price
+        return "VALIDO", "Resultado elegible.", price
 
     def _price_build_bulk_preview(
         self,
@@ -4208,7 +4214,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         for result in results:
             code = str(result.get("code") or "")
             result_type = str(result.get("type") or "Simple")
-            status = "VÁLIDO"
+            status = "VALIDO"
             reason = "Precio valido."
             old_price: float | None = None
             new_price: float | None = None
@@ -4270,11 +4276,11 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         counts["total_add"] = counts["valid"] + counts["warnings"]
         accepted_lines = [
             row for row in preview_rows
-            if row.get("status") in {"VÁLIDO", "WARNING"} and isinstance(row.get("line"), ProposalLine)
+            if row.get("status") in {"VALIDO", "WARNING"} and isinstance(row.get("line"), ProposalLine)
         ]
         rejected_lines = [
             row for row in preview_rows
-            if row.get("status") not in {"VÁLIDO", "WARNING"}
+            if row.get("status") not in {"VALIDO", "WARNING"}
         ]
         return {
             "query": self._price_search_query,
@@ -4293,7 +4299,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         exact_text: str,
     ) -> None:
         if not self._price_search_query.strip() or not results:
-            messagebox.showwarning("Cambio de Precios", "Realiza una busqueda con resultados antes de usar Añadir todos.")
+            messagebox.showwarning("Cambio de Precios", "Realiza una busqueda con resultados antes de usar Anadir todos.")
             return
         try:
             preview = self._price_build_bulk_preview(results, percent_text, exact_text)
@@ -4302,7 +4308,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             return
 
         win = tk.Toplevel(self)
-        win.title("Preview - Añadir todos")
+        win.title("Preview - Anadir todos")
         win.configure(bg=BG)
         win.transient(self)
         win.resizable(True, True)
@@ -4329,11 +4335,11 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         counts = preview["counts"]
         summary_text = (
             f"Busqueda actual: {preview['query']}\n"
-            f"Modo aplicado: {preview['mode']} · Valor aplicado: {preview['value']}\n"
-            f"Resultados encontrados: {len(preview['rows'])} · Articulos validos: {counts['valid']} · "
-            f"Warnings: {counts['warnings']} · Errores: {counts['errors']}\n"
-            f"Ya presentes: {counts['existing']} · Packs incluidos: {counts['packs_included']} · "
-            f"Packs excluidos: {counts['packs_excluded']} · Total que se añadira: {counts['total_add']}"
+            f"Modo aplicado: {preview['mode']} - Valor aplicado: {preview['value']}\n"
+            f"Resultados encontrados: {len(preview['rows'])} - Articulos validos: {counts['valid']} - "
+            f"Warnings: {counts['warnings']} - Errores: {counts['errors']}\n"
+            f"Ya presentes: {counts['existing']} - Packs incluidos: {counts['packs_included']} - "
+            f"Packs excluidos: {counts['packs_excluded']} - Total que se anadira: {counts['total_add']}"
         )
         tk.Label(summary, text=summary_text, bg=CARD, fg=TEXT, justify=tk.LEFT, anchor=tk.W).pack(fill=tk.X, padx=12, pady=12)
 
@@ -4369,7 +4375,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         footer.grid(row=2, column=0, sticky="ew", padx=16, pady=16)
         self._button(
             footer,
-            "Confirmar y añadir",
+            "Confirmar y anadir",
             primary=True,
             command=lambda: self._confirm_price_bulk_add(win, preview),
         ).pack(side=tk.RIGHT, padx=(8, 12), pady=12, ipadx=8)
@@ -4399,22 +4405,22 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             pass
         win.destroy()
         overlay = self._price_start_working_overlay(
-            "Añadiendo artículos",
-            f"Añadiendo artículos a la propuesta…\nProcesando {len(preview.get('rows') or [])} resultados.",
+            "Anadiendo articulos",
+            f"Anadiendo articulos a la propuesta...\nProcesando {len(preview.get('rows') or [])} resultados.",
         )
         try:
             for row in preview.get("accepted_lines") or []:
                 line = row.get("line")
                 if not isinstance(line, ProposalLine):
-                    raise ValueError("Error interno: línea aceptada sin modelo válido.")
+                    raise ValueError("Error interno: linea aceptada sin modelo valido.")
                 source = row.get("source") or {}
                 if source:
                     self._price_model_put(line, source)
             self._price_sync_legacy_model_views()
             counts = preview.get("counts") or {}
             self._price_edit_notice = (
-                f"Añadidos: {counts.get('valid', 0)} · Warnings añadidos: {counts.get('warnings', 0)} · "
-                f"Ya existentes: {counts.get('existing', 0)} · Errores excluidos: {counts.get('errors', 0)} · "
+                f"Anadidos: {counts.get('valid', 0)} - Warnings anadidos: {counts.get('warnings', 0)} - "
+                f"Ya existentes: {counts.get('existing', 0)} - Errores excluidos: {counts.get('errors', 0)} - "
                 f"Packs excluidos: {counts.get('packs_excluded', 0)}"
             )
             self._show_view("precios")
@@ -4442,10 +4448,10 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             })
             status, reason, _effective_price = self._price_classify_result(result)
             if status in {"ERROR", "EXCLUIDO"}:
-                if reason == "Producto padre sin precio único":
+                if reason == "Producto padre sin precio unico":
                     reason = (
-                        "Este producto padre no tiene un precio Woo único.\n"
-                        "Selecciona una variación concreta."
+                        "Este producto padre no tiene un precio Woo unico.\n"
+                        "Selecciona una variacion concreta."
                     )
                 messagebox.showerror("Cambio de Precios", reason)
                 return
@@ -4464,7 +4470,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         if duplicates:
             answer = messagebox.askyesno(
                 "Item ya incluido",
-                "Ya existe en la propuesta: " + ", ".join(duplicates) + "\n\nQuieres sobrescribirlo?",
+                "Ya existe en la propuesta: " + ", ".join(duplicates) + "\n\nQuieres sobrescribirlo",
             )
             if not answer:
                 self._price_edit_notice = "Anadido cancelado: item ya existia en la propuesta."
@@ -4474,7 +4480,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 if entry["line"].code in set(duplicates):
                     self._price_proposal_model.pop(key, None)
         self._price_add_in_progress = True
-        overlay = self._price_start_working_overlay("Añadiendo artículo", "Añadiendo artículo a la propuesta…")
+        overlay = self._price_start_working_overlay("Anadiendo articulo", "Anadiendo articulo a la propuesta...")
         try:
             for code, name, price in rows:
                 old_price = self._price_parse_money(price)
@@ -4509,7 +4515,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
 
     def _price_parse_money(self, value: str) -> float:
         try:
-            return float(str(value or "0").replace("€", "").replace(",", ".").strip())
+            return float(str(value or "0").replace("EUR", "").replace(",", ".").strip())
         except Exception as exc:
             raise ValueError("Precio actual no numerico.") from exc
 
@@ -4549,11 +4555,11 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         self._price_available_items = []
         self._price_items_error = ""
         self._price_items_loading = False
-        self._price_edit_notice = f"Editando {line.code}: se buscará y seleccionará en la tabla. Si lo añades de nuevo, podrás sobrescribirlo."
+        self._price_edit_notice = f"Editando {line.code}: se buscara y seleccionara en la tabla. Si lo anades de nuevo, podras sobrescribirlo."
         self._show_view("precios")
 
     def _price_delete_line(self, line: ProposalLine) -> None:
-        if not messagebox.askyesno("Borrar item", f"Quitar {line.code} de la propuesta?"):
+        if not messagebox.askyesno("Borrar item", f"Quitar {line.code} de la propuesta"):
             return
         self._price_edit_initialized = True
         for key, entry in list(self._price_proposal_model.items()):
@@ -4586,12 +4592,12 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         if missing:
             messagebox.showwarning(
                 "Cambio de Precios",
-                "Hay items sin vínculo Woo válido para guardar propuesta real:\n" + ", ".join(missing),
+                "Hay items sin vinculo Woo valido para guardar propuesta real:\n" + ", ".join(missing),
             )
             return
         if not messagebox.askyesno(
             "Guardar propuesta",
-            "Se guardaran/actualizaran propuestas reales pendientes en Supabase.\n\nWooCommerce no se toca hasta aceptar la propuesta. Continuar?",
+            "Se guardaran/actualizaran propuestas reales pendientes en Supabase.\n\nWooCommerce no se toca hasta aceptar la propuesta. Continuar",
         ):
             return
 
@@ -4601,7 +4607,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         self._price_edit_notice = "Guardando propuesta real en Supabase..."
         overlay = self._price_start_working_overlay(
             "Guardando propuesta",
-            "Guardando propuesta…\nValidando y registrando los cambios.",
+            "Guardando propuesta...\nValidando y registrando los cambios.",
         )
         self._show_view("precios")
 
@@ -4624,7 +4630,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         proposal_name: str,
         save_token: str,
     ) -> tuple[list[str], dict[str, int]]:
-        """Valida y persiste una copia inmutable del modelo canónico."""
+        """Valida y persiste una copia inmutable del modelo canonico."""
         plan: list[tuple[ProposalLine, dict[str, Any], float, float]] = []
         settings = load_settings()
         visible_entries = self._price_canonical_snapshot()
@@ -4653,7 +4659,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 kind,
                 woo_id,
                 float(new_price),
-                notes="Validación previa UI-ERP Cambio de Precios.",
+                notes="Validacion previa UI-ERP Cambio de Precios.",
                 settings=settings,
                 item_snapshot=source.get("item_snapshot"),
                 price_at_creation=(
@@ -4672,14 +4678,14 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             if safety.get("status") == "ERROR":
                 messages = "\n".join(str(message) for message in safety.get("messages") or [])
                 raise ValueError(
-                    "Validación de precio bloqueada.\n"
-                    f"Línea: {line.code} [{kind}] {line.name}\n"
+                    "Validacion de precio bloqueada.\n"
+                    f"Linea: {line.code} [{kind}] {line.name}\n"
                     f"{messages}".strip()
                 )
             if price_at_creation is None:
                 raise ValueError(
                     "Error interno de integridad de precios: "
-                    f"{entry.get('key')} no tiene price_at_creation numérico en el panel."
+                    f"{entry.get('key')} no tiene price_at_creation numerico en el panel."
                 )
             if (
                 preview_old_price is None
@@ -4810,7 +4816,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
     def _load_supplier_orders_from_cloud(self) -> list[SupplierOrder]:
         """Carga pedidos reales desde Supabase para Pedidos.
 
-        No usa datos mock. Si Supabase no devuelve filas, se muestra estado vacío.
+        No usa datos mock. Si Supabase no devuelve filas, se muestra estado vacio.
         """
         if self._cloud_session is None:
             return []
@@ -5024,6 +5030,155 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 reasons.append(f"{item.code}: {reason}")
         return reasons
 
+    def _supplier_order_trace_enabled(self, code: Any) -> bool:
+        return SUPPLIER_ORDER_DEBUG and str(code or "").strip() in {"1018005", "1002010"}
+
+    def _supplier_order_runtime_fingerprint(self) -> None:
+        if not SUPPLIER_ORDER_DEBUG:
+            return
+        if self.__dict__.get("_supplier_order_runtime_fingerprint_printed", False):
+            return
+        self._supplier_order_runtime_fingerprint_printed = True
+        files = {
+            "prototype": __file__,
+            "supplier_prices": getattr(supplier_prices_module, "__file__", ""),
+            "codes": getattr(codes_module, "__file__", ""),
+        }
+        print(f"[RUNTIME_FINGERPRINT] prototype_file={files['prototype']}")
+        print(f"[RUNTIME_FINGERPRINT] supplier_prices_file={files['supplier_prices']}")
+        print(f"[RUNTIME_FINGERPRINT] codes_file={files['codes']}")
+        for key, path in files.items():
+            try:
+                mtime = os.path.getmtime(path)
+            except Exception:
+                mtime = ""
+            print(f"[RUNTIME_FINGERPRINT] {key}_mtime={mtime}")
+        print(f"[RUNTIME_FINGERPRINT] has_direct_probe={str(hasattr(supplier_prices_module, '_supplier_order_direct_probe')).lower()}")
+        print(f"[RUNTIME_FINGERPRINT] has_enrich_loaded_state={str(hasattr(self, '_supplier_order_enrich_loaded_state')).lower()}")
+
+    def _supplier_order_log_lookup_comparison(self, provider: str, codes: tuple[Any, ...], resolved_by_code: dict[str, dict[str, Any]]) -> None:
+        trace_codes = [str(code or "").strip() for code in codes if self._supplier_order_trace_enabled(code)]
+        if not trace_codes or self._cloud_session is None:
+            return
+        print(
+            "[LOOKUP_QUERY_DIFF] inventory_ui_table=v_inventory_hub_search_ranked/inventory_items "
+            "inventory_ui_filter=search_cloud_inventory_items(query)"
+        )
+        print(
+            "[LOOKUP_QUERY_DIFF] supplier_order_table=inventory_items "
+            "supplier_order_filter=bulk_index+direct_probe(item_id,hub_item_code,heca_reference,woo_sku,source_row)"
+        )
+        for code in trace_codes:
+            try:
+                rows = search_cloud_inventory_items(self._cloud_session, code, limit=10, enrich_components=False)
+            except Exception as exc:
+                print(f"[INVENTORY_UI_LOOKUP_TRACE] code={code} function=search_cloud_inventory_items error={exc}")
+                rows = []
+            sample = dict(rows[0]) if rows else {}
+            print(
+                f"[INVENTORY_UI_LOOKUP_TRACE] code={code} function=search_cloud_inventory_items "
+                f"rows={len(rows)} item_id={sample.get('item_id', '')} "
+                f"hub_item_code={sample.get('hub_item_code', '')} "
+                f"heca_reference={sample.get('heca_reference', '')} "
+                f"item_record_type={sample.get('item_record_type') or sample.get('hub_search_record_type') or ''} "
+                f"is_pack={sample.get('is_pack', '')} base_item_code={sample.get('base_item_code', '')} "
+                f"price={sample.get('primary_supplier_price', '')} rotation_c={sample.get('rotation_c', '')}"
+            )
+            resolved = resolved_by_code.get(code) or {}
+            row = resolved.get("item") if isinstance(resolved.get("item"), dict) else {}
+            eligible, reason = supplier_order_eligibility_reason(row) if row else (False, "no_row")
+            print(
+                f"[SUPPLIER_ORDER_LOOKUP_TRACE] code={code} function=resolve_supplier_order_inventory_items "
+                f"rows={1 if resolved else 0} item_id={resolved.get('item_id', '')} "
+                f"matched_by={resolved.get('matched_by', '')} eligible={str(eligible).lower()} "
+                f"reason={reason} price={resolved.get('price', '')} rotation_c={row.get('rotation_c', '')}"
+            )
+
+    def _supplier_order_source(self, item: OrderItem) -> dict[str, Any]:
+        return item.raw.get("source_row") if isinstance(getattr(item, "raw", None), dict) and isinstance(item.raw.get("source_row"), dict) else {}
+
+    def _supplier_order_source_has_costing_gaps(self, item: OrderItem) -> bool:
+        source = self._supplier_order_source(item)
+        return (
+            self._line_source_float(source, "precio_proveedor", "precio_excel", "precio", "base_price") <= 0
+            or self._money_float(source.get("rotation_c") or source.get("inventory_rotation_c"), 0.0) <= 0
+            or self._money_float(source.get("m3_und") or source.get("inventory_m3"), 0.0) <= 0
+            or self._money_float(source.get("packages") or source.get("inventory_packages"), 0.0) <= 0
+        )
+
+    def _supplier_order_enrich_item_for_editor(self, provider: str | None, item: OrderItem) -> OrderItem:
+        if not provider or self._cloud_session is None or not str(item.code or "").strip():
+            return item
+        if not self._supplier_order_source_has_costing_gaps(item):
+            return item
+        try:
+            enriched = self._fill_supplier_prices_for_order_items(provider, (item,))
+            return enriched[0] if enriched else item
+        except Exception as exc:
+            if self._supplier_order_trace_enabled(item.code):
+                print(f"[SUPPLIER_ORDER_EDITOR_SOURCE_TRACE] code={item.code} enrich_error={exc}")
+            return item
+
+    def _supplier_order_load_trace(self, item: OrderItem, *, label: str = "SUPPLIER_ORDER_LOAD_TRACE") -> None:
+        if not self._supplier_order_trace_enabled(item.code):
+            return
+        source = self._supplier_order_source(item)
+        keys = ",".join(sorted(str(key) for key in source.keys()))
+        print(
+            f"[{label}] code={item.code} source_keys={keys} "
+            f"m3={source.get('m3_und') or source.get('inventory_m3') or item.m3} "
+            f"rotation_c={source.get('rotation_c') or source.get('inventory_rotation_c') or ''} "
+            f"precio_proveedor={source.get('precio_proveedor') or source.get('precio_excel') or source.get('precio') or ''}"
+        )
+
+    def _supplier_order_load_enrich_trace(self, item: OrderItem) -> None:
+        if not self._supplier_order_trace_enabled(item.code):
+            return
+        source = self._supplier_order_source(item)
+        print(
+            f"[SUPPLIER_ORDER_LOAD_ENRICH_TRACE] code={item.code} "
+            f"resolved={source.get('inventory_matched_item_id') not in (None, '')} "
+            f"item_id={source.get('inventory_matched_item_id') or ''} "
+            f"price={source.get('precio_proveedor') or source.get('precio_excel') or ''} "
+            f"rotation_c={source.get('rotation_c') or source.get('inventory_rotation_c') or ''} "
+            f"m3={source.get('m3_und') or source.get('inventory_m3') or ''} "
+            f"packages={source.get('packages') or source.get('inventory_packages') or ''}"
+        )
+
+    def _supplier_order_enrich_loaded_state(self, provider: str, loaded_order_state: dict[str, Any]) -> tuple[OrderItem, ...]:
+        items = tuple(loaded_order_state.get("items") or tuple())
+        for item in items:
+            self._supplier_order_load_trace(item)
+        enriched_items = self._fill_supplier_prices_for_order_items(provider, items) if items else items
+        for item in enriched_items:
+            self._supplier_order_load_enrich_trace(item)
+        loaded_order_state["items"] = enriched_items
+        loaded_order_state["raw_lines"] = [self._supplier_order_source(item) for item in enriched_items]
+        loaded_order_state["calculated"] = False
+        loaded_order_state.pop("calculation_summary", None)
+        return enriched_items
+
+    def _supplier_order_editor_initial_fields(self, item: OrderItem) -> dict[str, str]:
+        source = self._supplier_order_source(item)
+        m3_value = source.get("m3_und") or source.get("inventory_m3") or item.m3
+        if source.get("m3_und") not in (None, "") or source.get("inventory_m3") not in (None, ""):
+            m3_text = str(m3_value)
+        elif str(item.m3 or "").strip().lower() == "pendiente":
+            m3_text = ""
+        else:
+            m3_text = self._format_optional_decimal(m3_value, default="")
+        return {
+            "Referencia": str(item.code or ""),
+            "Descripcion": str(item.name or ""),
+            "Unidades": str(item.quantity),
+            "M3/Und.": m3_text,
+            "Rotacion C": str(source.get("rotation_c") or source.get("inventory_rotation_c") or source.get("rotacion_c") or ""),
+            "Bultos": str(source.get("packages") or source.get("inventory_packages") or "1"),
+            "Precio proveedor": str(source.get("precio_proveedor") or source.get("precio_excel") or source.get("precio") or ""),
+            "Origen precio": self._supplier_order_price_origin_label(source),
+            "Origen P.V.P.": self._supplier_order_pvp_source_label(source),
+        }
+
 
     def _fill_supplier_prices_for_order_items(self, provider: str, items: tuple[OrderItem, ...]) -> tuple[OrderItem, ...]:
         """Fill supplier price and inventory costing fields from Supabase.
@@ -5042,18 +5197,45 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             [item.code for item in items],
             provider,
         )
+        self._supplier_order_log_lookup_comparison(provider, tuple(item.code for item in items), resolved_by_code)
         enriched: list[OrderItem] = []
         for item in items:
+            order_code = str(item.code or "").strip()
             source = item.raw.get("source_row") if isinstance(getattr(item, "raw", None), dict) and isinstance(item.raw.get("source_row"), dict) else {}
-            supplier_price = resolved_by_code.get(str(item.code or "").strip())
+            supplier_price = resolved_by_code.get(order_code)
             if not supplier_price:
+                print(f"[SUPPLIER_ORDER_RESOLVE] code={order_code} resolved=false reason=no_inventory_match")
+                if self._supplier_order_trace_enabled(order_code):
+                    print(f"[SUPPLIER_ORDER_RESOLVE_TRACE] code={order_code} requested={order_code} resolved=false reason=no_inventory_match")
                 enriched.append(item)
                 continue
             inventory_row = supplier_price.get("item") if isinstance(supplier_price.get("item"), dict) else {}
+            before_keys = sorted(str(key) for key in source.keys())
             price = self._money_float(supplier_price.get("price"))
+            rotation_value = self._inventory_row_value(inventory_row, "rotation_c")
+            packages_value = self._inventory_row_value(inventory_row, "packages")
+            m3_value = self._inventory_row_value(inventory_row, "cubic_meters")
+            weighted_value = self._inventory_row_value(inventory_row, "weighted_average_cost")
+            order_calculated_value = self._inventory_row_value(inventory_row, "order_calculated_price")
+            rotation_number = self._money_float(rotation_value)
+            packages_number = self._money_float(packages_value)
+            m3_number = self._money_float(m3_value)
             updated_source = dict(source)
             current_price = self._money_float(updated_source.get("precio_proveedor") or updated_source.get("precio_excel") or updated_source.get("precio"))
+            current_rotation = self._money_float(updated_source.get("rotation_c") or updated_source.get("inventory_rotation_c"), 0.0)
+            current_packages = self._money_float(updated_source.get("packages") or updated_source.get("inventory_packages"), 0.0)
+            current_m3 = self._money_float(updated_source.get("m3_und") or updated_source.get("inventory_m3") or updated_source.get("m3_total"), 0.0)
             manual_price = bool(updated_source.get("ui_manual_supplier_price") or updated_source.get("ui_completed_from_order_editor")) and current_price > 0
+            manual_costing = bool(updated_source.get("ui_completed_from_order_editor"))
+            rotation_for_source = current_rotation if current_rotation > 0 else rotation_number
+            packages_for_source: Any = int(current_packages) if current_packages > 0 else int(packages_number) if packages_number > 0 else packages_value
+            m3_source = updated_source.get("m3_source")
+            if current_m3 > 0:
+                m3_source = m3_source or ("manual" if manual_costing else "excel")
+            elif m3_number > 0:
+                m3_source = "inventory"
+            else:
+                m3_source = "pending"
             if price > 0 and current_price <= 0:
                 updated_source.update({"precio_proveedor": price, "precio_excel": price})
                 updated_source.update({
@@ -5099,14 +5281,18 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             updated_source.update(
                 {
                     "inventory_name": inventory_row.get("name"),
-                    "inventory_m3": inventory_row.get("cubic_meters"),
-                    "inventory_rotation_c": inventory_row.get("rotation_c"),
-                    "inventory_packages": inventory_row.get("packages"),
-                    "inventory_store_stock": inventory_row.get("store_stock"),
-                    "inventory_warehouse_stock": inventory_row.get("warehouse_stock"),
-                    "inventory_stock_total": self._money_float(inventory_row.get("store_stock"), 0.0) + self._money_float(inventory_row.get("warehouse_stock"), 0.0),
-                    "inventory_weighted_average_cost": inventory_row.get("weighted_average_cost"),
-                    "inventory_order_calculated_price": inventory_row.get("order_calculated_price"),
+                    "inventory_m3": m3_number or m3_value,
+                    "inventory_rotation_c": rotation_number or rotation_value,
+                    "rotation_c": rotation_for_source or updated_source.get("rotation_c") or rotation_value,
+                    "inventory_packages": int(packages_number) if packages_number > 0 else packages_value,
+                    "packages": packages_for_source,
+                    "m3_source": m3_source,
+                    "inventory_store_stock": self._inventory_row_value(inventory_row, "store_stock"),
+                    "inventory_warehouse_stock": self._inventory_row_value(inventory_row, "warehouse_stock"),
+                    "inventory_stock_total": self._money_float(self._inventory_row_value(inventory_row, "store_stock"), 0.0) + self._money_float(self._inventory_row_value(inventory_row, "warehouse_stock"), 0.0),
+                    "inventory_weighted_average_cost": weighted_value,
+                    "weighted_average_cost": updated_source.get("weighted_average_cost") or weighted_value,
+                    "inventory_order_calculated_price": order_calculated_value,
                     "inventory_matched_item_id": inventory_row.get("item_id"),
                     "inventory_matched_by": supplier_price.get("matched_by"),
                     "inventory_order_original_code": item.code,
@@ -5132,11 +5318,61 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             )
             # Si el Excel/PDF no trae M3, aprovechamos el M3 del inventario.
             if self._money_float(updated_source.get("m3_und")) <= 0 and self._money_float(updated_source.get("m3_total")) <= 0:
-                inv_m3 = self._money_float(inventory_row.get("cubic_meters"))
+                inv_m3 = m3_number
                 qty = self._parse_units_value(updated_source.get("unidades") or updated_source.get("quantity_ordered") or item.quantity)
                 if inv_m3 > 0:
                     updated_source["m3_und"] = inv_m3
                     updated_source["m3_total"] = round(inv_m3 * qty, 6) if qty else inv_m3
+                    updated_source["m3_source"] = "inventory"
+            missing_parts: list[str] = []
+            if price <= 0 and current_price <= 0:
+                missing_parts.append("precio_proveedor")
+            if rotation_number <= 0:
+                missing_parts.append("rotation_c")
+            if m3_number <= 0 and self._money_float(updated_source.get("m3_und")) <= 0:
+                missing_parts.append("m3")
+            print(
+                f"[SUPPLIER_ORDER_RESOLVE] code={order_code} resolved=true item_id={supplier_price.get('item_id')} "
+                f"matched_by={supplier_price.get('matched_by')} price={price if price > 0 else current_price} rotation_c={rotation_number}"
+            )
+            if missing_parts:
+                print(
+                    f"[SUPPLIER_ORDER_ENRICH] code={order_code} item_id={supplier_price.get('item_id')} "
+                    f"missing={','.join(missing_parts)} reason=empty_or_invalid"
+                )
+            else:
+                print(
+                    f"[SUPPLIER_ORDER_ENRICH] code={order_code} item_id={supplier_price.get('item_id')} "
+                    f"price_loaded={price > 0 or current_price > 0} rotation_loaded={rotation_number > 0} m3_loaded={self._money_float(updated_source.get('m3_und')) > 0}"
+                )
+            if self._supplier_order_trace_enabled(order_code):
+                source_row = inventory_row.get("source_row") if isinstance(inventory_row.get("source_row"), dict) else {}
+                row_keys = ",".join(sorted(str(key) for key in inventory_row.keys()))
+                after_keys = ",".join(sorted(str(key) for key in updated_source.keys()))
+                if str(supplier_price.get("matched_by") or "").startswith("direct:"):
+                    print(
+                        f"[SUPPLIER_ORDER_STATE_AFTER_DIRECT] code={order_code} "
+                        f"precio_proveedor={updated_source.get('precio_proveedor') or updated_source.get('precio_excel') or ''} "
+                        f"rotation_c={updated_source.get('rotation_c') or updated_source.get('inventory_rotation_c') or ''} "
+                        f"m3_und={updated_source.get('m3_und') or updated_source.get('inventory_m3') or ''}"
+                    )
+                print(
+                    f"[SUPPLIER_ORDER_RESOLVE_TRACE] code={order_code} requested={order_code} resolved=true "
+                    f"item_id={supplier_price.get('item_id')} matched_by={supplier_price.get('matched_by')} row_keys={row_keys}"
+                )
+                print(
+                    f"[SUPPLIER_ORDER_RESOLVE_TRACE] item_id={supplier_price.get('item_id')} "
+                    f"primary_supplier_price={self._inventory_row_value(inventory_row, 'primary_supplier_price')} "
+                    f"pascal_price={self._inventory_row_value(inventory_row, 'pascal_price')} "
+                    f"rotation_c={rotation_number} packages={packages_number} cubic_meters={m3_number} "
+                    f"source_row_has_price={source_row.get('primary_supplier_price') not in (None, '')} "
+                    f"source_row_has_rotation={source_row.get('rotation_c') not in (None, '')}"
+                )
+                print(
+                    f"[SUPPLIER_ORDER_ENRICH_TRACE] code={order_code} before_keys={','.join(before_keys)} after_keys={after_keys} "
+                    f"precio_proveedor={updated_source.get('precio_proveedor')} rotation_c={updated_source.get('rotation_c')} "
+                    f"m3_und={updated_source.get('m3_und')} packages={updated_source.get('packages')}"
+                )
             enriched.append(
                 OrderItem(
                     code=item.code,
@@ -5193,7 +5429,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
 
         def _is_empty_like(value: Any) -> bool:
             text = _text(value).lower()
-            return text in {"", "-", "none", "null", "nan", "pendiente", "no esta", "no está", "n/a"}
+            return text in {"", "-", "none", "null", "nan", "pendiente", "no esta", "no esta", "n/a"}
 
         def _positive_number(value: Any) -> bool:
             try:
@@ -5216,24 +5452,26 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             reasons.append("falta nombre")
         if not _positive_number(qty_raw):
             reasons.append("falta cantidad")
-        # Para calcular necesitamos M3 por unidad o un M3 total válido.
+        # Para calcular necesitamos M3 por unidad o un M3 total valido.
         if not _positive_number(m3_unit_raw) and not _positive_number(m3_total_raw):
             reasons.append("falta M3")
-        # Antes del cálculo necesitamos precio de proveedor/base; después del cálculo final_cost ya queda relleno.
-        if not _positive_number(price_raw) and cost in {"", "pendiente", "bloqueado", "none", "no esta", "no está"}:
+        # Antes del calculo necesitamos precio de proveedor/base; despues del calculo final_cost ya queda relleno.
+        if not _positive_number(price_raw) and cost in {"", "pendiente", "bloqueado", "none", "no esta", "no esta"}:
             reasons.append("falta precio proveedor")
         if cost in {"bloqueado"}:
             reasons.append("coste bloqueado")
         if status in {"error", "critical", "bloqueado", "blocked"}:
             reasons.append(f"estado {item.status}")
 
-        # Si el parser marcó motivos en source_row, también los mostramos.
+        # Si el parser marco motivos en source_row, tambien los mostramos.
         raw_reasons = source.get("calculation_reasons") or source.get("ui_reasons") or source.get("warnings")
         if isinstance(raw_reasons, list):
             for reason in raw_reasons:
                 reason_text = _text(reason)
                 if reason_text and reason_text not in reasons:
                     reasons.append(reason_text)
+        if self._supplier_order_trace_enabled(code):
+            print(f"[SUPPLIER_ORDER_MISSING_TRACE] code={code} missing_reasons={reasons}")
         return reasons
 
     def _render_order_detail(self, parent: tk.Frame, order: SupplierOrder) -> None:
@@ -5269,7 +5507,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         missing_box = tk.Frame(content, bg=CARD)
         missing_box.pack(fill=tk.X, pady=(12, 0))
         tk.Label(missing_box, text="Elementos pendientes para calcular", bg=CARD, fg=TEXT, font=("Segoe UI", 10, "bold"), anchor=tk.W).pack(fill=tk.X)
-        missing_text = "\n".join(f"• {reason}" for reason in missing[:5]) if missing else "Sin elementos pendientes detectados."
+        missing_text = "\n".join(f" {reason}" for reason in missing[:5]) if missing else "Sin elementos pendientes detectados."
         tk.Label(
             missing_box,
             text=missing_text,
@@ -5365,7 +5603,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         return None
 
     def _order_download_count_exception_codes(self) -> set[str]:
-        """Referencias pequeñas/ambiguas que sí cuentan para descarga."""
+        """Referencias pequenas/ambiguas que si cuentan para descarga."""
         return {
             "0727007",
             "0730009",
@@ -5385,7 +5623,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         text = self._normalize_search_text(value)
         if not text:
             return default
-        if text in {"si", "sí", "s", "yes", "y", "true", "1", "cuenta"}:
+        if text in {"si", "si", "s", "yes", "y", "true", "1", "cuenta"}:
             return True
         if text in {"no", "n", "false", "0", "nocuenta", "no cuenta", "no_cuenta"}:
             return False
@@ -5429,22 +5667,22 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         return self._order_line_counts_for_download_auto(src.get("codigo") or src.get("referencia"), src.get("producto") or src.get("descripcion") or src.get("composicion"), src)
 
     def _order_line_counts_for_download_label(self, item_or_source: Any, source: dict[str, Any] | None = None) -> str:
-        return "Sí" if self._order_line_counts_for_download(item_or_source, source) else "No"
+        return "Si" if self._order_line_counts_for_download(item_or_source, source) else "No"
 
     def _order_line_download_reason(self, item: OrderItem, source: dict[str, Any] | None = None) -> str:
         src = source if isinstance(source, dict) else (item.raw.get("source_row") if isinstance(getattr(item, "raw", None), dict) and isinstance(item.raw.get("source_row"), dict) else {})
         manual = self._order_normalize_yes_no(src.get("cuenta_para_descarga", src.get("cuenta_reparto_descarga", src.get("cuenta_pedido"))), default=None)
         auto = self._order_line_counts_for_download_auto(item.code, item.name, src)
         if manual is not None:
-            return f"Selección manual: {'Sí' if manual else 'No'}. Regla automática sugerida: {'Sí' if auto else 'No'}."
+            return f"Seleccion manual: {'Si' if manual else 'No'}. Regla automatica sugerida: {'Si' if auto else 'No'}."
         ref = str(item.code or "").strip()
         base_ref = ref.split("-")[0].strip()
         if ref in self._order_download_count_exception_codes() or base_ref in self._order_download_count_exception_codes():
-            return "Sí por excepción definida: producto grande que cuenta para descarga."
+            return "Si por excepcion definida: producto grande que cuenta para descarga."
         haystack = self._normalize_search_text(" ".join(str(x or "") for x in (item.name, src.get("producto"), src.get("descripcion"), src.get("composicion"))))
         if any(keyword in haystack for keyword in self._order_download_excluded_keywords()):
-            return "No por regla automática: funda/cover/topper/pillow/almohada no reparte descarga."
-        return "Sí por regla automática."
+            return "No por regla automatica: funda/cover/topper/pillow/almohada no reparte descarga."
+        return "Si por regla automatica."
 
     def _order_item_from_loaded_line(self, line: dict[str, Any]) -> OrderItem:
         qty = self._parse_units_value(line.get("unidades") or line.get("quantity") or line.get("quantity_ordered"))
@@ -5457,9 +5695,9 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         cuenta_descarga = self._order_line_counts_for_download(source_row)
         source_row.update(
             {
-                "cuenta_para_descarga": "Sí" if cuenta_descarga else "No",
+                "cuenta_para_descarga": "Si" if cuenta_descarga else "No",
                 "cuenta_reparto_descarga": cuenta_descarga,
-                "cuenta_pedido": "Sí" if cuenta_descarga else "No",
+                "cuenta_pedido": "Si" if cuenta_descarga else "No",
                 "ui_download_count_rule": "auto_on_load",
             }
         )
@@ -5514,12 +5752,12 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         ws = wb.active
         header_row, header_map = self._detect_supplier_order_header(ws)
         if header_row is None:
-            raise ValueError("No se encontró una fila de cabecera con referencia/código y unidades/cantidad.")
+            raise ValueError("No se encontro una fila de cabecera con referencia/codigo y unidades/cantidad.")
 
         provider_key = self._normalize_search_text(provider)
         if provider_key.startswith("heimei") or provider_key.startswith("hemei"):
             c_ref = self._supplier_order_col(header_map, "REF", "Referencia")
-            c_name = self._supplier_order_col(header_map, "DESCRIPCIÓN", "DESCRIPCION", "Descripcion", "Descripción")
+            c_name = self._supplier_order_col(header_map, "DESCRIPCION", "DESCRIPCION", "Descripcion", "Descripcion")
             c_measure = self._supplier_order_col(header_map, "MEDIDA", "Medida")
             c_qty = self._supplier_order_col(header_map, "UND.", "UND", "Unidades")
             c_color = self._supplier_order_col(header_map, "Color")
@@ -5527,7 +5765,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             c_m3u = self._supplier_order_col(header_map, "M3/Und.", "M3Und", "m3/unit")
             c_m3t = self._supplier_order_col(header_map, "M3/total.", "M3total", "m3/total")
         elif provider_key.startswith("cipta"):
-            c_ref = self._supplier_order_col(header_map, "CódigoArtículo (Item Code)", "CodigoArticulo (Item Code)", "CódigoArtículo", "CodigoArticulo", "Item Code", "Código", "Codigo", "REF")
+            c_ref = self._supplier_order_col(header_map, "CodigoArticulo (Item Code)", "CodigoArticulo (Item Code)", "CodigoArticulo", "CodigoArticulo", "Item Code", "Codigo", "Codigo", "REF")
             c_name = self._supplier_order_col(header_map, "Modelo (Model)", "Modelo", "Model", "Familia (Family)", "Familia")
             c_measure = self._supplier_order_col(header_map, "Medida (Size)", "Medida", "Size")
             c_color = self._supplier_order_col(header_map, "Color (Color)", "Color")
@@ -5537,7 +5775,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             c_m3t = self._supplier_order_col(header_map, "m3/total", "M3/total.", "M3total")
         else:
             c_ref = self._supplier_order_col(header_map, "Referencia")
-            c_name = self._supplier_order_col(header_map, "Composición", "Composicion", "Descripcion", "Descripción")
+            c_name = self._supplier_order_col(header_map, "Composicion", "Composicion", "Descripcion", "Descripcion")
             c_measure = self._supplier_order_col(header_map, "Medida")
             c_color = self._supplier_order_col(header_map, "Color")
             c_qty = self._supplier_order_col(header_map, "Und.", "Und", "Unidades", "Cantidad")
@@ -5546,7 +5784,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             c_m3t = self._supplier_order_col(header_map, "M3/total.", "M3total", "m3/total")
 
         if not c_ref or not c_qty:
-            raise ValueError("El pedido debe tener al menos referencia/código y unidades/cantidad.")
+            raise ValueError("El pedido debe tener al menos referencia/codigo y unidades/cantidad.")
 
         raw_lines: list[dict[str, Any]] = []
         items: list[OrderItem] = []
@@ -5569,7 +5807,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 m3_und = self._m3_from_measure_text(measure)
             if m3_total <= 0 and m3_und > 0:
                 m3_total = round(m3_und * qty, 6)
-            product = " · ".join(x for x in (name, measure) if x) or str(ref)
+            product = " - ".join(x for x in (name, measure) if x) or str(ref)
             raw = {
                 "referencia": str(ref).strip(),
                 "codigo": str(ref).strip(),
@@ -5592,7 +5830,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
 
     def _load_supplier_order_from_pdf(self, path: str, provider: str) -> tuple[tuple[OrderItem, ...], list[dict[str, Any]]]:
         if not self._normalize_search_text(provider).startswith(("heimei", "hemei")):
-            raise ValueError("La lectura de PDF está preparada de momento para pedidos Heimei. Para este proveedor usa Excel.")
+            raise ValueError("La lectura de PDF esta preparada de momento para pedidos Heimei. Para este proveedor usa Excel.")
         try:
             from pypdf import PdfReader
         except ImportError as exc:
@@ -5602,9 +5840,9 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         if not text.strip():
             raise ValueError("No se pudo extraer texto del PDF. Usa Excel o revisa que el PDF no sea una imagen escaneada.")
         pattern = re.compile(
-            r"(?m)^\s*(\d{6,8})\s+(.+?)\s+"
-            r"((?:\d+(?:[,.]\d+)?\s*[xX*×]\s*){2}\d+(?:[,.]\d+)?\s*cm)\s+"
-            r"(\d+(?:[,.]\d+)?)\s*(?:Pc|pc|PCS|Pcs)?\s*$"
+            r"(?m)^\s*(\d{6,8})\s+(.+)\s+"
+            r"((?:\d+(?:[,.]\d+)?\s*[xX*]\s*){2}\d+(?:[,.]\d+)?\s*cm)\s+"
+            r"(\d+(?:[,.]\d+)?)\s*(?:Pc|pc|PCS|Pcs)\s*$"
         )
         raw_lines: list[dict[str, Any]] = []
         items: list[OrderItem] = []
@@ -5618,7 +5856,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             raw = {
                 "referencia": ref.strip(),
                 "codigo": ref.strip(),
-                "producto": f"{desc.strip()} · {measure.strip()}",
+                "producto": f"{desc.strip()} - {measure.strip()}",
                 "composicion": desc.strip(),
                 "medida": measure.strip(),
                 "color": "",
@@ -5634,10 +5872,11 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             raw_lines.append(raw)
             items.append(item)
         if not items:
-            raise ValueError("No se encontraron líneas de pedido en el PDF. Usa Excel o revisa el formato del PDF.")
+            raise ValueError("No se encontraron lineas de pedido en el PDF. Usa Excel o revisa el formato del PDF.")
         return tuple(items), raw_lines
 
     def _open_order_calc_flow(self, provider: str, order: SupplierOrder | None = None) -> None:
+        self._supplier_order_runtime_fingerprint()
         win = tk.Toplevel(self)
         win.title(f"Calcular nuevo pedido - {provider}")
         win.configure(bg=BG)
@@ -5651,7 +5890,6 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         order_source = order_raw.get("source_row") if isinstance(order_raw.get("source_row"), dict) else {}
         order_inputs = order_source.get("inputs") if isinstance(order_source.get("inputs"), dict) else {}
         existing_items = tuple(order.items) if order is not None else tuple()
-        existing_items = self._fill_supplier_prices_for_order_items(provider, existing_items) if existing_items else existing_items
         existing_raw_lines = [item.raw.get("source_row") if isinstance(getattr(item, "raw", None), dict) and isinstance(item.raw.get("source_row"), dict) else {} for item in existing_items]
         loaded_order_state: dict[str, Any] = {
             "items": existing_items,
@@ -5662,6 +5900,8 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             "order_id": str(order_raw.get("order_id") or "") if order is not None else "",
             "existing_order": order,
         }
+        if existing_items:
+            existing_items = self._supplier_order_enrich_loaded_state(provider, loaded_order_state)
 
         header = tk.Frame(win, bg=BG)
         header.grid(row=0, column=0, sticky="ew", padx=22, pady=(22, 14))
@@ -5692,7 +5932,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         upload_row.pack(fill=tk.X, pady=(0, 14))
         file_chip = tk.Label(
             upload_row,
-            text=str(loaded_order_state.get("file_name") or "Ningún pedido cargado"),
+            text=str(loaded_order_state.get("file_name") or "Ningun pedido cargado"),
             bg=SOFT,
             fg="#334155",
             font=("Segoe UI", 9, "bold"),
@@ -5765,13 +6005,13 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             items = tuple(loaded_order_state.get("items") or tuple())
             raw_lines = list(loaded_order_state.get("raw_lines") or [])
             if not items:
-                messagebox.showinfo("Pedidos", "Carga un Excel/PDF o abre un borrador con líneas antes de calcular.")
+                messagebox.showinfo("Pedidos", "Carga un Excel/PDF o abre un borrador con lineas antes de calcular.")
                 return
             calculation_running["value"] = True
             set_calculation_buttons_enabled(False)
             overlay = self._show_working_overlay(
                 "Calculando pedido",
-                "Consultando WooCommerce y calculando lÃ­neas...\nPuede tardar unos segundos. No cierres esta ventana.",
+                "Consultando WooCommerce y calculando lineas...\nPuede tardar unos segundos. No cierres esta ventana.",
             )
 
             def finish_calculation(result: dict[str, Any]) -> None:
@@ -5792,7 +6032,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 redraw_loaded_table(calculated_items)
                 messagebox.showinfo(
                     "Pedido calculado",
-                    f"Calculados: {summary.get('ok', 0)} · Pendientes: {summary.get('pending', 0)} · Coste: {summary.get('total_cost', 0):.2f} €",
+                    f"Calculados: {summary.get('ok', 0)} - Pendientes: {summary.get('pending', 0)} - Coste: {summary.get('total_cost', 0):.2f} EUR",
                 )
 
             def worker() -> None:
@@ -5830,14 +6070,14 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         tk.Label(result_head, text="Resultado del calculo", bg=CARD, fg=TEXT, font=("Segoe UI", 14, "bold")).grid(row=0, column=0, sticky="w", padx=18, pady=16)
         result_metrics = tk.Frame(result_head, bg=CARD)
         result_metrics.grid(row=0, column=1, sticky="e", padx=18, pady=12)
-        result_items_chip = self._status_chip(result_metrics, "Items: 0 · No descarga: 0", "Info")
+        result_items_chip = self._status_chip(result_metrics, "Items: 0 - No descarga: 0", "Info")
         result_items_chip.pack(side=tk.LEFT, padx=(0, 8))
         result_m3_chip = self._status_chip(result_metrics, "M3 total: 0,00", "Info")
         result_m3_chip.pack(side=tk.LEFT)
 
         def update_result_metrics(items_for_metrics: tuple[OrderItem, ...] | None = None) -> None:
             metrics = self._supplier_order_visible_metrics(items_for_metrics or tuple())
-            result_items_chip.configure(text=f"Items: {metrics['total_qty']} · No descarga: {metrics['excluded_qty']}")
+            result_items_chip.configure(text=f"Items: {metrics['total_qty']} - No descarga: {metrics['excluded_qty']}")
             result_m3_chip.configure(text=f"M3 total: {self._format_optional_decimal(metrics['total_m3'], default='0,00')}")
 
         table_area = tk.Frame(table_card, bg=CARD)
@@ -5874,7 +6114,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             else:
                 empty = tk.Frame(table_area, bg=CARD)
                 empty.grid(row=0, column=0, sticky="nsew")
-                tk.Label(empty, text="Carga un Excel o PDF de pedido para ver sus líneas.", bg=CARD, fg=MUTED, font=("Segoe UI", 11)).pack(expand=True)
+                tk.Label(empty, text="Carga un Excel o PDF de pedido para ver sus lineas.", bg=CARD, fg=MUTED, font=("Segoe UI", 11)).pack(expand=True)
 
         def load_order_file() -> None:
             path = filedialog.askopenfilename(
@@ -5891,25 +6131,21 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 else:
                     items, raw_lines = self._load_supplier_order_from_excel(path, provider)
                     file_type = "XLSX"
-                items = self._fill_supplier_prices_for_order_items(provider, tuple(items))
-                raw_lines = [
-                    item.raw.get("source_row") if isinstance(getattr(item, "raw", None), dict) and isinstance(item.raw.get("source_row"), dict) else {}
-                    for item in items
-                ]
             except Exception as exc:
                 messagebox.showerror("No se pudo cargar el pedido", str(exc))
                 return
             loaded_order_state.update({
-                "items": items,
+                "items": tuple(items),
                 "raw_lines": raw_lines,
                 "file_path": path,
                 "file_name": os.path.basename(path),
                 "file_type": file_type,
             })
+            items = self._supplier_order_enrich_loaded_state(provider, loaded_order_state)
             file_chip.configure(text=os.path.basename(path))
             type_chip.configure(text=file_type)
             redraw_loaded_table(items)
-            messagebox.showinfo("Pedido cargado", f"Se cargaron {len(items)} líneas del pedido.")
+            messagebox.showinfo("Pedido cargado", f"Se cargaron {len(items)} lineas del pedido.")
 
         self._button(upload_row, "Cargar pedido", command=load_order_file).pack(side=tk.LEFT, padx=(0, 10))
         file_chip.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 10))
@@ -5929,7 +6165,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
     def _money_float(self, value: Any, default: float = 0.0) -> float:
         if value in (None, ""):
             return default
-        text = str(value).strip().replace("€", "").replace("$", "").replace("%", "")
+        text = str(value).strip().replace("EUR", "").replace("$", "").replace("%", "")
         text = text.replace(".", "").replace(",", ".") if "," in text else text
         try:
             return float(text)
@@ -5939,12 +6175,21 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             except Exception:
                 return default
 
+    def _inventory_row_value(self, row: dict[str, Any], key: str) -> Any:
+        value = row.get(key)
+        if value not in (None, ""):
+            return value
+        source_row = row.get("source_row")
+        if isinstance(source_row, dict):
+            return source_row.get(key)
+        return value
+
     def _format_eur(self, value: Any) -> str:
         try:
             number = float(value)
         except Exception:
             return "Pendiente"
-        return f"{number:.2f} €"
+        return f"{number:.2f} EUR"
 
     def _format_usd(self, value: Any) -> str:
         try:
@@ -5996,19 +6241,19 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         return float(margin.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
 
     def _parse_supplier_order_pvp_unit(self, value: Any) -> Decimal:
-        text = str(value if value is not None else "").strip().replace("€", "").replace("EUR", "").replace(",", ".")
+        text = str(value if value is not None else "").strip().replace("EUR", "").replace("EUR", "").replace(",", ".")
         if not text:
-            raise ValueError("P.V.P. vacío.")
+            raise ValueError("P.V.P. vacio.")
         try:
             pvp = Decimal(text)
         except (InvalidOperation, ValueError) as exc:
-            raise ValueError("P.V.P. debe ser un número mayor que 0.") from exc
+            raise ValueError("P.V.P. debe ser un numero mayor que 0.") from exc
         if pvp <= 0:
             raise ValueError("P.V.P. debe ser mayor que 0.")
         return pvp
 
     def _decimal_value(self, value: Any) -> Decimal:
-        text = str(value if value is not None else "0").strip().replace("€", "").replace("EUR", "").replace(",", ".")
+        text = str(value if value is not None else "0").strip().replace("EUR", "").replace("EUR", "").replace(",", ".")
         try:
             return Decimal(text)
         except (InvalidOperation, ValueError):
@@ -6054,13 +6299,45 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         value = source.get("rentabilidad_percent")
         return str(value) if value not in (None, "") else str(global_rentabilidad)
 
+    def _supplier_order_woo_sku(self, source: dict[str, Any]) -> str:
+        nested: dict[str, Any] = {}
+        for key in ("inventory_item", "inventory_row", "matched_inventory_item"):
+            value = source.get(key)
+            if isinstance(value, dict):
+                nested = value
+                break
+
+        for key in (
+            "woo_sku",
+            "inventory_woo_sku",
+            "supplier_price_woo_sku",
+            "matched_woo_sku",
+            "item_code",
+            "heca_reference",
+            "hub_item_code",
+            "order_item_code",
+            "_order_item_code",
+        ):
+            value = source.get(key)
+            if value not in (None, ""):
+                sku = str(value).strip()
+                if sku:
+                    return sku
+        for key in ("woo_sku", "heca_reference", "hub_item_code", "item_id"):
+            value = nested.get(key)
+            if value not in (None, ""):
+                sku = str(value).strip()
+                if sku:
+                    return sku
+        return ""
+
     def _supplier_order_woo_reference(self, source: dict[str, Any]) -> dict[str, Any]:
-        def first_value(*keys: str) -> Any:
+        def first_value(*keys: str) -> tuple[Any, str]:
             for key in keys:
                 value = source.get(key)
                 if value not in (None, "", 0, "0"):
-                    return value
-            return None
+                    return value, key
+            return None, ""
 
         nested: dict[str, Any] = {}
         for key in ("inventory_item", "inventory_row", "matched_inventory_item"):
@@ -6069,14 +6346,17 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 nested = value
                 break
 
-        woo_id = first_value(
+        woo_id, woo_id_key = first_value(
             "woo_id",
             "inventory_woo_id",
             "supplier_price_woo_id",
             "matched_woo_id",
             "item_woo_id",
             "ui_canonical_woo_id",
-        ) or nested.get("woo_id")
+        )
+        if woo_id in (None, "", 0, "0") and nested.get("woo_id") not in (None, "", 0, "0"):
+            woo_id = nested.get("woo_id")
+            woo_id_key = "inventory_item.woo_id"
         kind = str(
             first_value(
                 "woo_item_kind",
@@ -6084,7 +6364,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 "supplier_price_woo_item_kind",
                 "matched_woo_item_kind",
                 "item_kind",
-            )
+            )[0]
             or nested.get("woo_item_kind")
             or ""
         ).strip().lower()
@@ -6094,7 +6374,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             "supplier_price_woo_parent_id",
             "matched_woo_parent_id",
             "parent_woo_id",
-        ) or nested.get("woo_parent_id")
+        )[0] or nested.get("woo_parent_id")
         try:
             woo_id_int = int(str(woo_id).strip())
         except Exception:
@@ -6105,7 +6385,17 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             parent_id_int = int(str(parent_id).strip()) if parent_id not in (None, "", 0, "0") else 0
         except Exception:
             parent_id_int = 0
-        return {"woo_id": woo_id_int, "woo_item_kind": kind, "woo_parent_id": parent_id_int}
+        resolution_source = "pending"
+        if woo_id_int > 0:
+            resolution_source = "inventory_woo_id" if str(woo_id_key).startswith(("inventory_", "matched_", "supplier_price_", "inventory_item.")) else "direct_woo_id"
+        return {
+            "woo_id": woo_id_int,
+            "woo_item_kind": kind,
+            "woo_parent_id": parent_id_int,
+            "woo_sku": self._supplier_order_woo_sku(source),
+            "resolution_source": resolution_source,
+            "resolution_error": "",
+        }
 
     def _parse_supplier_order_woo_price(self, value: Any) -> Decimal:
         if value in (None, ""):
@@ -6120,12 +6410,101 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             return f"WooCommerce no encontro la variacion {woo_id} del producto padre {parent_id}."
         return f"WooCommerce no encontro el producto {woo_id}."
 
+    def _supplier_order_log_woo_price_warning(self, source: dict[str, Any], result: dict[str, Any]) -> None:
+        error = str(result.get("error") or "").strip()
+        if not error:
+            return
+        code = str(source.get("order_item_code") or source.get("_order_item_code") or source.get("item_code") or source.get("heca_reference") or "").strip()
+        sku = str(result.get("woo_price_sku") or self._supplier_order_woo_sku(source) or "").strip()
+        resolution = str(result.get("woo_price_resolution_source") or "").strip()
+        safe_error = error.replace('"', "'")
+        print(f'[SUPPLIER_ORDER_WOO_PRICE] code={code} sku={sku} source={resolution} status=Warning error="{safe_error}"')
+
+    def _supplier_order_fetch_woo_price_by_sku(
+        self,
+        client: WooCommerceClient,
+        sku: str,
+        *,
+        checked_at: str,
+        detail_prefix: str = "",
+    ) -> dict[str, Any]:
+        sku = str(sku or "").strip()
+        endpoint = f"products?sku={quote(sku, safe='')}"
+        result = {
+            "price": None,
+            "error": "",
+            "checked_at": checked_at,
+            "endpoint": endpoint,
+            "woo_price_item_id": "",
+            "woo_price_item_kind": "",
+            "woo_price_parent_id": "",
+            "woo_price_sku": sku,
+            "woo_price_resolution_source": "sku_not_found",
+            "woo_price_resolution_detail": "",
+        }
+        if not sku:
+            result["error"] = "No se pudo resolver Woo ID ni SKU para la linea."
+            result["woo_price_resolution_source"] = "pending"
+            return result
+        try:
+            payload = client.get(endpoint).json()
+            if not isinstance(payload, list):
+                payload = [payload] if isinstance(payload, dict) else []
+            if not payload:
+                result["error"] = f"WooCommerce no encontro ningun producto con SKU {sku}."
+                result["woo_price_resolution_detail"] = detail_prefix.strip()
+                return result
+            if len(payload) > 1:
+                result["error"] = f"SKU ambiguo en WooCommerce: {sku} devuelve {len(payload)} resultados."
+                result["woo_price_resolution_source"] = "sku_ambiguous"
+                result["woo_price_resolution_detail"] = detail_prefix.strip()
+                return result
+
+            row = payload[0]
+            if not isinstance(row, dict):
+                result["error"] = f"WooCommerce devolvio una respuesta no valida para SKU {sku}."
+                result["woo_price_resolution_source"] = "api_error"
+                result["woo_price_resolution_detail"] = detail_prefix.strip()
+                return result
+            parent_id = row.get("parent_id") or row.get("parent") or 0
+            try:
+                parent_id_int = int(str(parent_id).strip()) if parent_id not in (None, "", 0, "0") else 0
+            except Exception:
+                parent_id_int = 0
+            item_id = row.get("id") or ""
+            item_kind = "variation" if parent_id_int > 0 or str(row.get("type") or "").strip().lower() == "variation" else "product"
+            resolution_source = "sku_exact_variation" if item_kind == "variation" else "sku_exact"
+            result.update(
+                {
+                    "price": float(self._parse_supplier_order_woo_price(row.get("price"))),
+                    "woo_price_item_id": item_id,
+                    "woo_price_item_kind": item_kind,
+                    "woo_price_parent_id": parent_id_int or "",
+                    "woo_price_sku": str(row.get("sku") or sku).strip() or sku,
+                    "woo_price_resolution_source": resolution_source,
+                    "woo_price_resolution_detail": detail_prefix.strip(),
+                }
+            )
+            return result
+        except WooCommerceError as exc:
+            result["error"] = str(exc)
+            result["woo_price_resolution_source"] = "api_error"
+            result["woo_price_resolution_detail"] = detail_prefix.strip()
+            return result
+        except (ValueError, Exception) as exc:
+            result["error"] = str(exc)
+            result["woo_price_resolution_source"] = "api_error"
+            result["woo_price_resolution_detail"] = detail_prefix.strip()
+            return result
+
     def _supplier_order_fetch_woo_price(self, source: dict[str, Any]) -> dict[str, Any]:
         checked_at = datetime.now(timezone.utc).isoformat()
         reference = self._supplier_order_woo_reference(source)
         woo_id = int(reference.get("woo_id") or 0)
         kind = str(reference.get("woo_item_kind") or "")
         parent_id = int(reference.get("woo_parent_id") or 0)
+        sku = str(reference.get("woo_sku") or "").strip()
+        resolution_source = str(reference.get("resolution_source") or "pending")
         result = {
             "price": None,
             "error": "",
@@ -6133,29 +6512,65 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             "woo_price_item_id": woo_id or "",
             "woo_price_item_kind": kind if woo_id else "",
             "woo_price_parent_id": parent_id or "",
+            "woo_price_sku": sku,
+            "woo_price_resolution_source": resolution_source,
+            "woo_price_resolution_detail": "",
         }
-        if woo_id <= 0:
-            result["error"] = "No se pudo resolver Woo ID para la linea."
-            return result
-        if kind == "variation" and parent_id <= 0:
-            result["error"] = "Variacion sin parent Woo ID."
-            return result
         endpoint = ""
+        client: WooCommerceClient | None = None
         try:
             settings = load_settings()
             client = WooCommerceClient(settings.woocommerce_url, settings.consumer_key, settings.consumer_secret)
+            if woo_id <= 0:
+                if sku:
+                    sku_result = self._supplier_order_fetch_woo_price_by_sku(client, sku, checked_at=checked_at)
+                    self._supplier_order_log_woo_price_warning(source, sku_result)
+                    return sku_result
+                result["error"] = "No se pudo resolver Woo ID ni SKU para la linea."
+                result["woo_price_resolution_source"] = "pending"
+                self._supplier_order_log_woo_price_warning(source, result)
+                return result
+            if kind == "variation" and parent_id <= 0:
+                if sku:
+                    sku_result = self._supplier_order_fetch_woo_price_by_sku(
+                        client,
+                        sku,
+                        checked_at=checked_at,
+                        detail_prefix=f"Variacion {woo_id} sin parent Woo ID; fallback SKU {sku}.",
+                    )
+                    self._supplier_order_log_woo_price_warning(source, sku_result)
+                    return sku_result
+                result["error"] = "Variacion sin parent Woo ID."
+                result["woo_price_resolution_source"] = "pending"
+                self._supplier_order_log_woo_price_warning(source, result)
+                return result
             endpoint = f"products/{parent_id}/variations/{woo_id}" if kind == "variation" else f"products/{woo_id}"
             payload = client.get(endpoint).json()
             result["endpoint"] = endpoint
             result["price"] = float(self._parse_supplier_order_woo_price(payload.get("price")))
+            result["woo_price_sku"] = str(payload.get("sku") or sku).strip()
             return result
         except WooCommerceError as exc:
             text = str(exc)
             result["endpoint"] = endpoint
+            if "404" in text and sku and client is not None:
+                message = self._supplier_order_woo_not_found_message(kind, woo_id, parent_id)
+                sku_result = self._supplier_order_fetch_woo_price_by_sku(
+                    client,
+                    sku,
+                    checked_at=checked_at,
+                    detail_prefix=f"{message} Fallback SKU {sku}.",
+                )
+                self._supplier_order_log_woo_price_warning(source, sku_result)
+                return sku_result
             result["error"] = self._supplier_order_woo_not_found_message(kind, woo_id, parent_id) if "404" in text else text
+            result["woo_price_resolution_source"] = "api_error" if "404" not in text else resolution_source
+            self._supplier_order_log_woo_price_warning(source, result)
             return result
         except (ValueError, Exception) as exc:
             result["error"] = str(exc)
+            result["woo_price_resolution_source"] = "api_error"
+            self._supplier_order_log_woo_price_warning(source, result)
             return result
 
     def _supplier_order_update_line_rentabilidad(
@@ -6220,8 +6635,8 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         for key, meta in DEFAULT_BUSINESS_CONSTANTS.items():
             current = constants.get(key, meta) if isinstance(constants, dict) else meta
             result[key] = self._money_float(current.get("value") if isinstance(current, dict) else None) or self._money_float(meta.get("value"))
-        # La fórmula legacy usa IVA_RE como multiplicador, no porcentaje bruto.
-        # Si en configuración viene 26.2, equivale a 0.262.
+        # La formula legacy usa IVA_RE como multiplicador, no porcentaje bruto.
+        # Si en configuracion viene 26.2, equivale a 0.262.
         if result.get("IVA_RECARGO_EQUIVALENCIA", 0) > 1:
             result["IVA_RECARGO_EQUIVALENCIA_FACTOR"] = result["IVA_RECARGO_EQUIVALENCIA"] / 100
         else:
@@ -6261,10 +6676,10 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         )
 
     def _calculate_supplier_order_in_memory(self, provider: str, values: dict[str, str], items: tuple[OrderItem, ...], raw_lines: list[dict[str, Any]]) -> tuple[tuple[OrderItem, ...], list[dict[str, Any]], dict[str, Any]]:
-        """Calcula el pedido en memoria usando fórmulas legacy de coste_pedido.py.
+        """Calcula el pedido en memoria usando formulas legacy de coste_pedido.py.
 
-        Fórmula general Ekomat/Pascal/Cipta = calcular_coste_unitario_pedido.
-        Fórmula Heimei/Tatamis = calcular_coste_unitario_tatamis_pedido.
+        Formula general Ekomat/Pascal/Cipta = calcular_coste_unitario_pedido.
+        Formula Heimei/Tatamis = calcular_coste_unitario_tatamis_pedido.
         """
         provider_key = str(provider or "").strip().lower()
         is_heimei = provider_key.startswith("hei")
@@ -6276,7 +6691,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         constants = self._current_business_constant_values()
         rent_percent = self._parse_rentabilidad_percent(values.get("Margen de Venta %", values.get("Rentabilidad %")))
 
-        # Conteos para fórmula general. M3 total del camión y productos que cuentan.
+        # Conteos para formula general. M3 total del camion y productos que cuentan.
         total_m3 = sum(self._money_float((raw_lines[i] if i < len(raw_lines) else {}).get("m3_total") or item.m3) for i, item in enumerate(items))
         total_qty = sum(max(0, int(item.quantity or 0)) for item in items)
         cantidad_total_productos = sum(
@@ -6291,7 +6706,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             factura_transporte = self._money_float(values.get("Factura transporte"))
             derechos_aranceles = self._money_float(values.get("Derechos aranceles"))
             if precio_dolares <= 0 or precio_euros <= 0:
-                raise ValueError("Para Heimei debes indicar Precio en Dólares y Precio pagado en Euros antes de calcular.")
+                raise ValueError("Para Heimei debes indicar Precio en Dolares y Precio pagado en Euros antes de calcular.")
             tasa_cambio = round(precio_dolares / precio_euros, 6)
             importe_transporte = factura_transporte + derechos_aranceles
             pc_transporte = round((importe_transporte / precio_euros) * 100, 2) if precio_euros else 0
@@ -6320,9 +6735,9 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             if coste_transporte <= 0:
                 raise ValueError("Indica Coste transporte + IVA antes de calcular este proveedor.")
             if total_m3 <= 0:
-                raise ValueError("El pedido no tiene M3 total válido. Revisa las líneas cargadas.")
+                raise ValueError("El pedido no tiene M3 total valido. Revisa las lineas cargadas.")
             if cantidad_total_productos <= 0:
-                raise ValueError("El pedido no tiene cantidad total válida para descarga. Revisa las líneas con 'Cuenta para descarga'.")
+                raise ValueError("El pedido no tiene cantidad total valida para descarga. Revisa las lineas con 'Cuenta para descarga'.")
             ct_m3 = round(coste_transporte / total_m3, 2) if total_m3 else 0
             cd_prod_iva = round(constants["COSTE_TOTAL_DESCARGA_FUTONES_IVA"] / cantidad_total_productos, 2) if cantidad_total_productos else 0
             calc_inputs = {
@@ -6344,6 +6759,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         total_cost = 0.0
         for index, item in enumerate(items):
             source = dict(raw_lines[index] if index < len(raw_lines) and isinstance(raw_lines[index], dict) else {})
+            source.setdefault("order_item_code", str(item.code or "").strip())
             effective_rent_percent, rentabilidad_source = self._supplier_order_effective_rentabilidad(source, rent_percent)
             price_input_source = self._supplier_order_price_input_source(source, rentabilidad_source)
             qty = max(0, int(item.quantity or 0))
@@ -6364,7 +6780,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             if price_provider <= 0:
                 reasons.append("falta precio proveedor")
             if rotacion_c <= 0:
-                reasons.append("falta rotación C")
+                reasons.append("falta Rotacion C")
             if n_bultos <= 0:
                 reasons.append("faltan bultos/packages")
 
@@ -6505,10 +6921,13 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 "woo_price_item_id": woo_price_trace.get("woo_price_item_id", ""),
                 "woo_price_item_kind": woo_price_trace.get("woo_price_item_kind", ""),
                 "woo_price_parent_id": woo_price_trace.get("woo_price_parent_id", ""),
+                "woo_price_sku": woo_price_trace.get("woo_price_sku", ""),
+                "woo_price_resolution_source": woo_price_trace.get("woo_price_resolution_source", ""),
+                "woo_price_resolution_detail": woo_price_trace.get("woo_price_resolution_detail", ""),
                 "use_global_rentability": rentabilidad_source == "global",
-                "cuenta_para_descarga": "Sí" if self._order_line_counts_for_download(item, source) else "No",
+                "cuenta_para_descarga": "Si" if self._order_line_counts_for_download(item, source) else "No",
                 "cuenta_reparto_descarga": self._order_line_counts_for_download(item, source),
-                "cuenta_pedido": "Sí" if self._order_line_counts_for_download(item, source) else "No",
+                "cuenta_pedido": "Si" if self._order_line_counts_for_download(item, source) else "No",
             }
             if rentabilidad_source == "individual":
                 enriched_source["rentabilidad_individual_percent"] = effective_rent_percent
@@ -6537,13 +6956,13 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         }
 
     def _save_supplier_order_draft_from_calc(self, win: tk.Toplevel, provider: str, order_entries: dict[str, tk.Entry], loaded_order_state: dict[str, Any] | None = None, existing_order: SupplierOrder | None = None) -> None:
-        """Guarda un pedido borrador real desde la ventana de cálculo.
+        """Guarda un pedido borrador real desde la ventana de calculo.
 
-        Este método faltaba en la clase, por eso Tkinter terminaba delegando el
+        Este metodo faltaba en la clase, por eso Tkinter terminaba delegando el
         atributo al root (`self.tk`) y lanzaba `AttributeError`.
         """
         if self._cloud_session is None:
-            messagebox.showwarning("Pedidos", "Inicia sesión en Supabase para guardar pedidos reales.")
+            messagebox.showwarning("Pedidos", "Inicia sesion en Supabase para guardar pedidos reales.")
             return
 
         values: dict[str, str] = {}
@@ -6564,9 +6983,9 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         raw_lines = list(loaded_order_state.get("raw_lines") or [])
         file_type = str(loaded_order_state.get("file_type") or "BORRADOR").upper()
         order_file = str(loaded_order_state.get("file_name") or f"{order_name}.borrador")
-        notes = "Borrador guardado desde UI ERP. Pendiente de cálculo."
+        notes = "Borrador guardado desde UI ERP. Pendiente de calculo."
         if loaded_items:
-            notes = f"Borrador guardado desde UI ERP con {len(loaded_items)} líneas cargadas. Pendiente de cálculo."
+            notes = f"Borrador guardado desde UI ERP con {len(loaded_items)} lineas cargadas. Pendiente de calculo."
 
         item_payloads = []
         for index, item in enumerate(loaded_items):
@@ -6588,7 +7007,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             existing_order_id = str(loaded_order_state.get("order_id") or existing_raw.get("order_id") or "").strip()
             is_calculated = bool(loaded_order_state.get("calculated"))
             has_errors = any(str(item.get("status") or "").lower() in {"error", "critical", "bloqueado"} for item in item_payloads)
-            final_status = "Validación" if has_errors else "Calculado"
+            final_status = "Validacion" if has_errors else "Calculado"
             if existing_order_id:
                 if is_calculated:
                     update_supplier_order_calculation(
@@ -6598,7 +7017,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                         order_name=order_name,
                         order_file=order_file,
                         file_type=file_type,
-                        notes="Pedido calculado desde UI ERP." if final_status == "Calculado" else "Pedido calculado con líneas pendientes de revisión.",
+                        notes="Pedido calculado desde UI ERP." if final_status == "Calculado" else "Pedido calculado con lineas pendientes de revision.",
                         inputs=values,
                         items=item_payloads,
                         status=final_status,
@@ -6635,7 +7054,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                         order_name=order_name,
                         order_file=order_file,
                         file_type=file_type,
-                        notes="Pedido calculado desde UI ERP." if final_status == "Calculado" else "Pedido calculado con líneas pendientes de revisión.",
+                        notes="Pedido calculado desde UI ERP." if final_status == "Calculado" else "Pedido calculado con lineas pendientes de revision.",
                         inputs=values,
                         items=item_payloads,
                         status=final_status,
@@ -6694,7 +7113,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
 
         total_qty is the ordered unit count. excluded_qty is the ordered unit count
         that will not receive the fixed descarga reparto. total_m3 comes from the
-        loaded/calculated line total when available, or from unit M3 × quantity.
+        loaded/calculated line total when available, or from unit M3 x quantity.
         """
         total_qty = 0
         download_qty = 0
@@ -6858,8 +7277,15 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             source = item.raw.get("source_row") if isinstance(getattr(item, "raw", None), dict) and isinstance(item.raw.get("source_row"), dict) else {}
             source_status = str(source.get("ui_status") or source.get("status") or "").strip().lower()
             has_error = bool(missing) or status in {"error", "critical", "bloqueado", "blocked"} or source_status in {"error", "critical", "bloqueado", "blocked"}
-            has_warning = status in {"warning", "validacion", "validación"} or source_status in {"warning", "validacion", "validación"}
+            has_warning = status in {"warning", "validacion", "validacion"} or source_status in {"warning", "validacion", "validacion"}
             tag = "error_row" if has_error else "warning_row" if has_warning else "ok_row"
+            if self._supplier_order_trace_enabled(item.code):
+                print(
+                    f"[SUPPLIER_ORDER_RENDER_TRACE] code={item.code} "
+                    f"precio_proveedor={source.get('precio_proveedor') or source.get('precio_excel') or source.get('precio') or ''} "
+                    f"rotation_c={source.get('rotation_c') or source.get('inventory_rotation_c') or ''} "
+                    f"m3_und={source.get('m3_und') or source.get('inventory_m3') or ''}"
+                )
             iid = tree.insert("", tk.END, values=row, tags=(tag,))
             item_by_iid[iid] = (index, item)
 
@@ -6879,7 +7305,28 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             found = item_by_iid.get(row_id)
             if found is not None:
                 index, item = found
-                self._open_order_item_missing_editor(item, on_save=(lambda updated_item, updated_source, index=index: on_item_update(index, updated_item, updated_source)) if callable(on_item_update) else None)
+                source = self._supplier_order_source(item)
+                if self._supplier_order_trace_enabled(item.code):
+                    print(
+                        f"[SUPPLIER_ORDER_EDITOR_SOURCE_TRACE] code={item.code} "
+                        f"selected_source_keys={','.join(sorted(str(key) for key in source.keys()))} "
+                        f"precio_proveedor={source.get('precio_proveedor') or source.get('precio_excel') or source.get('precio') or ''} "
+                        f"rotation_c={source.get('rotation_c') or source.get('inventory_rotation_c') or ''} "
+                        f"m3_und={source.get('m3_und') or source.get('inventory_m3') or ''}"
+                    )
+                editor_item = self._supplier_order_enrich_item_for_editor(provider, item)
+                if editor_item is not item and callable(on_item_update):
+                    on_item_update(index, editor_item, self._supplier_order_source(editor_item))
+                if self._supplier_order_trace_enabled(editor_item.code):
+                    enriched_source = self._supplier_order_source(editor_item)
+                    print(
+                        f"[SUPPLIER_ORDER_EDITOR_SOURCE_TRACE] code={editor_item.code} "
+                        f"selected_source_keys={','.join(sorted(str(key) for key in enriched_source.keys()))} "
+                        f"precio_proveedor={enriched_source.get('precio_proveedor') or enriched_source.get('precio_excel') or enriched_source.get('precio') or ''} "
+                        f"rotation_c={enriched_source.get('rotation_c') or enriched_source.get('inventory_rotation_c') or ''} "
+                        f"m3_und={enriched_source.get('m3_und') or enriched_source.get('inventory_m3') or ''}"
+                    )
+                self._open_order_item_missing_editor(editor_item, on_save=(lambda updated_item, updated_source, index=index: on_item_update(index, updated_item, updated_source)) if callable(on_item_update) else None)
 
         tree.bind("<Double-1>", on_double_click)
         return frame
@@ -6937,16 +7384,30 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             form.columnconfigure(col, weight=1)
 
         source = item.raw.get("source_row") if isinstance(getattr(item, "raw", None), dict) and isinstance(item.raw.get("source_row"), dict) else {}
+        editor_values = self._supplier_order_editor_initial_fields(item)
+        if self._supplier_order_trace_enabled(item.code):
+            print(
+                f"[SUPPLIER_ORDER_EDITOR_TRACE] code={item.code} "
+                f"field_rotation_c={editor_values.get('Rotacion C')} "
+                f"field_precio_proveedor={editor_values.get('Precio proveedor')} "
+                f"field_m3={editor_values.get('M3/Und.')} field_packages={editor_values.get('Bultos')}"
+            )
+            print(
+                f"[SUPPLIER_ORDER_EDITOR_FIELDS_TRACE] code={item.code} "
+                f"precio_proveedor={editor_values.get('Precio proveedor')} "
+                f"rotation_c={editor_values.get('Rotacion C')} "
+                f"m3_und={editor_values.get('M3/Und.')} packages={editor_values.get('Bultos')}"
+            )
         fields = [
-            ("Referencia", item.code, True),
-            ("Descripcion", item.name, False),
-            ("Unidades", str(item.quantity), False),
-            ("M3/Und.", self._format_optional_decimal(source.get("m3_und") or item.m3, default="") if item.m3 != "Pendiente" else "", False),
-            ("Rotación C", str(source.get("rotacion_c") or source.get("inventory_rotation_c") or source.get("rotation_c") or ""), False),
-            ("Bultos", str(source.get("packages") or source.get("inventory_packages") or "1"), False),
-            ("Precio proveedor", str(source.get("precio_proveedor") or source.get("precio_excel") or source.get("precio") or ""), False),
-            ("Origen precio", self._supplier_order_price_origin_label(source), True),
-            ("Origen P.V.P.", self._supplier_order_pvp_source_label(source), True),
+            ("Referencia", editor_values["Referencia"], True),
+            ("Descripcion", editor_values["Descripcion"], False),
+            ("Unidades", editor_values["Unidades"], False),
+            ("M3/Und.", editor_values["M3/Und."], False),
+            ("Rotacion C", editor_values["Rotacion C"], False),
+            ("Bultos", editor_values["Bultos"], False),
+            ("Precio proveedor", editor_values["Precio proveedor"], False),
+            ("Origen precio", editor_values["Origen precio"], True),
+            ("Origen P.V.P.", editor_values["Origen P.V.P."], True),
         ]
         entries: dict[str, tk.Entry] = {}
         for index, (label, value, readonly) in enumerate(fields):
@@ -6961,6 +7422,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             entries[label] = entry
 
         price_warning = str(source.get("supplier_price_warning") or "").strip()
+        woo_warning = str(source.get("woo_price_error") or "").strip() if str(source.get("pvp_source") or "").strip().lower() == "pending" else ""
         rent_row = 4
         if price_warning:
             tk.Label(
@@ -6975,6 +7437,19 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 pady=8,
             ).grid(row=4, column=0, columnspan=2, sticky="ew", pady=(0, 12))
             rent_row = 5
+        if woo_warning:
+            tk.Label(
+                form,
+                text=woo_warning,
+                bg=AMBER_SOFT,
+                fg=AMBER,
+                wraplength=600,
+                justify=tk.LEFT,
+                anchor=tk.W,
+                padx=10,
+                pady=8,
+            ).grid(row=rent_row, column=0, columnspan=2, sticky="ew", pady=(0, 12))
+            rent_row += 1
 
         calc_inputs = source.get("calculation_inputs") if isinstance(source.get("calculation_inputs"), dict) else {}
         global_rentabilidad = self._money_float(
@@ -7072,7 +7547,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 rent_entry.configure(state=tk.DISABLED if use_global_rentability_var.get() else tk.NORMAL)
             except ValueError:
                 live_update["active"] = False
-                margin_status_var.set("Margen de Venta inválido.")
+                margin_status_var.set("Margen de Venta invalido.")
                 rent_entry.configure(state=tk.NORMAL)
 
         def refresh_from_pvp(*_args: object) -> None:
@@ -7094,7 +7569,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 rent_entry.configure(state=tk.NORMAL)
             except ValueError:
                 live_update["active"] = False
-                margin_status_var.set("P.V.P. inválido.")
+                margin_status_var.set("P.V.P. invalido.")
 
         use_global_rentability_var.trace_add("write", refresh_pvp_preview)
         individual_rentabilidad_var.trace_add("write", refresh_pvp_preview)
@@ -7112,7 +7587,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         cuenta_field.grid(row=rent_row + 1, column=0, columnspan=2, sticky="ew", pady=(0, 12))
         tk.Label(cuenta_field, text="CUENTA PARA DESCARGA", bg=CARD, fg=MUTED, font=("Segoe UI", 8, "bold"), anchor=tk.W).pack(fill=tk.X, pady=(0, 5))
         cuenta_var = tk.StringVar(value=self._order_line_counts_for_download_label(item, source))
-        cuenta_combo = ttk.Combobox(cuenta_field, values=("Sí", "No"), textvariable=cuenta_var, state="readonly", font=("Segoe UI", 10), width=12)
+        cuenta_combo = ttk.Combobox(cuenta_field, values=("Si", "No"), textvariable=cuenta_var, state="readonly", font=("Segoe UI", 10), width=12)
         cuenta_combo.pack(side=tk.LEFT, fill=tk.X, expand=False, ipady=5)
         cuenta_reason = tk.Label(
             cuenta_field,
@@ -7128,8 +7603,8 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
 
         def reset_cuenta_auto() -> None:
             auto = self._order_line_counts_for_download_auto(item.code, item.name, source)
-            cuenta_var.set("Sí" if auto else "No")
-            cuenta_reason.config(text=f"Regla automática aplicada: {'Sí' if auto else 'No'}.")
+            cuenta_var.set("Si" if auto else "No")
+            cuenta_reason.config(text=f"Regla automatica aplicada: {'Si' if auto else 'No'}.")
 
         self._button(cuenta_field, "Regla auto", command=reset_cuenta_auto).pack(side=tk.RIGHT, padx=(10, 0))
 
@@ -7137,9 +7612,9 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             for label, entry in entries.items():
                 value = entry.get().strip() if entry.cget("state") != "readonly" else "readonly"
                 missing = False
-                if label in {"Descripcion", "Unidades", "M3/Und.", "Rotación C", "Bultos", "Precio proveedor"} and not value:
+                if label in {"Descripcion", "Unidades", "M3/Und.", "Rotacion C", "Bultos", "Precio proveedor"} and not value:
                     missing = True
-                if label in {"M3/Und.", "Rotación C", "Bultos"} and value.lower() in {"pendiente", "0", "0.0"}:
+                if label in {"M3/Und.", "Rotacion C", "Bultos"} and value.lower() in {"pendiente", "0", "0.0"}:
                     missing = True
                 entry.configure(highlightbackground=ROSE if missing else LINE, highlightcolor=ROSE if missing else INDIGO, bg=ROSE_SOFT if missing else CARD)
 
@@ -7150,7 +7625,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             desc = entries["Descripcion"].get().strip()
             qty = self._parse_units_value(entries["Unidades"].get())
             m3_unit = self._money_float(entries["M3/Und."].get())
-            rotation_c = self._money_float(entries["Rotación C"].get())
+            rotation_c = self._money_float(entries["Rotacion C"].get())
             packages = int(self._money_float(entries["Bultos"].get()))
             price_provider = self._money_float(entries["Precio proveedor"].get())
             input_source = str(last_price_input_source.get("value") or "margin")
@@ -7174,8 +7649,8 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             except ValueError as exc:
                 messagebox.showwarning("Pedidos", str(exc))
                 return
-            cuenta = cuenta_var.get().strip() or "Sí"
-            cuenta_bool = cuenta == "Sí"
+            cuenta = cuenta_var.get().strip() or "Si"
+            cuenta_bool = cuenta == "Si"
             missing: list[str] = []
             if not desc:
                 missing.append("Descripcion")
@@ -7184,7 +7659,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             if m3_unit <= 0:
                 missing.append("M3/Und.")
             if rotation_c <= 0:
-                missing.append("Rotación C")
+                missing.append("Rotacion C")
             if packages <= 0:
                 missing.append("Bultos")
             if price_provider <= 0:
@@ -7250,8 +7725,8 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 raw={"source_row": updated_source},
             )
 
-            # Usamos el item_id ya resuelto por el enriquecimiento exacto/canónico.
-            # El código visible del pedido puede conservar ceros iniciales.
+            # Usamos el item_id ya resuelto por el enriquecimiento exacto/canonico.
+            # El codigo visible del pedido puede conservar ceros iniciales.
             resolved_inventory_item_id = (
                 updated_source.get("inventory_matched_item_id")
                 or updated_source.get("supplier_price_item_id")
@@ -7268,7 +7743,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                             "packages": packages,
                             "primary_supplier_price": price_provider,
                         },
-                        notes="Datos completados desde editor de línea de Pedido. WooCommerce no fue tocado.",
+                        notes="Datos completados desde editor de linea de Pedido. WooCommerce no fue tocado.",
                     )
                     updated_source["inventory_update_status"] = "OK"
                     updated_source["inventory_update_error"] = ""
@@ -7401,7 +7876,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             ]
         return [
             ("Coste transporte + IVA", self._format_eur(calc_inputs.get("coste_transporte_iva")) if calc_inputs else "Pendiente", "Info"),
-            ("M3 total camión", self._format_optional_decimal(calc_inputs.get("m3_total_camion"), default="Pendiente") if calc_inputs else "Pendiente", "Info"),
+            ("M3 total camion", self._format_optional_decimal(calc_inputs.get("m3_total_camion"), default="Pendiente") if calc_inputs else "Pendiente", "Info"),
             ("Coste transporte M3", self._format_eur(calc_inputs.get("ct_m3")) if calc_inputs else "Pendiente", "Info"),
             ("Descarga por producto", self._format_eur(calc_inputs.get("cd_prod_iva")) if calc_inputs else "Pendiente", "Info"),
             ("Coste total pedido", order.total_cost, "OK" if order.total_cost != "Bloqueado" else "Error"),
@@ -7409,16 +7884,16 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
 
 
     def _cancel_supplier_order_from_ui(self, order: SupplierOrder) -> None:
-        """Cancela lógicamente un pedido desde la UI ERP."""
+        """Cancela logicamente un pedido desde la UI ERP."""
         if self._cloud_session is None:
-            messagebox.showwarning("Pedidos", "Inicia sesión en Supabase para borrar/cancelar pedidos.")
+            messagebox.showwarning("Pedidos", "Inicia sesion en Supabase para borrar/cancelar pedidos.")
             return
         raw = order.raw if isinstance(getattr(order, "raw", None), dict) else {}
         order_id = str(raw.get("order_id") or raw.get("id") or "").strip()
         if not order_id:
             messagebox.showwarning(
                 "Pedidos",
-                "No se encontró el ID real del pedido en Supabase. No se usará el nombre visual para borrar.",
+                "No se encontro el ID real del pedido en Supabase. No se usara el nombre visual para borrar.",
             )
             return
         status = str(order.status or "").strip().lower()
@@ -7427,7 +7902,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             return
         if not messagebox.askyesno(
             "Borrar pedido",
-            f"Se cancelará el pedido '{self._order_display_name(order)}'.\n\nNo se borrará histórico ni logs.\n\n¿Continuar?",
+            f"Se cancelara el pedido '{self._order_display_name(order)}'.\n\nNo se borrara historico ni logs.\n\nContinuar",
         ):
             return
         try:
@@ -7443,7 +7918,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         ]
         self._selected_supplier_order = self._supplier_orders[0] if self._supplier_orders else None
         self._orders_loaded_once = False
-        messagebox.showinfo("Pedido cancelado", "El pedido se quitó de la bandeja.")
+        messagebox.showinfo("Pedido cancelado", "El pedido se quito de la bandeja.")
         self._show_view("calcular")
 
     def _open_order_detail_window(self, order: SupplierOrder) -> None:
@@ -7486,7 +7961,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         return str(raw.get("order_id") or raw.get("id") or "").strip()
 
     def _safe_sheet_name(self, value: str) -> str:
-        clean = re.sub(r"[:\\/?*\[\]]", "_", str(value or "Sheet")).strip() or "Sheet"
+        clean = re.sub(r"[:\\/*\[\]]", "_", str(value or "Sheet")).strip() or "Sheet"
         return clean[:31]
 
     def _autosize_worksheet(self, ws, *, min_width: int = 10, max_width: int = 42) -> None:
@@ -7507,7 +7982,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         try:
             if value in (None, ""):
                 return None
-            return float(str(value).replace("€", "").replace("%", "").replace(",", ".").strip())
+            return float(str(value).replace("EUR", "").replace("%", "").replace(",", ".").strip())
         except Exception:
             return value
 
@@ -7535,7 +8010,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
 
         for column in money_cols:
             for row in range(2, ws.max_row + 1):
-                ws.cell(row=row, column=column).number_format = '#,##0.00 €'
+                ws.cell(row=row, column=column).number_format = '#,##0.00 EUR'
 
         for column in dollar_cols:
             for row in range(2, ws.max_row + 1):
@@ -7593,19 +8068,19 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         items: tuple[OrderItem, ...] | None = None,
         path: str | None = None,
     ) -> None:
-        """Exporta un pedido calculado con formato visual y auditoría completa."""
+        """Exporta un pedido calculado con formato visual y auditoria completa."""
         provider_name = provider or (order.provider if order else "Proveedor")
         order_name = self._order_display_name(order) if order else str((values or {}).get("Nombre del pedido") or "Pedido calculado")
         values = values or {}
         items = items if items is not None else tuple(order.items if order else tuple())
         if not items:
-            messagebox.showinfo("Exportar pedido", "No hay líneas calculadas para exportar.")
+            messagebox.showinfo("Exportar pedido", "No hay lineas calculadas para exportar.")
             return
 
         if not path:
             default_name = re.sub(r"[^A-Za-z0-9_-]+", "_", f"pedido_auditoria_{order_name}")[:80] + ".xlsx"
             path = filedialog.asksaveasfilename(
-                title="Exportar auditoría de pedido",
+                title="Exportar auditoria de pedido",
                 defaultextension=".xlsx",
                 filetypes=[("Excel", "*.xlsx"), ("Todos los archivos", "*.*")],
                 initialfile=default_name,
@@ -7652,18 +8127,18 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         self._make_report_title(
             ws_summary,
             f"Pedido {order_name}",
-            f"Proveedor: {provider_name} | Auditoría de cálculo FutonHUB",
+            f"Proveedor: {provider_name} | Auditoria de calculo FutonHUB",
             last_col=8,
         )
 
         self._write_kpi_card(ws_summary, 4, 1, "Estado", order.status if order else "Calculado", fill="DCFCE7" if pending_count == 0 else "FEF3C7")
-        self._write_kpi_card(ws_summary, 4, 2, "Líneas", len(items), fill="E0F2FE")
+        self._write_kpi_card(ws_summary, 4, 2, "Lineas", len(items), fill="E0F2FE")
         self._write_kpi_card(ws_summary, 4, 3, "Unidades", total_qty, fill="EEF2FF")
         self._write_kpi_card(ws_summary, 4, 4, "Coste total", total_line_cost, fill="ECFDF5")
         self._write_kpi_card(ws_summary, 4, 5, "M3 total", visible_metrics.get("total_m3", 0), fill="E0F2FE")
         self._write_kpi_card(ws_summary, 4, 6, "No descarga", visible_metrics.get("excluded_qty", 0), fill="FEF3C7" if visible_metrics.get("excluded_qty", 0) else "DCFCE7")
         self._write_kpi_card(ws_summary, 4, 7, "Pendientes", pending_count, fill="FEE2E2" if pending_count else "DCFCE7")
-        self._write_kpi_card(ws_summary, 4, 8, "Fórmula", formula_name or "-", fill="F1F5F9")
+        self._write_kpi_card(ws_summary, 4, 8, "Formula", formula_name or "-", fill="F1F5F9")
 
         ws_summary.cell(row=8, column=1, value="Resumen general")
         ws_summary.cell(row=8, column=1).font = Font(size=14, bold=True, color="0F172A")
@@ -7673,7 +8148,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             ("Proveedor", provider_name),
             ("Fecha", order.date if order else values.get("Fecha", "")),
             ("Estado", order.status if order else ""),
-            ("Total líneas", len(items)),
+            ("Total lineas", len(items)),
             ("Total unidades", total_qty),
             ("Unidades que cuentan para descarga", visible_metrics.get("download_qty", 0)),
             ("Unidades que NO cuentan para descarga", visible_metrics.get("excluded_qty", 0)),
@@ -7718,7 +8193,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                     bottom=Side(style="thin", color="CBD5E1"),
                 )
         for cell in [ws_summary.cell(4, 4), ws_summary.cell(5, 4), ws_summary.cell(9, 2), ws_summary.cell(16, 2)]:
-            cell.number_format = '#,##0.00 €'
+            cell.number_format = '#,##0.00 EUR'
 
         # Constantes
         ws_const = wb.create_sheet("Constantes usadas")
@@ -7730,29 +8205,29 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         for row in range(2, ws_const.max_row + 1):
             ws_const.cell(row=row, column=2).number_format = '0.000000'
 
-        # Líneas calculadas
-        ws_lines = wb.create_sheet("Líneas calculadas")
+        # Lineas calculadas
+        ws_lines = wb.create_sheet("Lineas calculadas")
         headers = [
             "ID",
             "Nombre",
             "Cantidad",
-            "Coste Final ArtÃ­culo",
+            "Coste Final Articulo",
             "Precio ponderado lote",
             "P.V.P.",
             "Margen de Venta %",
             "Origen P.V.P.",
             "M3 unidad",
-            "M3 total línea",
+            "M3 total linea",
             "Precio proveedor",
             "Precio en Dolares",
             "Precio en Euros",
-            "Precio artículo EUR",
+            "Precio articulo EUR",
             "Tasa cambio",
             "% transporte",
             "% descarga",
             "% varios",
-            "% manipulación",
-            "% financiación",
+            "% manipulacion",
+            "% financiacion",
             "Transporte ref / Factura",
             "Aranceles / Descarga ref",
             "IVA + RE",
@@ -7767,7 +8242,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         ]
         ws_lines.append(headers)
 
-        ws_detail = wb.create_sheet("Detalle fórmula")
+        ws_detail = wb.create_sheet("Detalle formula")
         ws_detail.append(("ID", "Nombre", "Grupo", "Campo", "Valor"))
 
         for item in items:
@@ -7815,7 +8290,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                     item.status,
                     ", ".join(str(reason) for reason in reasons) if isinstance(reasons, list) else str(reasons or ""),
                     self._supplier_order_price_origin_label(source),
-                    f"{source.get('supplier_price_matched_by') or ''} → {source.get('supplier_price_item_id') or ''}",
+                    f"{source.get('supplier_price_matched_by') or ''}  {source.get('supplier_price_item_id') or ''}",
                 ]
             )
 
@@ -7842,7 +8317,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         ws_lines.column_dimensions["AD"].width = 28
         ws_lines.column_dimensions["AE"].width = 24
 
-        # Totales al final de líneas
+        # Totales al final de lineas
         total_row = ws_lines.max_row + 2
         ws_lines.cell(row=total_row, column=4, value="TOTALES")
         ws_lines.cell(row=total_row, column=5, value=avg_unit_cost)
@@ -7858,8 +8333,8 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 top=Side(style="thin", color="CBD5E1"),
                 bottom=Side(style="thin", color="CBD5E1"),
             )
-        ws_lines.cell(row=total_row, column=22).number_format = '#,##0.00 €'
-        ws_lines.cell(row=total_row, column=26).number_format = '#,##0.00 €'
+        ws_lines.cell(row=total_row, column=22).number_format = '#,##0.00 EUR'
+        ws_lines.cell(row=total_row, column=26).number_format = '#,##0.00 EUR'
 
         # Resaltar estados
         red_fill = PatternFill("solid", fgColor="FEE2E2")
@@ -7888,19 +8363,19 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             ws.sheet_view.showGridLines = False
 
         wb.save(path)
-        messagebox.showinfo("Exportar pedido", f"Auditoría exportada correctamente:\n{path}")
+        messagebox.showinfo("Exportar pedido", f"Auditoria exportada correctamente:\n{path}")
 
     def _open_receive_modal(self, order: SupplierOrder) -> None:
         if self._cloud_session is None:
-            messagebox.showwarning("Pedidos", "Inicia sesión en Supabase para recibir pedidos.")
+            messagebox.showwarning("Pedidos", "Inicia sesion en Supabase para recibir pedidos.")
             return
         actual_order_id = self._supplier_order_actual_id(order) or str(order.order_id or "")
         if not actual_order_id:
-            messagebox.showerror("Recepción de pedido", "No se pudo determinar el ID real del pedido.")
+            messagebox.showerror("Recepcion de pedido", "No se pudo determinar el ID real del pedido.")
             return
 
         win = tk.Toplevel(self)
-        win.title("Recepción de pedido")
+        win.title("Recepcion de pedido")
         win.configure(bg=BG)
         win.transient(self)
         win.grab_set()
@@ -7911,8 +8386,8 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         header = tk.Frame(win, bg=CARD, highlightbackground=LINE, highlightthickness=1)
         header.grid(row=0, column=0, sticky="ew", padx=18, pady=(18, 0))
         header.columnconfigure(0, weight=1)
-        tk.Label(header, text="Recepción de pedido", bg=CARD, fg=TEXT, font=("Segoe UI", 16, "bold")).grid(row=0, column=0, sticky="w", padx=18, pady=(16, 2))
-        tk.Label(header, text=f"{order.order_id} · {order.provider} · stock interno Supabase", bg=CARD, fg=MUTED).grid(row=1, column=0, sticky="w", padx=18, pady=(0, 16))
+        tk.Label(header, text="Recepcion de pedido", bg=CARD, fg=TEXT, font=("Segoe UI", 16, "bold")).grid(row=0, column=0, sticky="w", padx=18, pady=(16, 2))
+        tk.Label(header, text=f"{order.order_id} - {order.provider} - stock interno Supabase", bg=CARD, fg=MUTED).grid(row=1, column=0, sticky="w", padx=18, pady=(0, 16))
         self._button(header, "Cerrar", command=win.destroy).grid(row=0, column=1, rowspan=2, padx=18, pady=16)
 
         body = tk.Frame(win, bg=CARD, highlightbackground=LINE, highlightthickness=1)
@@ -7937,8 +8412,8 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         controls.columnconfigure(5, weight=1)
 
         tk.Label(controls, text="Destino", bg=CARD, fg=MUTED, font=("Segoe UI", 8, "bold")).grid(row=0, column=0, sticky="w")
-        dest_combo = ttk.Combobox(controls, values=["Almacén", "Tienda"], state="readonly", width=14)
-        dest_combo.set("Almacén")
+        dest_combo = ttk.Combobox(controls, values=["Almacen", "Tienda"], state="readonly", width=14)
+        dest_combo.set("Almacen")
         dest_combo.grid(row=0, column=1, sticky="w", padx=(8, 18))
 
         mode_var = tk.StringVar(value="Pendiente")
@@ -8048,7 +8523,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                     messagebox.showerror("Cantidad", "La cantidad recibida no puede ser negativa.")
                     return
                 if value > data["pending"]:
-                    if not messagebox.askyesno("Cantidad superior", "La cantidad supera lo pendiente. ¿Quieres continuar?"):
+                    if not messagebox.askyesno("Cantidad superior", "La cantidad supera lo pendiente. Quieres continuar"):
                         return
                 data["quantity_received_now"] = value
                 repaint()
@@ -8065,7 +8540,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         footer.grid(row=2, column=0, sticky="ew", padx=18, pady=(0, 18))
         footer.columnconfigure(0, weight=1)
 
-        status_var = tk.StringVar(value="Doble click sobre una línea para cambiar la cantidad recibida.")
+        status_var = tk.StringVar(value="Doble click sobre una linea para cambiar la cantidad recibida.")
         tk.Label(footer, textvariable=status_var, bg=BG, fg=MUTED, anchor=tk.W).grid(row=0, column=0, sticky="ew")
 
         def build_payload() -> list[dict[str, Any]]:
@@ -8092,31 +8567,31 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                     notes=note_var.get().strip(),
                 )
             except Exception as exc:
-                messagebox.showerror("Preview recepción", str(exc))
+                messagebox.showerror("Preview recepcion", str(exc))
                 return None
             if result.get("errors"):
-                messagebox.showerror("Preview recepción", "\n".join(str(e) for e in result.get("errors", [])))
+                messagebox.showerror("Preview recepcion", "\n".join(str(e) for e in result.get("errors", [])))
                 return None
             lines = result.get("lines") or []
             msg = [
-                "PREVIEW RECEPCIÓN",
+                "PREVIEW RECEPCION",
                 "",
                 f"Destino: {dest_combo.get()}",
-                f"Líneas a recibir: {len(lines)}",
+                f"Lineas a recibir: {len(lines)}",
                 f"Unidades a recibir: {result.get('total_receive')}",
                 f"Nuevo estado: {result.get('new_status')}",
                 "",
             ]
             for line in lines[:12]:
                 msg.append(
-                    f"{line.get('item_code')} · {line.get('item_name')}: "
+                    f"{line.get('item_code')} - {line.get('item_name')}: "
                     f"+{line.get('quantity_received_now'):g} "
-                    f"Stock tienda {line.get('store_stock_before'):g}→{line.get('store_stock_after'):g} · "
-                    f"almacén {line.get('warehouse_stock_before'):g}→{line.get('warehouse_stock_after'):g}"
+                    f"Stock tienda {line.get('store_stock_before'):g}{line.get('store_stock_after'):g} - "
+                    f"almacen {line.get('warehouse_stock_before'):g}{line.get('warehouse_stock_after'):g}"
                 )
             if len(lines) > 12:
-                msg.append(f"... y {len(lines) - 12} líneas más")
-            messagebox.showinfo("Preview recepción", "\n".join(msg))
+                msg.append(f"... y {len(lines) - 12} lineas mas")
+            messagebox.showinfo("Preview recepcion", "\n".join(msg))
             return result
 
         def confirm_action() -> None:
@@ -8124,8 +8599,8 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             if not preview_result:
                 return
             if not messagebox.askyesno(
-                "Confirmar recepción",
-                "Se actualizará stock interno en Supabase y el estado del pedido.\n\nNo toca WooCommerce ni Hexa.\n¿Continuar?",
+                "Confirmar recepcion",
+                "Se actualizara stock interno en Supabase y el estado del pedido.\n\nNo toca WooCommerce ni Hexa.\nContinuar",
             ):
                 return
             try:
@@ -8137,15 +8612,15 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                     notes=note_var.get().strip(),
                 )
             except Exception as exc:
-                messagebox.showerror("Recepción de pedido", f"No se pudo aplicar la recepción.\n\n{exc}")
+                messagebox.showerror("Recepcion de pedido", f"No se pudo aplicar la recepcion.\n\n{exc}")
                 return
-            messagebox.showinfo("Recepción aplicada", f"Pedido recibido.\nOperation ID: {result.get('operation_id')}\nEstado: {result.get('order', {}).get('status')}")
+            messagebox.showinfo("Recepcion aplicada", f"Pedido recibido.\nOperation ID: {result.get('operation_id')}\nEstado: {result.get('order', {}).get('status')}")
             win.destroy()
             self._refresh_supplier_orders()
 
         self._button(footer, "Cancelar", command=win.destroy).grid(row=0, column=1, padx=(8, 0), sticky="e")
         self._button(footer, "Preview", command=preview_action).grid(row=0, column=2, padx=(8, 0), sticky="e")
-        self._button(footer, "Confirmar recepción", primary=True, command=confirm_action).grid(row=0, column=3, padx=(8, 0), sticky="e")
+        self._button(footer, "Confirmar recepcion", primary=True, command=confirm_action).grid(row=0, column=3, padx=(8, 0), sticky="e")
 
 
     def _open_delete_order_confirmation(self, order: SupplierOrder) -> None:
@@ -8198,7 +8673,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 return False
             if link_filter == "Safe to apply later" and not row.get("safe_to_apply_later"):
                 return False
-            if link_filter == "Pack/composición" and not ((row.get("classification_after") or {}).get("is_pack") or row.get("classification_kind") == "pack_or_composition"):
+            if link_filter == "Pack/composicion" and not ((row.get("classification_after") or {}).get("is_pack") or row.get("classification_kind") == "pack_or_composition"):
                 return False
             if link_filter == "Medida pendiente" and (row.get("classification_after") or {}).get("size"):
                 return False
@@ -8211,16 +8686,16 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
     def _build_woocommerce(self, parent: tk.Frame) -> None:
         self._page_header(
             parent,
-            "Gestión",
+            "Gestion",
             "WooCommerce",
-            "Lectura, autoclasificación y comparativa contra Supabase. Preview sin escrituras.",
+            "Lectura, autoclasificacion y comparativa contra Supabase. Preview sin escrituras.",
         )
 
         actions = tk.Frame(parent, bg=BG)
         actions.pack(fill=tk.X, pady=(0, 14))
         self._button(actions, "Sincronizar + Autoclasificar", primary=True, command=lambda: self._refresh_woo_sync_preview(parent)).pack(side=tk.LEFT, padx=(0, 8))
         self._button(actions, "Exportar JSON preview", command=self._export_woo_sync_preview_json).pack(side=tk.LEFT, padx=(0, 8))
-        self._button(actions, "Preview publicación precio", command=self._open_woo_publish_preview_modal).pack(side=tk.LEFT)
+        self._button(actions, "Preview publicacion precio", command=self._open_woo_publish_preview_modal).pack(side=tk.LEFT)
 
         if self._woo_sync_error:
             tk.Label(
@@ -8248,7 +8723,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         else:
             tk.Label(
                 parent,
-                text="v53: preview seguro Woo ↔ Supabase. Incluye revisión, edición de clasificación, filtros y enlace manual protegido. WooCommerce no se toca.",
+                text="v53: preview seguro Woo  Supabase. Incluye revision, edicion de clasificacion, filtros y enlace manual protegido. WooCommerce no se toca.",
                 bg=BLUE_SOFT,
                 fg=BLUE,
                 anchor=tk.W,
@@ -8275,7 +8750,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         filters = self._card(parent)
         filters.pack(fill=tk.X, pady=(0, 14))
         filters.columnconfigure(1, weight=1)
-        tk.Label(filters, text="Filtros de revisión", bg=CARD, fg=TEXT, font=("Segoe UI", 11, "bold")).grid(row=0, column=0, sticky="w", padx=14, pady=(12, 6), columnspan=8)
+        tk.Label(filters, text="Filtros de revision", bg=CARD, fg=TEXT, font=("Segoe UI", 11, "bold")).grid(row=0, column=0, sticky="w", padx=14, pady=(12, 6), columnspan=8)
 
         filter_text_var = tk.StringVar(value=getattr(self, "_woo_sync_filter_text", ""))
         review_var = tk.StringVar(value=getattr(self, "_woo_sync_filter_review", "Todos"))
@@ -8304,18 +8779,18 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         search_entry.grid(row=1, column=1, sticky="ew", padx=(0, 10), pady=(0, 12), ipady=5)
         search_entry.bind("<Return>", lambda _event: apply_filters())
 
-        tk.Label(filters, text="Revisión", bg=CARD, fg=MUTED, font=("Segoe UI", 9, "bold")).grid(row=1, column=2, sticky="w", padx=(0, 6), pady=(0, 12))
+        tk.Label(filters, text="Revision", bg=CARD, fg=MUTED, font=("Segoe UI", 9, "bold")).grid(row=1, column=2, sticky="w", padx=(0, 6), pady=(0, 12))
         ttk.Combobox(filters, textvariable=review_var, values=["Todos", "Solo revisar", "Solo OK"], state="readonly", width=14).grid(row=1, column=3, sticky="ew", padx=(0, 10), pady=(0, 12), ipady=3)
         tk.Label(filters, text="Estado", bg=CARD, fg=MUTED, font=("Segoe UI", 9, "bold")).grid(row=1, column=4, sticky="w", padx=(0, 6), pady=(0, 12))
         ttk.Combobox(filters, textvariable=status_var, values=["Todos", "OK", "Info", "Warning", "Error", "Critical"], state="readonly", width=12).grid(row=1, column=5, sticky="ew", padx=(0, 10), pady=(0, 12), ipady=3)
         tk.Label(filters, text="Caso", bg=CARD, fg=MUTED, font=("Segoe UI", 9, "bold")).grid(row=1, column=6, sticky="w", padx=(0, 6), pady=(0, 12))
-        ttk.Combobox(filters, textvariable=link_var, values=["Todos", "Candidato enlace manual", "Sin enlace Supabase", "Safe to apply later", "Pack/composición", "Medida pendiente", "Material pendiente"], state="readonly", width=23).grid(row=1, column=7, sticky="ew", padx=(0, 10), pady=(0, 12), ipady=3)
+        ttk.Combobox(filters, textvariable=link_var, values=["Todos", "Candidato enlace manual", "Sin enlace Supabase", "Safe to apply later", "Pack/composicion", "Medida pendiente", "Material pendiente"], state="readonly", width=23).grid(row=1, column=7, sticky="ew", padx=(0, 10), pady=(0, 12), ipady=3)
         self._button(filters, "Aplicar", primary=True, command=apply_filters).grid(row=1, column=8, sticky="ew", padx=(0, 8), pady=(0, 12))
         self._button(filters, "Limpiar", command=clear_filters).grid(row=1, column=9, sticky="ew", padx=(0, 14), pady=(0, 12))
 
         visible_count = len(self._filtered_woo_sync_rows())
         total_count = len(self._woo_sync_rows or [])
-        tk.Label(filters, text=f"Mostrando {visible_count} de {total_count} líneas", bg=CARD, fg=MUTED, font=("Segoe UI", 9)).grid(row=2, column=0, columnspan=10, sticky="w", padx=14, pady=(0, 12))
+        tk.Label(filters, text=f"Mostrando {visible_count} de {total_count} lineas", bg=CARD, fg=MUTED, font=("Segoe UI", 9)).grid(row=2, column=0, columnspan=10, sticky="w", padx=14, pady=(0, 12))
 
         body = tk.Frame(parent, bg=BG)
         body.pack(fill=tk.BOTH, expand=True)
@@ -8331,7 +8806,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         table_head = tk.Frame(table_card, bg=CARD)
         table_head.grid(row=0, column=0, sticky="ew", padx=18, pady=(16, 10))
         table_head.columnconfigure(0, weight=1)
-        tk.Label(table_head, text="Preview Woo ↔ Supabase", bg=CARD, fg=TEXT, font=("Segoe UI", 14, "bold")).grid(row=0, column=0, sticky="w")
+        tk.Label(table_head, text="Preview Woo  Supabase", bg=CARD, fg=TEXT, font=("Segoe UI", 14, "bold")).grid(row=0, column=0, sticky="w")
         self._status_chip(table_head, "Preview sin escrituras", "Info").grid(row=0, column=1, sticky="e")
 
         table_frame = tk.Frame(table_card, bg=CARD)
@@ -8339,11 +8814,11 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         table_frame.columnconfigure(0, weight=1)
         table_frame.rowconfigure(0, weight=1)
 
-        columns = ["Estado", "Revisión", "Woo ID", "Tipo", "SKU", "Nombre Woo", "Item Supabase", "Familia", "Medida", "Materiales", "Enlace manual", "Acción propuesta"]
+        columns = ["Estado", "Revision", "Woo ID", "Tipo", "SKU", "Nombre Woo", "Item Supabase", "Familia", "Medida", "Materiales", "Enlace manual", "Accion propuesta"]
         tree = ttk.Treeview(table_frame, columns=columns, show="headings", height=14)
         widths = {
             "Estado": 90,
-            "Revisión": 110,
+            "Revision": 110,
             "Woo ID": 90,
             "Tipo": 90,
             "SKU": 120,
@@ -8353,11 +8828,11 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             "Medida": 110,
             "Materiales": 140,
             "Enlace manual": 125,
-            "Acción propuesta": 190,
+            "Accion propuesta": 190,
         }
         for column in columns:
             tree.heading(column, text=column, anchor=tk.CENTER)
-            tree.column(column, width=widths[column], anchor=tk.CENTER if column not in {"Nombre Woo", "Acción propuesta"} else tk.W, stretch=False)
+            tree.column(column, width=widths[column], anchor=tk.CENTER if column not in {"Nombre Woo", "Accion propuesta"} else tk.W, stretch=False)
 
         for status, color in [("OK", "#F0FDF4"), ("Info", "#EFF6FF"), ("Warning", "#FFFBEB"), ("Error", "#FFF7ED"), ("Critical", "#FFF1F2")]:
             tree.tag_configure(status, background=color)
@@ -8374,7 +8849,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             issues = row.get("issues") or []
             action = "Sin cambios"
             if row.get("proposed_supabase_update"):
-                action = "Rellenar campos vacíos en Supabase"
+                action = "Rellenar campos vacios en Supabase"
             elif not supa:
                 action = "Revisar / crear enlace"
             elif issues:
@@ -8425,7 +8900,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
 
     def _refresh_woo_sync_preview(self, parent: tk.Frame) -> None:
         if self._cloud_session is None:
-            messagebox.showwarning("WooCommerce", "Inicia sesión en Supabase para comparar Woo con inventario.")
+            messagebox.showwarning("WooCommerce", "Inicia sesion en Supabase para comparar Woo con inventario.")
             return
         self._woo_sync_loading = True
         self._woo_sync_error = ""
@@ -8465,22 +8940,22 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         cls = row.get("classification_after") or {}
 
         win = tk.Toplevel(self)
-        win.title("Editar clasificación preview")
+        win.title("Editar clasificacion preview")
         win.configure(bg=BG)
         win.transient(self)
         win.grab_set()
         center_window(win, 620, 590)
         win.columnconfigure(0, weight=1)
 
-        tk.Label(win, text="Editar clasificación preview", bg=BG, fg=TEXT, font=("Segoe UI", 17, "bold")).grid(row=0, column=0, sticky="w", padx=18, pady=(18, 4))
+        tk.Label(win, text="Editar clasificacion preview", bg=BG, fg=TEXT, font=("Segoe UI", 17, "bold")).grid(row=0, column=0, sticky="w", padx=18, pady=(18, 4))
         tk.Label(win, text=str(woo.get("name") or "-"), bg=BG, fg=MUTED, wraplength=560, justify=tk.LEFT).grid(row=1, column=0, sticky="ew", padx=18, pady=(0, 14))
 
         form = self._card(win)
         form.grid(row=2, column=0, sticky="ew", padx=18, pady=(0, 12))
         form.columnconfigure(1, weight=1)
 
-        family_values = ["Futones", "Tatamis", "Complementos", "Sofás Cama", "Camas Japonesas", "Ofertas / Packs", "Otros / Sin clasificar"]
-        subgroup_values = ["Futón", "Tatami", "Funda futón", "Cojines", "Topper", "Mesita", "Sofá cama", "Cama japonesa", "Base tatami", "Pack futón + funda", "Pack futón + cojines", "Pack futón + funda + cojines", "Pack tatami + futón", "Pack", "Complemento", ""]
+        family_values = ["Futones", "Tatamis", "Complementos", "Sofas Cama", "Camas Japonesas", "Ofertas / Packs", "Otros / Sin clasificar"]
+        subgroup_values = ["Futon", "Tatami", "Funda futon", "Cojines", "Topper", "Mesita", "Sofa cama", "Cama japonesa", "Base tatami", "Pack futon + funda", "Pack futon + cojines", "Pack futon + funda + cojines", "Pack tatami + futon", "Pack", "Complemento", ""]
         status_values = ["Normal", "Outlet", "Oferta"]
         confidence_values = ["Alta", "Media", "Baja"]
         kind_values = ["single_item", "pack_or_composition"]
@@ -8508,7 +8983,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         add_combo(4, "Estado comercial", "commercial_status", status_values)
         add_combo(5, "Es pack", "is_pack", ["0", "1"])
         add_combo(6, "Confianza", "confidence", confidence_values)
-        add_combo(7, "Tipo clasificación", "classification_kind", kind_values)
+        add_combo(7, "Tipo clasificacion", "classification_kind", kind_values)
 
         tk.Label(
             win,
@@ -8530,7 +9005,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             try:
                 updated = apply_manual_classification_edit(row, edited)
             except Exception as exc:
-                messagebox.showerror("Editar clasificación", f"No se pudo aplicar el ajuste.\n\n{exc}")
+                messagebox.showerror("Editar clasificacion", f"No se pudo aplicar el ajuste.\n\n{exc}")
                 return
             target_woo_id = (row.get("woo") or {}).get("woo_id")
             target_parent_id = (row.get("woo") or {}).get("parent_woo_id")
@@ -8562,7 +9037,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
 
     def _open_woo_manual_link_modal(self, row: dict[str, Any]) -> None:
         if self._cloud_session is None:
-            messagebox.showwarning("WooCommerce", "Inicia sesión en Supabase para enlazar manualmente.")
+            messagebox.showwarning("WooCommerce", "Inicia sesion en Supabase para enlazar manualmente.")
             return
         manual_link = row.get("manual_link_candidate") or {}
         if not manual_link.get("available"):
@@ -8570,7 +9045,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             return
         woo = row.get("woo") or {}
         win = tk.Toplevel(self)
-        win.title("Enlace manual Woo ↔ Supabase")
+        win.title("Enlace manual Woo  Supabase")
         win.configure(bg=BG)
         win.transient(self)
         win.grab_set()
@@ -8578,8 +9053,8 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         win.columnconfigure(0, weight=1)
         win.rowconfigure(3, weight=1)
 
-        tk.Label(win, text="Enlace manual Woo ↔ Supabase", bg=BG, fg=TEXT, font=("Segoe UI", 17, "bold")).grid(row=0, column=0, sticky="w", padx=18, pady=(18, 4))
-        tk.Label(win, text=f"Woo {woo.get('woo_id')} · SKU {woo.get('sku') or '-'} · {woo.get('name') or '-'}", bg=BG, fg=MUTED, wraplength=900, justify=tk.LEFT).grid(row=1, column=0, sticky="ew", padx=18, pady=(0, 12))
+        tk.Label(win, text="Enlace manual Woo  Supabase", bg=BG, fg=TEXT, font=("Segoe UI", 17, "bold")).grid(row=0, column=0, sticky="w", padx=18, pady=(18, 4))
+        tk.Label(win, text=f"Woo {woo.get('woo_id')} - SKU {woo.get('sku') or '-'} - {woo.get('name') or '-'}", bg=BG, fg=MUTED, wraplength=900, justify=tk.LEFT).grid(row=1, column=0, sticky="ew", padx=18, pady=(0, 12))
 
         search_card = self._card(win)
         search_card.grid(row=2, column=0, sticky="ew", padx=18, pady=(0, 12))
@@ -8684,7 +9159,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             token = simpledialog.askstring("Confirmar enlace", format_manual_woo_link_preview(preview) + "\n\nEscribe ENLAZAR para aplicar:", parent=win)
             if str(token or "").strip().upper() != "ENLAZAR":
                 return
-            overlay = self._show_working_overlay("Enlazando Woo ↔ Supabase", "Aplicando enlace manual con snapshot y audit_log. WooCommerce no se toca.")
+            overlay = self._show_working_overlay("Enlazando Woo  Supabase", "Aplicando enlace manual con snapshot y audit_log. WooCommerce no se toca.")
             try:
                 result = apply_manual_woo_link(self._cloud_session, row, item_id, load_settings())
             except Exception as exc:
@@ -8754,7 +9229,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
 
         if not row:
             tk.Label(detail, text="Detalle", bg=CARD, fg=TEXT, font=("Segoe UI", 14, "bold")).pack(anchor=tk.W, padx=18, pady=(16, 8))
-            self._status_row(detail, "Sin selección", "Ejecuta la sincronización y selecciona una línea.", "Info").pack(fill=tk.X, padx=18, pady=8)
+            self._status_row(detail, "Sin seleccion", "Ejecuta la sincronizacion y selecciona una linea.", "Info").pack(fill=tk.X, padx=18, pady=8)
             return
 
         woo = row.get("woo") or {}
@@ -8771,7 +9246,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         self._status_chip(top, status, status).grid(row=0, column=1, sticky="e")
 
         tk.Label(detail, text=str(woo.get("name") or "-"), bg=CARD, fg=TEXT, font=("Segoe UI", 15, "bold"), wraplength=330, justify=tk.LEFT).pack(anchor=tk.W, padx=18, pady=(0, 2))
-        tk.Label(detail, text=f"Woo {woo.get('woo_id')} · SKU {woo.get('sku') or '-'} · {woo.get('item_kind')}", bg=CARD, fg=MUTED).pack(anchor=tk.W, padx=18, pady=(0, 12))
+        tk.Label(detail, text=f"Woo {woo.get('woo_id')} - SKU {woo.get('sku') or '-'} - {woo.get('item_kind')}", bg=CARD, fg=MUTED).pack(anchor=tk.W, padx=18, pady=(0, 12))
 
         for label, value in [
             ("Match", row.get("match_method") or "-"),
@@ -8782,7 +9257,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             ("Materiales", cls.get("materials") or "-"),
             ("Confianza", cls.get("confidence") or "-"),
             ("Precio Woo", woo.get("price") or "-"),
-            ("Categorías", woo.get("categories") or "-"),
+            ("Categorias", woo.get("categories") or "-"),
         ]:
             self._detail_row(detail, label, value).pack(fill=tk.X, padx=18, pady=3)
 
@@ -8791,14 +9266,14 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             self._status_row(
                 detail,
                 "REVISAR",
-                " · ".join(review.get("reasons") or ["Revisión pendiente"]),
+                " - ".join(review.get("reasons") or ["Revision pendiente"]),
                 review.get("severity") or "Warning",
             ).pack(fill=tk.X, padx=18, pady=(10, 4))
         else:
-            self._status_row(detail, "OK", "Sin indicadores de revisión.", "OK").pack(fill=tk.X, padx=18, pady=(10, 4))
+            self._status_row(detail, "OK", "Sin indicadores de revision.", "OK").pack(fill=tk.X, padx=18, pady=(10, 4))
 
         manual_link = row.get("manual_link_candidate") or {}
-        tk.Label(detail, text="Enlace manual Supabase ↔ Woo", bg=CARD, fg=TEXT, font=("Segoe UI", 10, "bold")).pack(anchor=tk.W, padx=18, pady=(12, 4))
+        tk.Label(detail, text="Enlace manual Supabase  Woo", bg=CARD, fg=TEXT, font=("Segoe UI", 10, "bold")).pack(anchor=tk.W, padx=18, pady=(12, 4))
         if manual_link.get("available"):
             self._status_row(
                 detail,
@@ -8819,7 +9294,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             for key, value in proposed.items():
                 self._detail_row(detail, key, value).pack(fill=tk.X, padx=18, pady=2)
         else:
-            self._status_row(detail, "Sin escritura propuesta", "No hay cambios seguros o requiere revisión manual.", "Info").pack(fill=tk.X, padx=18, pady=4)
+            self._status_row(detail, "Sin escritura propuesta", "No hay cambios seguros o requiere revision manual.", "Info").pack(fill=tk.X, padx=18, pady=4)
 
         tk.Label(detail, text="Incidencias", bg=CARD, fg=TEXT, font=("Segoe UI", 10, "bold")).pack(anchor=tk.W, padx=18, pady=(12, 4))
         if not issues:
@@ -8829,10 +9304,10 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
 
         actions = tk.Frame(detail, bg=CARD, highlightbackground=SOFT, highlightthickness=1)
         actions.pack(fill=tk.X, padx=18, pady=(14, 18))
-        self._button(actions, "Editar clasificación preview", primary=True, command=lambda r=row: self._open_woo_classification_edit_modal(r)).pack(fill=tk.X, padx=12, pady=(12, 6))
+        self._button(actions, "Editar clasificacion preview", primary=True, command=lambda r=row: self._open_woo_classification_edit_modal(r)).pack(fill=tk.X, padx=12, pady=(12, 6))
         if manual_link.get("available"):
             self._button(actions, "Enlazar con item Supabase", command=lambda r=row: self._open_woo_manual_link_modal(r)).pack(fill=tk.X, padx=12, pady=(0, 6))
-        self._button(actions, "Ver JSON línea", command=lambda r=row: self._open_json_value_modal("Woo Sync JSON", r)).pack(fill=tk.X, padx=12, pady=(0, 12))
+        self._button(actions, "Ver JSON linea", command=lambda r=row: self._open_json_value_modal("Woo Sync JSON", r)).pack(fill=tk.X, padx=12, pady=(0, 12))
 
 
     def _render_woo_detail(self, parent: tk.Frame, difference: WooDifference) -> None:
@@ -9031,7 +9506,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             parent,
             "Gestion",
             "Precio Proveedores",
-            "Control visual de precios proveedor leídos desde Supabase inventory_items.",
+            "Control visual de precios proveedor leidos desde Supabase inventory_items.",
             ["Actualizar"],
         )
 
@@ -9040,7 +9515,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             empty.pack(fill=tk.BOTH, expand=True)
             tk.Label(
                 empty,
-                text="Inicia sesión en Supabase para consultar y editar precios de proveedor.",
+                text="Inicia sesion en Supabase para consultar y editar precios de proveedor.",
                 bg=CARD,
                 fg=MUTED,
                 font=("Segoe UI", 12),
@@ -9116,11 +9591,11 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 child.destroy()
             if not row:
                 tk.Label(detail, text="Selecciona un item", bg=CARD, fg=TEXT, font=("Segoe UI", 16, "bold")).pack(anchor=tk.W, padx=18, pady=(18, 8))
-                tk.Label(detail, text="Aquí podrás revisar y editar precio proveedor principal y precio Pascal.", bg=CARD, fg=MUTED, wraplength=360, justify=tk.LEFT).pack(anchor=tk.W, padx=18)
+                tk.Label(detail, text="Aqui podras revisar y editar precio proveedor principal y precio Pascal.", bg=CARD, fg=MUTED, wraplength=360, justify=tk.LEFT).pack(anchor=tk.W, padx=18)
                 return
 
             tk.Label(detail, text=str(row.get("name") or "-"), bg=CARD, fg=TEXT, font=("Segoe UI", 15, "bold"), wraplength=390, justify=tk.LEFT).pack(anchor=tk.W, padx=18, pady=(18, 6))
-            meta = f"ID {row.get('item_id')} · {row.get('family') or '-'} · {row.get('subgroup') or '-'}"
+            meta = f"ID {row.get('item_id')} - {row.get('family') or '-'} - {row.get('subgroup') or '-'}"
             tk.Label(detail, text=meta, bg=CARD, fg=MUTED, font=("Segoe UI", 9)).pack(anchor=tk.W, padx=18, pady=(0, 14))
 
             form = tk.Frame(detail, bg=CARD)
@@ -9163,9 +9638,9 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 reason = reason_text.get("1.0", tk.END).strip()
                 msg = (
                     f"Item {row.get('item_id')}\n\n"
-                    f"Principal: {before_primary or 'vacío'} → {new_primary or 'vacío'}\n"
-                    f"Pascal: {before_pascal or 'vacío'} → {new_pascal or 'vacío'}\n\n"
-                    "Se guardará en Supabase con log y snapshot.\n¿Continuar?"
+                    f"Principal: {before_primary or 'vacio'}  {new_primary or 'vacio'}\n"
+                    f"Pascal: {before_pascal or 'vacio'}  {new_pascal or 'vacio'}\n\n"
+                    "Se guardara en Supabase con log y snapshot.\nContinuar"
                 )
                 if not messagebox.askyesno("Guardar precios proveedor", msg):
                     return
@@ -9577,7 +10052,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
 
         def refresh_constants() -> None:
             if self._cloud_session is None:
-                messagebox.showwarning("Configuracion", "Inicia sesión Supabase para leer constantes reales.")
+                messagebox.showwarning("Configuracion", "Inicia sesion Supabase para leer constantes reales.")
                 return
             try:
                 self._business_constants = list_business_constants(self._cloud_session)
@@ -9588,7 +10063,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
 
         def save_constants_from_ui() -> None:
             if self._cloud_session is None:
-                messagebox.showwarning("Configuracion", "Inicia sesión Supabase para guardar constantes.")
+                messagebox.showwarning("Configuracion", "Inicia sesion Supabase para guardar constantes.")
                 return
             values: dict[str, float] = {}
             for key, entry in entries.items():
@@ -9596,11 +10071,11 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 try:
                     values[key] = float(raw.replace(",", "."))
                 except Exception:
-                    messagebox.showwarning("Configuracion", f"Valor inválido para {key}: {raw}")
+                    messagebox.showwarning("Configuracion", f"Valor invalido para {key}: {raw}")
                     return
             if not messagebox.askyesno(
                 "Guardar constantes",
-                "Se guardarán las constantes de cálculo en Supabase y se registrará log/snapshot.\n\n¿Continuar?",
+                "Se guardaran las constantes de calculo en Supabase y se registrara log/snapshot.\n\nContinuar",
             ):
                 return
             try:
@@ -9623,7 +10098,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         tk.Label(side, text="Impacto", bg=CARD, fg=TEXT, font=("Segoe UI", 14, "bold")).pack(anchor=tk.W, padx=16, pady=(16, 8))
         tk.Label(
             side,
-            text="Los cambios en constantes afectan cálculo de pedidos, costes finales, margen de venta y exportaciones. Deben quedar registrados en logs.",
+            text="Los cambios en constantes afectan calculo de pedidos, costes finales, margen de venta y exportaciones. Deben quedar registrados en logs.",
             bg=AMBER_SOFT,
             fg="#92400E",
             wraplength=300,
@@ -9695,7 +10170,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             parent,
             "Sistema",
             "Seguridad / Logs",
-            "Auditoría de operaciones, cambios y actividad multiusuario.",
+            "Auditoria de operaciones, cambios y actividad multiusuario.",
         )
 
         actions = tk.Frame(parent, bg=BG)
@@ -9721,7 +10196,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         entry(0, 0, "Texto", "_security_filter_text", 26)
         entry(0, 2, "Usuario", "_security_filter_user", 20)
 
-        tk.Label(filters, text="Módulo", bg=CARD, fg=MUTED, font=("Segoe UI", 8, "bold")).grid(
+        tk.Label(filters, text="Modulo", bg=CARD, fg=MUTED, font=("Segoe UI", 8, "bold")).grid(
             row=0, column=4, sticky="w", padx=(8, 4), pady=(12, 2)
         )
         module_values = [
@@ -9731,7 +10206,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             "Precio Proveedores",
             "Cambio de Precios",
             "WooCommerce",
-            "Configuración",
+            "Configuracion",
             "Seguridad",
             "Sistema",
         ]
@@ -9758,15 +10233,15 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         kpi_items = [
             ("Eventos hoy", str(kpis.get("events_today", 0)), "Info"),
             ("Errores hoy", str(kpis.get("errors_today", 0)), "Error" if kpis.get("errors_today", 0) else "OK"),
-            ("Críticos", str(kpis.get("critical", 0)), "Critical" if kpis.get("critical", 0) else "OK"),
-            ("Última operación", str(kpis.get("last_operation") or "-")[:38], "Info"),
-            ("Último usuario", str(kpis.get("last_user") or "-")[:38], "Info"),
+            ("Criticos", str(kpis.get("critical", 0)), "Critical" if kpis.get("critical", 0) else "OK"),
+            ("Ultima operacion", str(kpis.get("last_operation") or "-")[:38], "Info"),
+            ("Ultimo usuario", str(kpis.get("last_user") or "-")[:38], "Info"),
         ]
         for index, (label, value, status) in enumerate(kpi_items):
             summary.columnconfigure(index, weight=1)
             self._metric(summary, label, value, status).grid(row=0, column=index, sticky="ew", padx=(0 if index == 0 else 8, 0))
 
-        status_text = self._security_error or f"Logs visibles: {len(self._security_visible_rows)} · Snapshots cargados: {len(self._security_snapshots)}"
+        status_text = self._security_error or f"Logs visibles: {len(self._security_visible_rows)} - Snapshots cargados: {len(self._security_snapshots)}"
         if status_text:
             is_error = self._security_error and not self._security_error.startswith("Cargando")
             tk.Label(
@@ -9790,21 +10265,21 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         card_head.grid(row=0, column=0, sticky="ew", padx=18, pady=(16, 10))
         card_head.columnconfigure(0, weight=1)
         tk.Label(card_head, text="Eventos auditados", bg=CARD, fg=TEXT, font=("Segoe UI", 14, "bold")).grid(row=0, column=0, sticky="w")
-        self._status_chip(card_head, "Últimos 200", "Info").grid(row=0, column=1, sticky="e")
+        self._status_chip(card_head, "Ultimos 200", "Info").grid(row=0, column=1, sticky="e")
 
         table_frame = tk.Frame(card, bg=CARD)
         table_frame.grid(row=1, column=0, sticky="nsew", padx=18, pady=(0, 18))
         table_frame.columnconfigure(0, weight=1)
         table_frame.rowconfigure(0, weight=1)
 
-        columns = ["Fecha / Hora", "Usuario", "Rol", "Módulo", "Acción", "Estado", "Severidad", "Entidad", "ID Entidad", "Operation ID", "Mensaje"]
+        columns = ["Fecha / Hora", "Usuario", "Rol", "Modulo", "Accion", "Estado", "Severidad", "Entidad", "ID Entidad", "Operation ID", "Mensaje"]
         tree = ttk.Treeview(table_frame, columns=columns, show="headings", height=15)
         widths = {
             "Fecha / Hora": 165,
             "Usuario": 210,
             "Rol": 80,
-            "Módulo": 145,
-            "Acción": 170,
+            "Modulo": 145,
+            "Accion": 170,
             "Estado": 90,
             "Severidad": 90,
             "Entidad": 130,
@@ -9891,7 +10366,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
 
     def _refresh_security_data(self, parent: tk.Frame) -> None:
         if self._cloud_session is None or str(getattr(self._cloud_session, "role", "") or "").lower() != "admin":
-            self._security_error = "Acceso denegado. Seguridad/Logs solo está disponible para admin."
+            self._security_error = "Acceso denegado. Seguridad/Logs solo esta disponible para admin."
             self._render_security_workspace(parent)
             return
         self._security_error = "Cargando logs reales..."
@@ -10025,7 +10500,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         header = tk.Frame(win, bg=CARD, highlightbackground=LINE, highlightthickness=1)
         header.grid(row=0, column=0, sticky="ew", padx=18, pady=(18, 0))
         header.columnconfigure(0, weight=1)
-        title = f"{row.get('visual_module') or row.get('module')} · {row.get('visual_action') or row.get('action')}"
+        title = f"{row.get('visual_module') or row.get('module')} - {row.get('visual_action') or row.get('action')}"
         tk.Label(header, text="Detalle del evento", bg=CARD, fg=TEXT, font=("Segoe UI", 16, "bold")).grid(row=0, column=0, sticky="w", padx=18, pady=(16, 2))
         tk.Label(header, text=title, bg=CARD, fg=MUTED).grid(row=1, column=0, sticky="w", padx=18, pady=(0, 16))
         self._button(header, "Cerrar", command=win.destroy).grid(row=0, column=1, rowspan=2, padx=18, pady=16)
@@ -10060,16 +10535,16 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         right.columnconfigure(0, weight=1)
         right.rowconfigure(1, weight=1)
 
-        tk.Label(left, text="Resumen técnico", bg=CARD, fg=TEXT, font=("Segoe UI", 14, "bold")).grid(row=0, column=0, sticky="w", padx=16, pady=(16, 8))
+        tk.Label(left, text="Resumen tecnico", bg=CARD, fg=TEXT, font=("Segoe UI", 14, "bold")).grid(row=0, column=0, sticky="w", padx=16, pady=(16, 8))
         summary_box = tk.Frame(left, bg=CARD)
         summary_box.grid(row=1, column=0, sticky="nsew", padx=16, pady=(0, 16))
 
         for label, value in [
             ("Operation ID", row.get("operation_id")),
             ("Rol", row.get("role")),
-            ("Máquina", row.get("machine_name")),
-            ("Módulo", row.get("visual_module") or row.get("module")),
-            ("Acción", row.get("visual_action") or row.get("action")),
+            ("Maquina", row.get("machine_name")),
+            ("Modulo", row.get("visual_module") or row.get("module")),
+            ("Accion", row.get("visual_action") or row.get("action")),
             ("Entidad", row.get("entity_type")),
             ("ID entidad", row.get("entity_id")),
             ("Mensaje", row.get("message")),
@@ -10094,7 +10569,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         snapshot_card.columnconfigure(0, weight=1)
         tk.Label(snapshot_card, text="Snapshot asociado", bg=CARD, fg=TEXT, font=("Segoe UI", 12, "bold")).grid(row=0, column=0, sticky="w", padx=14, pady=(12, 4))
         if snapshot:
-            snap_text = f"{snapshot.get('module')} · {snapshot.get('action')} · {snapshot.get('entity_type')}:{snapshot.get('entity_id')} · {snapshot.get('reason') or '-'}"
+            snap_text = f"{snapshot.get('module')} - {snapshot.get('action')} - {snapshot.get('entity_type')}:{snapshot.get('entity_id')} - {snapshot.get('reason') or '-'}"
             tk.Label(snapshot_card, text=snap_text, bg=CARD, fg=MUTED, anchor=tk.W, wraplength=880, justify=tk.LEFT).grid(row=1, column=0, sticky="ew", padx=14, pady=(0, 12))
             self._button(snapshot_card, "Ver before snapshot", command=lambda snap=snapshot: self._open_snapshot_detail_modal(snap)).grid(row=0, column=1, rowspan=2, padx=14, pady=12)
             self._button(snapshot_card, "Restaurar estado anterior", command=lambda snap=snapshot, parent=win: self._restore_snapshot_from_security_detail(snap, parent)).grid(row=0, column=2, rowspan=2, padx=(0, 14), pady=12)
@@ -10104,9 +10579,9 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
     def _render_before_after_diff(self, parent: tk.Frame, before_data: Any, after_data: Any) -> None:
         parent.columnconfigure(0, weight=1)
         parent.rowconfigure(0, weight=1)
-        columns = ["Campo", "Antes", "Después"]
+        columns = ["Campo", "Antes", "Despues"]
         tree = ttk.Treeview(parent, columns=columns, show="headings", height=13)
-        widths = {"Campo": 180, "Antes": 250, "Después": 250}
+        widths = {"Campo": 180, "Antes": 250, "Despues": 250}
         for column in columns:
             tree.heading(column, text=column, anchor=tk.CENTER)
             tree.column(column, width=widths[column], anchor=tk.W if column != "Campo" else tk.CENTER)
@@ -10137,7 +10612,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             field = values[0]
             selected = next((item for item in diff if item.get("field") == field), None)
             if selected:
-                self._open_json_value_modal(f"Before / After · {field}", {"before": selected.get("before"), "after": selected.get("after")})
+                self._open_json_value_modal(f"Before / After - {field}", {"before": selected.get("before"), "after": selected.get("after")})
 
         tree.bind("<Double-1>", show_json)
 
@@ -10202,7 +10677,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         except Exception as exc:
             messagebox.showerror("Exportar logs", f"No se pudo exportar.\n\n{exc}")
             return
-        messagebox.showinfo("Exportar logs", f"Exportación creada:\n{path}")
+        messagebox.showinfo("Exportar logs", f"Exportacion creada:\n{path}")
 
     def _restore_snapshot_from_security_detail(self, snapshot: dict[str, Any], parent_window: tk.Toplevel | None = None) -> None:
         if self._cloud_session is None or str(getattr(self._cloud_session, "role", "") or "").lower() != "admin":
@@ -10215,37 +10690,37 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             return
 
         if not preview.get("supported"):
-            messagebox.showwarning("Restaurar snapshot", preview.get("reason") or "Este snapshot no es restaurable todavía.")
+            messagebox.showwarning("Restaurar snapshot", preview.get("reason") or "Este snapshot no es restaurable todavia.")
             return
 
         changes = preview.get("changes") or []
         lines = [
-            "PREVIEW DE RESTAURACIÓN",
+            "PREVIEW DE RESTAURACION",
             "",
             f"Snapshot operation_id: {snapshot.get('operation_id')}",
             f"Cambios a restaurar: {len(changes)}",
             "",
         ]
         for change in changes[:12]:
-            lines.append(f"• {change.get('description') or change.get('table')}")
+            lines.append(f" {change.get('description') or change.get('table')}")
         if len(changes) > 12:
-            lines.append(f"... y {len(changes) - 12} cambios más")
+            lines.append(f"... y {len(changes) - 12} cambios mas")
         lines.append("")
         if preview.get("special_restore") == "woocommerce_publish":
             lines.extend([
-                "Esto restaurará el precio anterior directamente en WooCommerce,",
-                "verificará el resultado mediante una lectura posterior y actualizará Supabase.",
+                "Esto restaurara el precio anterior directamente en WooCommerce,",
+                "verificara el resultado mediante una lectura posterior y actualizara Supabase.",
             ])
         else:
             lines.extend([
-                "Esto restaurará datos internos en Supabase al estado anterior del snapshot.",
+                "Esto restaurara datos internos en Supabase al estado anterior del snapshot.",
                 "No toca WooCommerce ni Hexa.",
             ])
-        if not messagebox.askyesno("Preview restauración", "\n".join(lines)):
+        if not messagebox.askyesno("Preview restauracion", "\n".join(lines)):
             return
 
         confirm_win = tk.Toplevel(parent_window or self)
-        confirm_win.title("Confirmar restauración")
+        confirm_win.title("Confirmar restauracion")
         confirm_win.configure(bg=BG)
         confirm_win.transient(parent_window or self)
         confirm_win.grab_set()
@@ -10254,7 +10729,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
 
         tk.Label(
             confirm_win,
-            text="Confirmación crítica",
+            text="Confirmacion critica",
             bg=BG,
             fg=ROSE,
             font=("Segoe UI", 16, "bold"),
@@ -10263,7 +10738,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             confirm_win,
             text=(
                 "Vas a restaurar datos desde un snapshot.\n"
-                "Esta operación también quedará registrada en Seguridad / Logs.\n\n"
+                "Esta operacion tambien quedara registrada en Seguridad / Logs.\n\n"
                 "Escribe RESTAURAR para continuar."
             ),
             bg=BG,
@@ -10282,7 +10757,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
 
         def execute_restore() -> None:
             if confirm_var.get().strip() != "RESTAURAR":
-                messagebox.showerror("Confirmación", "Debes escribir RESTAURAR exactamente.")
+                messagebox.showerror("Confirmacion", "Debes escribir RESTAURAR exactamente.")
                 return
             try:
                 result = restore_snapshot_to_previous_state(self._cloud_session, snapshot)
@@ -10290,7 +10765,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 messagebox.showerror("Restaurar snapshot", f"No se pudo restaurar.\n\n{exc}")
                 return
             messagebox.showinfo(
-                "Restauración aplicada",
+                "Restauracion aplicada",
                 f"Estado anterior restaurado.\nOperation ID: {result.get('operation_id')}\nCambios: {len(result.get('restored') or [])}",
             )
             confirm_win.destroy()
@@ -10332,12 +10807,12 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         card.grid(row=1, column=0, sticky="nsew", padx=18, pady=12)
         card.columnconfigure(0, weight=1)
         card.rowconfigure(0, weight=1)
-        columns = ["Fecha", "Operación", "Módulo", "Acción", "Entidad", "Razón"]
+        columns = ["Fecha", "Operacion", "Modulo", "Accion", "Entidad", "Razon"]
         tree = ttk.Treeview(card, columns=columns, show="headings", height=12)
-        widths = {"Fecha": 170, "Operación": 190, "Módulo": 135, "Acción": 165, "Entidad": 180, "Razón": 280}
+        widths = {"Fecha": 170, "Operacion": 190, "Modulo": 135, "Accion": 165, "Entidad": 180, "Razon": 280}
         for column in columns:
             tree.heading(column, text=column, anchor=tk.CENTER)
-            tree.column(column, width=widths[column], anchor=tk.CENTER if column != "Razón" else tk.W, stretch=False)
+            tree.column(column, width=widths[column], anchor=tk.CENTER if column != "Razon" else tk.W, stretch=False)
         snap_by_iid: dict[str, dict[str, Any]] = {}
         for row in self._security_snapshots:
             iid = tree.insert(

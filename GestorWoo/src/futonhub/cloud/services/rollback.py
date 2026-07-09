@@ -13,7 +13,7 @@ def json_safe(value: Any) -> Any:
         return {"_raw": str(value)}
 
 # =====================================================
-# v12.4 · Rollback lógico desde operation_snapshot
+# v12.4 - Rollback logico desde operation_snapshot
 # =====================================================
 
 ROLLBACK_ENTITY_SPECS = {
@@ -33,14 +33,14 @@ ROLLBACK_ENTITY_SPECS = {
         'table': 'business_constants',
         'key': 'key',
         'label': 'Constante del negocio',
-        'safe_note': 'Revierte una constante en Supabase. Revisa cálculos después si era una constante real.',
+        'safe_note': 'Revierte una constante en Supabase. Revisa calculos despues si era una constante real.',
     },
 }
 
 
 def _require_admin_role(session) -> None:
     if (session.role or '').strip().lower() != 'admin':
-        raise CloudAuditError('Solo admin puede ejecutar esta operación.')
+        raise CloudAuditError('Solo admin puede ejecutar esta operacion.')
 
 
 def _fetch_snapshot_by_operation_id(session, operation_id: str) -> dict[str, Any]:
@@ -48,7 +48,7 @@ def _fetch_snapshot_by_operation_id(session, operation_id: str) -> dict[str, Any
     if not op:
         raise CloudAuditError('Indica operation_id del snapshot.')
     # v12.4: preferimos RPC admin para evitar falsos bloqueos si el subcliente REST
-    # pierde el token. Si el SQL de v12.4 aún no existe, se usa fallback directo.
+    # pierde el token. Si el SQL de v12.4 aun no existe, se usa fallback directo.
     try:
         resp = session.client.rpc(
             'futonhub_read_snapshot_by_operation_id',
@@ -69,7 +69,7 @@ def _fetch_snapshot_by_operation_id(session, operation_id: str) -> dict[str, Any
     )
     rows = getattr(resp, 'data', None) or []
     if not rows:
-        raise CloudAuditError(f'No se encontró operation_snapshot con operation_id={op}.')
+        raise CloudAuditError(f'No se encontro operation_snapshot con operation_id={op}.')
     return rows[0]
 
 
@@ -103,10 +103,10 @@ def format_rollback_candidates(rows: list[dict[str, Any]]) -> str:
     for i, row in enumerate(rows, start=1):
         support = 'OK' if row.get('rollback_supported') else 'NO SOPORTADO'
         lines.append(
-            f"{i}. {support} · {row.get('created_at') or ''} · {row.get('operation_id') or ''}"
+            f"{i}. {support} - {row.get('created_at') or ''} - {row.get('operation_id') or ''}"
         )
         lines.append(
-            f"   {row.get('module') or ''}.{row.get('action') or ''} · {row.get('entity_type') or ''}:{row.get('entity_id') or ''}"
+            f"   {row.get('module') or ''}.{row.get('action') or ''} - {row.get('entity_type') or ''}:{row.get('entity_id') or ''}"
         )
         if row.get('reason'):
             lines.append(f"   {row.get('reason')}")
@@ -120,7 +120,7 @@ def rollback_target_from_snapshot(snapshot: dict[str, Any]) -> tuple[dict[str, A
         raise CloudAuditError(f"Rollback no soportado para entity_type={entity_type!r}.")
     before = snapshot.get('before_data') or {}
     if not isinstance(before, dict) or not before:
-        raise CloudAuditError('El snapshot no contiene before_data válido para restaurar.')
+        raise CloudAuditError('El snapshot no contiene before_data valido para restaurar.')
     table = spec['table']
     key = spec['key']
     key_value = before.get(key)
@@ -157,7 +157,7 @@ def preview_rollback_from_snapshot(session, operation_id: str) -> dict[str, Any]
     before, table, key, key_value = _rollback_target_from_snapshot(snapshot)
     current = _fetch_current_row_for_rollback(session, table, key, key_value)
     if current is None:
-        raise CloudAuditError(f'No existe fila actual en {table} donde {key}={key_value}. No se puede revertir automáticamente.')
+        raise CloudAuditError(f'No existe fila actual en {table} donde {key}={key_value}. No se puede revertir automaticamente.')
     spec = ROLLBACK_ENTITY_SPECS.get(snapshot.get('entity_type')) or {}
     return {
         'snapshot': snapshot,
@@ -176,11 +176,11 @@ def short_json_diff(before: dict[str, Any], current: dict[str, Any], max_items: 
     lines: list[str] = []
     for key in keys:
         if before.get(key) != current.get(key):
-            lines.append(f"{key}: actual={current.get(key)!r} → restaurar={before.get(key)!r}")
+            lines.append(f"{key}: actual={current.get(key)!r} -> restaurar={before.get(key)!r}")
         if len(lines) >= max_items:
             remaining = len([k for k in keys if before.get(k) != current.get(k)]) - len(lines)
             if remaining > 0:
-                lines.append(f"... y {remaining} cambio(s) más")
+                lines.append(f"... y {remaining} cambio(s) mas")
             break
     return lines
 
@@ -193,24 +193,24 @@ def format_rollback_preview(preview: dict[str, Any]) -> str:
     lines = [
         'PREVIEW ROLLBACK DESDE SNAPSHOT',
         '=' * 48,
-        'Solo admin. Revertirá datos internos en Supabase.',
+        'Solo admin. Revertira datos internos en Supabase.',
         'WooCommerce NO se toca.',
         '',
         f"Snapshot operation_id: {snap.get('operation_id')}",
         f"Origen: {snap.get('module')}.{snap.get('action')}",
         f"Entidad: {snap.get('entity_type')}:{snap.get('entity_id')}",
-        f"Tabla destino: {preview.get('table')} · {preview.get('key')}={preview.get('key_value')}",
+        f"Tabla destino: {preview.get('table')} - {preview.get('key')}={preview.get('key_value')}",
         f"Tipo: {preview.get('entity_label')}",
         '',
         preview.get('safe_note') or 'WooCommerce no se toca.',
         '',
-        'Cambios que se revertirían:',
+        'Cambios que se revertirian:',
     ]
     if diff:
         lines.extend(f'- {line}' for line in diff)
     else:
         lines.append('- No se detectan diferencias entre actual y snapshot previo.')
-    lines.extend(['', 'Para ejecutar por consola: añade --execute --confirm REVERTIR'])
+    lines.extend(['', 'Para ejecutar por consola: anade --execute --confirm REVERTIR'])
     return '\n'.join(lines)
 
 
@@ -239,7 +239,7 @@ def execute_rollback_from_snapshot(session, operation_id: str, settings: Setting
 
     payload = _rollback_update_payload(table, key, before, user_id=session.user_id)
     if not payload:
-        raise CloudAuditError('No hay datos restaurables en el snapshot después de limpiar claves protegidas.')
+        raise CloudAuditError('No hay datos restaurables en el snapshot despues de limpiar claves protegidas.')
     resp = session.client.table(table).update(payload).eq(key, key_value).execute()
     written_rows = getattr(resp, 'data', None) or []
     restored = written_rows[0] if written_rows else {**current, **payload}

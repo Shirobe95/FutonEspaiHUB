@@ -16,7 +16,7 @@ def _safe_float_or_none(value: Any) -> float | None:
     if value in (None, ""):
         return None
     text = str(value).strip()
-    if not text or text.upper() in {"#N/A", "NO ESTA", "NO ESTÁ", "NONE", "NULL", "NAN"}:
+    if not text or text.upper() in {"#N/A", "NO ESTA", "NO ESTA", "NONE", "NULL", "NAN"}:
         return None
     try:
         return float(text.replace(",", "."))
@@ -39,10 +39,10 @@ def _clean_text(value: Any) -> str | None:
 
 
 def _resolve_csv_path(path: str | Path) -> Path:
-    """Resuelve rutas CSV al ejecutar desde raíz o desde GestorWoo.
+    """Resuelve rutas CSV al ejecutar desde raiz o desde GestorWoo.
 
     Casos soportados:
-    - docs/imports/file.csv desde raíz del proyecto.
+    - docs/imports/file.csv desde raiz del proyecto.
     - docs/imports/file.csv desde GestorWoo.
     - ../docs/imports/file.csv desde GestorWoo.
     - ruta absoluta.
@@ -62,7 +62,7 @@ def _resolve_csv_path(path: str | Path) -> Path:
             ]
         )
         # Si el usuario pasa docs/imports desde GestorWoo y el archivo solo
-        # existe en la raíz, cwd.parent/raw lo encuentra. Si lo pasa desde raíz
+        # existe en la raiz, cwd.parent/raw lo encuentra. Si lo pasa desde raiz
         # y solo existe dentro de GestorWoo, cwd/GestorWoo/raw lo encuentra.
 
     for candidate in candidates:
@@ -251,7 +251,7 @@ def upsert_inventory_items_csv(
     """Inserta o actualiza items desde CSV.
 
     Uso pensado para imports controlados como los 12 items faltantes E-2026-03.
-    Actualiza campos de ficha de cálculo: M3, rotación, bultos y precios proveedor.
+    Actualiza campos de ficha de calculo: M3, rotacion, bultos y precios proveedor.
     No toca WooCommerce ni stock.
     """
     csv_path = _resolve_csv_path(csv_path)

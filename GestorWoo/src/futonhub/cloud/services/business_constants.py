@@ -167,7 +167,7 @@ def save_business_constants(session, values: dict[str, Any]) -> dict[str, Any]:
         )
 
     if not payload:
-        raise ValueError("No hay constantes válidas para guardar.")
+        raise ValueError("No hay constantes validas para guardar.")
 
     try:
         write_snapshot(

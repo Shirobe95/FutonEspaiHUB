@@ -76,7 +76,7 @@ def _format_pack_component_line(component: dict[str, Any]) -> str:
     qty = _format_relation_quantity(component.get('quantity') or 1)
     name = component.get('component_name') or ''
     if name:
-        return f"{code} x{qty} · {name}"
+        return f"{code} x{qty} - {name}"
     return f"{code} x{qty}"
 
 
@@ -113,11 +113,11 @@ def _component_summary_from_woo_sku(woo_sku: Any) -> tuple[str, str]:
 
 
 def _fill_component_names_from_inventory(session, components: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Resuelve nombres reutilizando la búsqueda real de Inventario.
+    """Resuelve nombres reutilizando la busqueda real de Inventario.
 
-    No mantiene una segunda implementación de búsqueda. Para cada componente
+    No mantiene una segunda implementacion de busqueda. Para cada componente
     llama a `search_cloud_inventory_items(..., enrich_components=False)`, elige
-    la coincidencia exacta y copia únicamente su nombre.
+    la coincidencia exacta y copia unicamente su nombre.
     """
     if not components:
         return components
@@ -201,10 +201,10 @@ def _fill_component_names_from_inventory(session, components: list[dict[str, Any
 
 
 def _enrich_rows_with_component_summary(session, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Añade resumen de componentes/alias para que la UI no muestre packs a ciegas.
+    """Anade resumen de componentes/alias para que la UI no muestre packs a ciegas.
 
-    v55: cuando una búsqueda devuelve WOO-PACK-xxxx, trae todos sus componentes
-    desde `inventory_item_components`, no solo el componente por el que coincidió.
+    v55: cuando una busqueda devuelve WOO-PACK-xxxx, trae todos sus componentes
+    desde `inventory_item_components`, no solo el componente por el que coincidio.
     """
     if not rows:
         return rows
@@ -285,7 +285,7 @@ def _enrich_rows_with_component_summary(session, rows: list[dict[str, Any]]) -> 
                     if related:
                         qty_text = _format_relation_quantity(qty or 1)
                         related_name = row.get('hub_search_related_name') or ''
-                        fallback = f"{related} x{qty_text}" + (f" · {related_name}" if related_name else '')
+                        fallback = f"{related} x{qty_text}" + (f" - {related_name}" if related_name else '')
                         row['hub_pack_components_text'] = fallback
                         row['hub_pack_components_multiline'] = f"- {fallback}"
                         row['hub_pack_components_source'] = 'matched_component_fallback'
@@ -302,7 +302,7 @@ def fetch_inventory_pack_components(session, parent_item_code: str, woo_sku: Any
 
     Ruta principal v59.7: consulta `v_inventory_component_search`, que ya une
     inventory_item_components con inventory_items y devuelve component_name.
-    De esta forma no repetimos la búsqueda del Inventario en Python.
+    De esta forma no repetimos la busqueda del Inventario en Python.
     """
     parent = str(parent_item_code or '').strip()
     components: list[dict[str, Any]] = []
@@ -568,8 +568,8 @@ def search_cloud_inventory_items(session, query: str, limit: int = 25, *, enrich
     """Busca items reales de inventory_items en Supabase.
 
     v54: intenta primero la vista exacta `v_inventory_hub_search_ranked`, que devuelve
-    items simples, alias y packs Woo por código exacto de componente. Si la vista no
-    existe o falla, cae al buscador clásico por inventory_items.
+    items simples, alias y packs Woo por codigo exacto de componente. Si la vista no
+    existe o falla, cae al buscador clasico por inventory_items.
 
     No toca WooCommerce. Devuelve filas operativas internas.
     """
@@ -592,8 +592,8 @@ def search_cloud_inventory_items(session, query: str, limit: int = 25, *, enrich
         except Exception:
             return None
 
-    # 1) Búsqueda exacta v54: códigos simples, alias y componentes de packs.
-    #    Esto permite que buscar 0201001 devuelva también WOO-PACK-xxxx.
+    # 1) Busqueda exacta v54: codigos simples, alias y componentes de packs.
+    #    Esto permite que buscar 0201001 devuelva tambien WOO-PACK-xxxx.
     try:
         token = q.lower().strip()
         resp = (
@@ -623,7 +623,7 @@ def search_cloud_inventory_items(session, query: str, limit: int = 25, *, enrich
                 row = dict(full)
                 row.setdefault('item_id', key)
                 # setdefault no sustituye claves existentes con None/"". La vista
-                # ranked sí trae el nombre correcto, así que rellenamos campos vacíos.
+                # ranked si trae el nombre correcto, asi que rellenamos campos vacios.
                 if not str(row.get('name') or '').strip():
                     row['name'] = ranked.get('result_name') or row.get('woo_name') or ''
                 if not str(row.get('family') or '').strip():
@@ -671,7 +671,7 @@ def search_cloud_inventory_items(session, query: str, limit: int = 25, *, enrich
                 enrich_components=enrich_components,
             )
     except Exception:
-        # Si la vista no está creada o RLS la bloquea, seguimos con el buscador clásico.
+        # Si la vista no esta creada o RLS la bloquea, seguimos con el buscador clasico.
         pass
 
     rows: list[dict[str, Any]] = []
@@ -693,7 +693,7 @@ def search_cloud_inventory_items(session, query: str, limit: int = 25, *, enrich
             rows.append(row)
 
     cols = INVENTORY_SELECT_COLUMNS
-    # Búsqueda exacta numérica primero.
+    # Busqueda exacta numerica primero.
     if q.isdigit() or (q.startswith('-') and q[1:].isdigit()):
         n = int(q)
         for col in ('item_id', 'woo_id'):
@@ -703,7 +703,7 @@ def search_cloud_inventory_items(session, query: str, limit: int = 25, *, enrich
             except Exception:
                 pass
         add(_find_inventory_pack_rows_by_woo_sku_token(session, q, limit))
-    # Búsqueda textual por campos principales. Varias queries para evitar depender de or_ con escaping.
+    # Busqueda textual por campos principales. Varias queries para evitar depender de or_ con escaping.
     pattern = f'%{q}%'
     for col in ('name', 'woo_name', 'woo_sku', 'heca_reference', 'hub_item_code', 'base_item_code'):
         if len(rows) >= limit:
@@ -731,13 +731,13 @@ def format_cloud_inventory_search(rows: list[dict[str, Any]]) -> str:
         lines.append('Sin resultados.')
         return '\n'.join(lines)
     for i, row in enumerate(rows, start=1):
-        lines.append(f"{i}. item_id={row.get('item_id')} · {row.get('name') or row.get('woo_name') or '-'}")
+        lines.append(f"{i}. item_id={row.get('item_id')} - {row.get('name') or row.get('woo_name') or '-'}")
         lines.append(
-            f"   familia: {row.get('family') or '-'} · grupo: {row.get('subgroup') or '-'} "
-            f"· medidas: {row.get('size') or '-'} · M3 calculo: {row.get('cubic_meters') or 'Pendiente'}"
+            f"   familia: {row.get('family') or '-'} - grupo: {row.get('subgroup') or '-'} "
+            f"- medidas: {row.get('size') or '-'} - M3 calculo: {row.get('cubic_meters') or 'Pendiente'}"
         )
-        lines.append(f"   stock tienda: {row.get('store_stock')} · almacén: {row.get('warehouse_stock')}")
-        lines.append(f"   Woo: [{row.get('woo_item_kind') or '-'}] {row.get('woo_id') or '-'} · {row.get('woo_name') or '-'} · link: {row.get('woo_link_status') or '-'}")
+        lines.append(f"   stock tienda: {row.get('store_stock')} - almacen: {row.get('warehouse_stock')}")
+        lines.append(f"   Woo: [{row.get('woo_item_kind') or '-'}] {row.get('woo_id') or '-'} - {row.get('woo_name') or '-'} - link: {row.get('woo_link_status') or '-'}")
         components = row.get('hub_pack_components_text')
         if components:
             lines.append(f"   contenido: {components}")
@@ -757,11 +757,11 @@ def preview_internal_inventory_update(session, item_id: int, store_stock: Any = 
     new_store = _coerce_optional_float(store_stock)
     new_warehouse = _coerce_optional_float(warehouse_stock)
     if new_store is None and new_warehouse is None:
-        raise CloudAuditError('Indica al menos stock tienda o stock almacén.')
+        raise CloudAuditError('Indica al menos stock tienda o stock almacen.')
     if new_store is not None and new_store < 0:
         raise CloudAuditError('Stock tienda no puede ser negativo.')
     if new_warehouse is not None and new_warehouse < 0:
-        raise CloudAuditError('Stock almacén no puede ser negativo.')
+        raise CloudAuditError('Stock almacen no puede ser negativo.')
     after = dict(before)
     if new_store is not None:
         after['store_stock'] = new_store
@@ -790,14 +790,14 @@ def format_internal_inventory_preview(preview: dict[str, Any]) -> str:
         '',
         f"Item ID: {preview.get('item_id')}",
         f"Nombre: {b.get('name') or b.get('woo_name') or '-'}",
-        f"Woo: [{b.get('woo_item_kind') or '-'}] {b.get('woo_id') or '-'} · {b.get('woo_name') or '-'}",
+        f"Woo: [{b.get('woo_item_kind') or '-'}] {b.get('woo_id') or '-'} - {b.get('woo_name') or '-'}",
         '',
-        f"Stock tienda: {b.get('store_stock')} → {a.get('store_stock')}" + (f"  Δ {preview.get('store_change'):+.2f}" if preview.get('store_change') is not None else ''),
-        f"Stock almacén: {b.get('warehouse_stock')} → {a.get('warehouse_stock')}" + (f"  Δ {preview.get('warehouse_change'):+.2f}" if preview.get('warehouse_change') is not None else ''),
+        f"Stock tienda: {b.get('store_stock')} -> {a.get('store_stock')}" + (f"  delta {preview.get('store_change'):+.2f}" if preview.get('store_change') is not None else ''),
+        f"Stock almacen: {b.get('warehouse_stock')} -> {a.get('warehouse_stock')}" + (f"  delta {preview.get('warehouse_change'):+.2f}" if preview.get('warehouse_change') is not None else ''),
     ]
     if preview.get('notes'):
-        lines.extend(['', f"Nota a añadir: {preview.get('notes')}"])
-    lines.extend(['', 'Se generará operation_snapshot + audit_log.'])
+        lines.extend(['', f"Nota a anadir: {preview.get('notes')}"])
+    lines.extend(['', 'Se generara operation_snapshot + audit_log.'])
     return '\n'.join(lines)
 
 
@@ -816,7 +816,7 @@ def update_internal_inventory_item(session, item_id: int, store_stock: Any = Non
         entity_type='inventory_item',
         entity_id=str(item_id),
         before_data=_json_safe(before),
-        reason='Cambio real interno de inventario en Supabase antes de aplicar actualización.',
+        reason='Cambio real interno de inventario en Supabase antes de aplicar actualizacion.',
     )
     write_snapshot(session, snapshot)
 
@@ -1339,11 +1339,11 @@ def run_cloud_inventory_update_internal(item_id: int, store_stock: str = '', war
         preview = preview_internal_inventory_update(session, item_id, store_stock or None, warehouse_stock or None, notes)
         print(format_internal_inventory_preview(preview))
         if not execute:
-            print('\nPREVIEW ONLY: no se aplicó nada. Repite con --execute para actualizar Supabase.')
+            print('\nPREVIEW ONLY: no se aplico nada. Repite con --execute para actualizar Supabase.')
             return 0
         typed = input('\nEscribe APLICAR para confirmar cambio interno de inventario: ').strip().upper()
         if typed != 'APLICAR':
-            print('Cancelado. No se aplicó nada.')
+            print('Cancelado. No se aplico nada.')
             return 1
         result = update_internal_inventory_item(session, item_id, store_stock or None, warehouse_stock or None, notes, settings)
     except (SupabaseAuthError, CloudAuditError) as exc:
@@ -1366,7 +1366,7 @@ fetch_inventory_item_by_id = _fetch_inventory_item_by_id
 
 
 # =====================================================
-# ERP - Crear nuevo artículo en inventory_items
+# ERP - Crear nuevo articulo en inventory_items
 # =====================================================
 
 CREATE_INVENTORY_ITEM_FIELDS = {
@@ -1395,13 +1395,13 @@ def _normalize_new_inventory_item_payload(data: dict[str, Any]) -> dict[str, Any
     try:
         item_id = int(str(data.get('item_id') or '').strip())
     except Exception:
-        raise CloudAuditError('ID / Referencia inválida. Debe ser numérica.')
+        raise CloudAuditError('ID / Referencia invalida. Debe ser numerica.')
     if item_id <= 0:
         raise CloudAuditError('ID / Referencia debe ser mayor que 0.')
 
     name = str(data.get('name') or '').strip()
     if not name:
-        raise CloudAuditError('El nombre del artículo es obligatorio.')
+        raise CloudAuditError('El nombre del articulo es obligatorio.')
 
     payload['item_id'] = item_id
     payload['name'] = name
@@ -1432,7 +1432,7 @@ def _normalize_new_inventory_item_payload(data: dict[str, Any]) -> dict[str, Any
         try:
             pkg = int(float(str(packages).replace(',', '.')))
         except Exception:
-            raise CloudAuditError('Bultos debe ser numérico.')
+            raise CloudAuditError('Bultos debe ser numerico.')
         if pkg <= 0:
             raise CloudAuditError('Bultos debe ser mayor que 0.')
         payload['packages'] = pkg
@@ -1453,7 +1453,7 @@ def preview_create_cloud_inventory_item(session, data: dict[str, Any]) -> dict[s
 
 
 def create_cloud_inventory_item(session, data: dict[str, Any], settings: Settings | None = None) -> dict[str, Any]:
-    """Crea un artículo nuevo en inventory_items.
+    """Crea un articulo nuevo en inventory_items.
 
     No toca WooCommerce. No toca stock externo. Genera snapshot + audit log.
     """
@@ -1461,7 +1461,7 @@ def create_cloud_inventory_item(session, data: dict[str, Any], settings: Setting
     preview = preview_create_cloud_inventory_item(session, data)
     if preview.get('exists'):
         existing = preview.get('existing') or {}
-        raise CloudAuditError(f"Ya existe inventory_items.item_id={existing.get('item_id')} · {existing.get('name') or '-'}")
+        raise CloudAuditError(f"Ya existe inventory_items.item_id={existing.get('item_id')} - {existing.get('name') or '-'}")
 
     payload = dict(preview['payload'])
     operation_id = new_operation_id('INVITEM')
@@ -1474,8 +1474,8 @@ def create_cloud_inventory_item(session, data: dict[str, Any], settings: Setting
         'created_by_email': session.email,
         'role': session.role,
         'machine': settings.machine_name,
-        'created_from': 'UI ERP Inventario > Crear nuevo artículo',
-        'note': 'Creación manual. WooCommerce no fue tocado.',
+        'created_from': 'UI ERP Inventario > Crear nuevo articulo',
+        'note': 'Creacion manual. WooCommerce no fue tocado.',
     }
 
     snapshot = OperationSnapshot(
@@ -1485,7 +1485,7 @@ def create_cloud_inventory_item(session, data: dict[str, Any], settings: Setting
         entity_type='inventory_item',
         entity_id=str(payload['item_id']),
         before_data={'created_payload': _json_safe(payload)},
-        reason='Creación manual de artículo nuevo en inventory_items desde UI ERP.',
+        reason='Creacion manual de articulo nuevo en inventory_items desde UI ERP.',
     )
     try:
         write_snapshot(session, snapshot)
@@ -1522,7 +1522,7 @@ def create_cloud_inventory_item(session, data: dict[str, Any], settings: Setting
         entity_id=str(payload.get('item_id')),
         before_data=None,
         after_data=_json_safe(written),
-        message='Artículo creado manualmente en inventory_items. WooCommerce no fue tocado.',
+        message='Articulo creado manualmente en inventory_items. WooCommerce no fue tocado.',
     )
     try:
         write_audit_event(session, event, settings)

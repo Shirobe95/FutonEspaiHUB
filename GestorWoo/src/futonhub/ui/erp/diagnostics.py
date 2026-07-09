@@ -16,9 +16,9 @@ class DiagnosticsMixin:
             settings = load_settings()
             exists = settings.db_path.exists()
             status = "OK" if exists else "NO ENCONTRADA"
-            return f"Base activa: {settings.db_path} · {status}"
+            return f"Base activa: {settings.db_path} - {status}"
         except Exception as exc:
-            return f"Base activa: no se pudo comprobar · {exc}"
+            return f"Base activa: no se pudo comprobar - {exc}"
 
     def _safety_status_text(self) -> str:
         try:
@@ -29,22 +29,22 @@ class DiagnosticsMixin:
                 lock_text = "sin bloqueos activos" if not locks else f"{len(locks)} bloqueo(s) activo(s)"
             else:
                 lock_text = "base no encontrada"
-            return f"Modo: {settings.app_mode} · Máquina: {settings.machine_name} · Seguridad: {lock_text}"
+            return f"Modo: {settings.app_mode} - Maquina: {settings.machine_name} - Seguridad: {lock_text}"
         except Exception as exc:
-            return f"Seguridad: no se pudo comprobar · {exc}"
+            return f"Seguridad: no se pudo comprobar - {exc}"
 
     def _show_diagnostics(self) -> None:
         try:
             result = collect_diagnostics()
         except Exception as exc:
             messagebox.showerror(
-                "Diagnóstico del sistema",
-                f"No se pudo generar el diagnóstico.\n\n{exc}",
+                "Diagnostico del sistema",
+                f"No se pudo generar el diagnostico.\n\n{exc}",
             )
             return
 
         window = tk.Toplevel(self)
-        window.title("Diagnóstico del sistema")
+        window.title("Diagnostico del sistema")
         center_window(window, 860, 620)
         window.minsize(760, 520)
         window.configure(bg=C_BG)
@@ -53,9 +53,9 @@ class DiagnosticsMixin:
         frame = ttk.Frame(window, padding=18)
         frame.pack(fill=tk.BOTH, expand=True)
 
-        title = "Diagnóstico del sistema"
+        title = "Diagnostico del sistema"
         if not result.ok:
-            title += " · revisar avisos"
+            title += " - revisar avisos"
         ttk.Label(frame, text=title, style="Section.TLabel").pack(anchor=tk.W, pady=(0, 10))
 
         text_frame = ttk.Frame(frame)

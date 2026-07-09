@@ -51,7 +51,7 @@ class CloudAdminToolsMixin:
         messagebox.showinfo(
             "Caja negra cloud",
             "Audit log de prueba creado correctamente.\n\n"
-            f"Operación: {row.get('operation_id', event.operation_id)}",
+            f"Operacion: {row.get('operation_id', event.operation_id)}",
         )
 
     def _cloud_test_snapshot(self) -> None:
@@ -72,7 +72,7 @@ class CloudAdminToolsMixin:
                 entity_id=snapshot.entity_id,
                 before_data=snapshot.before_data,
                 after_data={"snapshot_created": True},
-                message="Prueba manual de snapshot lógico creada correctamente desde el HUB.",
+                message="Prueba manual de snapshot logico creada correctamente desde el HUB.",
             )
             write_audit_event(self._cloud_session, event, settings)
         except CloudAuditError as exc:
@@ -84,7 +84,7 @@ class CloudAdminToolsMixin:
         messagebox.showinfo(
             "Caja negra cloud",
             "Snapshot de prueba creado correctamente.\n\n"
-            f"Operación: {snapshot.operation_id}\nTambién se registró un audit_log asociado.",
+            f"Operacion: {snapshot.operation_id}\nTambien se registro un audit_log asociado.",
         )
 
     def _show_cloud_logs(self) -> None:
@@ -98,7 +98,7 @@ class CloudAdminToolsMixin:
         except Exception as exc:
             messagebox.showerror("Logs cloud", f"No se pudieron leer los logs.\n\n{exc}")
             return
-        self._show_text_window("Logs y auditoría cloud", format_audit_rows(rows))
+        self._show_text_window("Logs y auditoria cloud", format_audit_rows(rows))
 
     def _show_cloud_snapshots(self) -> None:
         if not self._require_admin_session():
@@ -111,7 +111,7 @@ class CloudAdminToolsMixin:
         except Exception as exc:
             messagebox.showerror("Snapshots cloud", f"No se pudieron leer los snapshots.\n\n{exc}")
             return
-        self._show_text_window("Snapshots / puntos de restauración cloud", format_snapshot_rows(rows))
+        self._show_text_window("Snapshots / puntos de restauracion cloud", format_snapshot_rows(rows))
 
     def _cloud_rollback_snapshot(self) -> None:
         """Admin: preview y rollback interno desde un operation_snapshot.
@@ -124,7 +124,7 @@ class CloudAdminToolsMixin:
             candidates = list_rollback_candidates(self._cloud_session, limit=30)
             candidates_text = format_rollback_candidates(candidates)
         except Exception as exc:
-            candidates_text = f"No se pudieron cargar candidatos automáticamente.\n\n{exc}"
+            candidates_text = f"No se pudieron cargar candidatos automaticamente.\n\n{exc}"
 
         operation_id = simpledialog.askstring(
             "Rollback snapshot",
@@ -144,17 +144,17 @@ class CloudAdminToolsMixin:
             return
         if not messagebox.askyesno(
             "Confirmar rollback interno",
-            preview_text + "\n\n¿Quieres continuar con el rollback?",
+            preview_text + "\n\nQuieres continuar con el rollback",
             parent=self,
         ):
             return
         typed = simpledialog.askstring(
-            "Confirmación requerida",
+            "Confirmacion requerida",
             "Escribe REVERTIR para ejecutar el rollback interno.\n\nWooCommerce no se toca.",
             parent=self,
         )
         if (typed or "").strip().upper() != "REVERTIR":
-            messagebox.showinfo("Rollback snapshot", "Cancelado. No se aplicó rollback.", parent=self)
+            messagebox.showinfo("Rollback snapshot", "Cancelado. No se aplico rollback.", parent=self)
             return
         try:
             result = execute_rollback_from_snapshot(self._cloud_session, operation_id, load_settings())
@@ -164,9 +164,9 @@ class CloudAdminToolsMixin:
         messagebox.showinfo(
             "Rollback completado",
             "Rollback interno completado correctamente.\n\n"
-            f"Operación rollback: {result.get('operation_id')}\n"
+            f"Operacion rollback: {result.get('operation_id')}\n"
             f"Snapshot origen: {result.get('source_operation_id')}\n"
-            f"Tabla: {result.get('table')} · {result.get('key')}={result.get('key_value')}\n\n"
+            f"Tabla: {result.get('table')} - {result.get('key')}={result.get('key_value')}\n\n"
             "Supabase fue revertido. WooCommerce no fue tocado.\n"
             "Caja negra: audit_log + operation_snapshot generados.",
             parent=self,
@@ -187,10 +187,10 @@ class CloudAdminToolsMixin:
         messagebox.showinfo(
             "Constantes cloud",
             "Prueba operativa creada/actualizada correctamente.\n\n"
-            f"Operación: {result.get('operation_id')}\n"
+            f"Operacion: {result.get('operation_id')}\n"
             "Tabla: business_constants\n"
             "Clave: TEST_FACTOR_SEGURIDAD\n\n"
-            "Se registró audit_log y, si había valor previo, snapshot.",
+            "Se registro audit_log y, si habia valor previo, snapshot.",
         )
 
     def _cloud_worker_feedback_test(self) -> None:
@@ -208,10 +208,10 @@ class CloudAdminToolsMixin:
         messagebox.showinfo(
             "Prueba worker",
             "Prueba worker creada/actualizada correctamente.\n\n"
-            f"Operación: {result.get('operation_id')}\n"
+            f"Operacion: {result.get('operation_id')}\n"
             "Tabla: business_constants\n"
             "Clave: TEST_WORKER_FEEDBACK\n\n"
-            "Admin podrá ver el cambio en Logs cloud y Snapshots cloud.",
+            "Admin podra ver el cambio en Logs cloud y Snapshots cloud.",
         )
 
     def _cloud_worker_order_test(self) -> None:
@@ -229,10 +229,10 @@ class CloudAdminToolsMixin:
         messagebox.showinfo(
             "Pedido simulado",
             "Pedido simulado creado/actualizado correctamente.\n\n"
-            f"Operación: {result['operation_id']}\n"
-            f"Acción: {result['action']}\n"
+            f"Operacion: {result['operation_id']}\n"
+            f"Accion: {result['action']}\n"
             f"Order file: {result['order_file']}\n\n"
-            "Admin podrá ver el cambio en Logs cloud y Snapshots cloud.",
+            "Admin podra ver el cambio en Logs cloud y Snapshots cloud.",
         )
 
     def _cloud_clean_worker_order_test(self) -> None:
@@ -240,7 +240,7 @@ class CloudAdminToolsMixin:
             return
         if not messagebox.askyesno(
             "Limpiar pedido simulado",
-            "Esto limpiará/cancelará TEST_WORKER_ORDER y dejará log/snapshot.\n\n¿Continuar?",
+            "Esto limpiara/cancelara TEST_WORKER_ORDER y dejara log/snapshot.\n\nContinuar",
         ):
             return
         settings = load_settings()
@@ -254,8 +254,8 @@ class CloudAdminToolsMixin:
             return
         messagebox.showinfo(
             "Limpiar pedido simulado",
-            "Limpieza/cancelación completada.\n\n"
-            f"Operación: {result['operation_id']}\n"
+            "Limpieza/cancelacion completada.\n\n"
+            f"Operacion: {result['operation_id']}\n"
             f"Borrado: {result['deleted']}\n"
             f"Marcado cancelado: {result['marked_cancelled']}",
         )
@@ -275,12 +275,12 @@ class CloudAdminToolsMixin:
         messagebox.showinfo(
             "Inventario simulado",
             "Inventario simulado creado/actualizado correctamente.\n\n"
-            f"Operación: {result['operation_id']}\n"
-            f"Acción: {result['action']}\n"
+            f"Operacion: {result['operation_id']}\n"
+            f"Accion: {result['action']}\n"
             f"Item ID: {result['item_id']}\n"
             f"Stock tienda: {result['store_stock']}\n"
-            f"Stock almacén: {result['warehouse_stock']}\n\n"
-            "Admin podrá ver el cambio en Logs cloud y Snapshots cloud.",
+            f"Stock almacen: {result['warehouse_stock']}\n\n"
+            "Admin podra ver el cambio en Logs cloud y Snapshots cloud.",
         )
 
     def _cloud_clean_worker_inventory_test(self) -> None:
@@ -288,7 +288,7 @@ class CloudAdminToolsMixin:
             return
         if not messagebox.askyesno(
             "Limpiar inventario simulado",
-            "Esto limpiará/cancelará TEST_WORKER_INVENTORY_ITEM y dejará log/snapshot.\n\n¿Continuar?",
+            "Esto limpiara/cancelara TEST_WORKER_INVENTORY_ITEM y dejara log/snapshot.\n\nContinuar",
         ):
             return
         settings = load_settings()
@@ -302,8 +302,8 @@ class CloudAdminToolsMixin:
             return
         messagebox.showinfo(
             "Limpiar inventario simulado",
-            "Limpieza/cancelación completada.\n\n"
-            f"Operación: {result['operation_id']}\n"
+            "Limpieza/cancelacion completada.\n\n"
+            f"Operacion: {result['operation_id']}\n"
             f"Borrado: {result['deleted']}\n"
             f"Marcado cancelado: {result['marked_inactive']}",
         )
@@ -323,11 +323,11 @@ class CloudAdminToolsMixin:
         messagebox.showinfo(
             "Propuesta precio simulada",
             "Propuesta de precio simulada creada/actualizada correctamente.\n\n"
-            f"Operación: {result['operation_id']}\n"
-            f"Acción: {result['action']}\n"
+            f"Operacion: {result['operation_id']}\n"
+            f"Accion: {result['action']}\n"
             f"Precio anterior: {result['old_price']}\n"
             f"Precio propuesto: {result['new_price']}\n\n"
-            "Admin podrá ver el cambio en Logs cloud y Snapshots cloud.",
+            "Admin podra ver el cambio en Logs cloud y Snapshots cloud.",
         )
 
     def _cloud_review_worker_price_test(self, decision: str) -> None:
@@ -337,7 +337,7 @@ class CloudAdminToolsMixin:
         if not messagebox.askyesno(
             "Revisar propuesta precio test",
             f"Esto va a {label} TEST_WORKER_PRICE_PROPOSAL.\n\n"
-            "No se publicará nada en WooCommerce. Se generará snapshot y log.\n\n¿Continuar?",
+            "No se publicara nada en WooCommerce. Se generara snapshot y log.\n\nContinuar",
         ):
             return
         settings = load_settings()
@@ -352,10 +352,10 @@ class CloudAdminToolsMixin:
         messagebox.showinfo(
             "Revisar propuesta precio test",
             "Propuesta simulada revisada correctamente.\n\n"
-            f"Operación: {result['operation_id']}\n"
-            f"Decisión: {result['decision']}\n"
+            f"Operacion: {result['operation_id']}\n"
+            f"Decision: {result['decision']}\n"
             f"Item Woo test: {result['item_woo_id']}\n\n"
-            "No se publicó nada en WooCommerce.",
+            "No se publico nada en WooCommerce.",
         )
 
     def _cloud_clean_worker_price_test(self) -> None:
@@ -363,7 +363,7 @@ class CloudAdminToolsMixin:
             return
         if not messagebox.askyesno(
             "Limpiar propuesta precio simulada",
-            "Esto limpiará/cancelará TEST_WORKER_PRICE_PROPOSAL y dejará log/snapshot.\n\n¿Continuar?",
+            "Esto limpiara/cancelara TEST_WORKER_PRICE_PROPOSAL y dejara log/snapshot.\n\nContinuar",
         ):
             return
         settings = load_settings()
@@ -377,8 +377,8 @@ class CloudAdminToolsMixin:
             return
         messagebox.showinfo(
             "Limpiar propuesta precio simulada",
-            "Limpieza/cancelación completada.\n\n"
-            f"Operación: {result['operation_id']}\n"
+            "Limpieza/cancelacion completada.\n\n"
+            f"Operacion: {result['operation_id']}\n"
             f"Borrado: {result['deleted']}\n"
             f"Marcado cancelado: {result['marked_cancelled']}",
         )
@@ -388,7 +388,7 @@ class CloudAdminToolsMixin:
             return
         if not messagebox.askyesno(
             "Limpiar prueba worker",
-            "Se borrará TEST_WORKER_FEEDBACK de business_constants y se dejará log/snapshot.\n\n¿Continuar?",
+            "Se borrara TEST_WORKER_FEEDBACK de business_constants y se dejara log/snapshot.\n\nContinuar",
         ):
             return
         try:
@@ -403,7 +403,7 @@ class CloudAdminToolsMixin:
         messagebox.showinfo(
             "Limpiar prueba worker",
             "Limpieza completada.\n\n"
-            f"Operación: {result.get('operation_id')}\n"
+            f"Operacion: {result.get('operation_id')}\n"
             f"Borrado: {result.get('deleted')}",
         )
 

@@ -35,7 +35,7 @@ def _truthy_source_flag(value: Any) -> bool:
     if value is True:
         return True
     if isinstance(value, str):
-        return value.strip().lower() in {"true", "1", "yes", "si", "sí"}
+        return value.strip().lower() in {"true", "1", "yes", "si", "si"}
     if isinstance(value, (int, float)):
         return value == 1
     return False
@@ -207,7 +207,7 @@ def analyze_price_proposal_soft_deletes(
 def build_price_proposal_restore_plan(
     analysis: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """Genera un plan reversible de restauración; no ejecuta escrituras."""
+    """Genera un plan reversible de restauracion; no ejecuta escrituras."""
     return {
         "write_performed": False,
         "selectors": ["price_delete_operation_id", "logical_token", "exact_ids"],
@@ -223,14 +223,14 @@ def build_price_proposal_restore_plan(
             for row in analysis
         ],
         "steps": [
-            "resolver el selector a un conjunto exacto de IDs y bloquear ambigüedades",
+            "resolver el selector a un conjunto exacto de IDs y bloquear ambiguedades",
             "verificar conteo y ui_deleted=true antes de escribir",
             "crear snapshot previo para cada ID",
-            "registrar una operación PRICERESTORE independiente",
-            "actualizar únicamente los IDs autorizados con ui_deleted=false",
-            "preservar ui_deleted_at, actor y PRICEDEL como trazabilidad histórica",
-            "añadir ui_restored_at, ui_restore_operation_id y actor de restauración",
-            "verificar conteos y visibilidad después de escribir",
+            "registrar una operacion PRICERESTORE independiente",
+            "actualizar unicamente los IDs autorizados con ui_deleted=false",
+            "preservar ui_deleted_at, actor y PRICEDEL como trazabilidad historica",
+            "anadir ui_restored_at, ui_restore_operation_id y actor de restauracion",
+            "verificar conteos y visibilidad despues de escribir",
             "permitir rollback desde los snapshots PRICERESTORE",
         ],
     }
@@ -284,7 +284,7 @@ def _legacy_price_safety_preview(item: dict[str, Any], kind: str, proposed_price
     """Clasifica riesgos de precio antes de crear/publicar propuestas.
 
     status puede ser OK, WARNING o ERROR. ERROR bloquea; WARNING requiere
-    confirmación explícita. No toca WooCommerce.
+    confirmacion explicita. No toca WooCommerce.
     """
     current = _current_price_from_item(item)
     kind = (kind or "").strip().lower()
@@ -297,13 +297,13 @@ def _legacy_price_safety_preview(item: dict[str, Any], kind: str, proposed_price
         status = "ERROR"
 
     if kind == "product" and item_type in {"variable", "variable-subscription"}:
-        messages.append("ERROR: el producto padre variable no tiene precio vendible único. Crea la propuesta sobre una variación concreta.")
+        messages.append("ERROR: el producto padre variable no tiene precio vendible unico. Crea la propuesta sobre una variacion concreta.")
         status = "ERROR"
     elif current is None or current <= 0:
         if kind == "variation":
-            messages.append("WARNING: la variación no tiene precio actual válido en la base interna. La propuesta puede crearse, pero exige revisión antes de publicar.")
+            messages.append("WARNING: la variacion no tiene precio actual valido en la base interna. La propuesta puede crearse, pero exige revision antes de publicar.")
         else:
-            messages.append("WARNING: el producto no tiene precio actual válido en la base interna. La propuesta puede crearse, pero exige revisión antes de publicar.")
+            messages.append("WARNING: el producto no tiene precio actual valido en la base interna. La propuesta puede crearse, pero exige revision antes de publicar.")
         if status != "ERROR":
             status = "WARNING"
 
@@ -323,12 +323,12 @@ def _legacy_price_safety_preview(item: dict[str, Any], kind: str, proposed_price
             elif drop_percent >= settings.price_drop_warning_percent and status != "ERROR":
                 messages.append(
                     f"WARNING: bajada de precio del {drop_percent:.2f}%, supera el aviso configurado "
-                    f"({settings.price_drop_warning_percent:.2f}%). Requiere confirmación explícita."
+                    f"({settings.price_drop_warning_percent:.2f}%). Requiere confirmacion explicita."
                 )
                 status = "WARNING"
 
     if not messages:
-        messages.append("OK: validación de precio sin alertas.")
+        messages.append("OK: validacion de precio sin alertas.")
 
     return {
         "status": status,
@@ -350,9 +350,9 @@ def _legacy_format_price_safety_for_search(row: dict[str, Any]) -> str | None:
     if kind == "product" and str(item_type).lower() in {"variable", "variable-subscription"} and (price is None or price <= 0):
         return "WARNING: padre variable sin precio propio; usar variaciones."
     if kind == "variation" and (price is None or price <= 0):
-        return "WARNING: variación sin precio actual válido."
+        return "WARNING: variacion sin precio actual valido."
     if kind == "product" and str(item_type).lower() not in {"variable", "variable-subscription"} and (price is None or price <= 0):
-        return "WARNING: producto simple sin precio actual válido."
+        return "WARNING: producto simple sin precio actual valido."
     return None
 
 
@@ -364,7 +364,7 @@ def search_cloud_products(session, query: str, limit: int = 15) -> list[dict[str
     """
     q = (query or "").strip()
     if not q:
-        raise CloudAuditError("Indica texto de búsqueda para productos Supabase.")
+        raise CloudAuditError("Indica texto de busqueda para productos Supabase.")
     limit = max(1, min(int(limit or 15), 50))
     pattern = f"%{q}%"
     results: list[dict[str, Any]] = []
@@ -407,12 +407,12 @@ def search_cloud_products(session, query: str, limit: int = 15) -> list[dict[str
                 .execute()
             )
             for row in getattr(var_resp, "data", None) or []:
-                label = row.get("attributes_label") or "variación"
+                label = row.get("attributes_label") or "variacion"
                 result_row = {
                     "item_kind": "variation",
                     "woo_id": row.get("woo_id"),
                     "parent_woo_id": row.get("parent_woo_id"),
-                    "name": f"{row.get('parent_name')} · {label}",
+                    "name": f"{row.get('parent_name')} - {label}",
                     "sku": row.get("sku"),
                     "type": "variation",
                     "status": row.get("status"),
@@ -438,14 +438,14 @@ def format_cloud_product_search(rows: list[dict[str, Any]]) -> str:
     ]
     for idx, row in enumerate(rows, start=1):
         lines.append(
-            f"{idx}. [{row.get('item_kind')}] woo_id={row.get('woo_id')} · {row.get('name')}"
+            f"{idx}. [{row.get('item_kind')}] woo_id={row.get('woo_id')} - {row.get('name')}"
         )
         lines.append(
-            f"   SKU: {row.get('sku') or '-'} · tipo: {row.get('type') or '-'} · precio: {row.get('price') or '-'} · "
+            f"   SKU: {row.get('sku') or '-'} - tipo: {row.get('type') or '-'} - precio: {row.get('price') or '-'} - "
             f"stock: {row.get('stock_status') or '-'} {row.get('stock_quantity') if row.get('stock_quantity') is not None else ''}"
         )
         if row.get("price_warning"):
-            lines.append(f"   ⚠ {row.get('price_warning')}")
+            lines.append(f"    {row.get('price_warning')}")
     return "\n".join(lines)
 
 
@@ -504,7 +504,7 @@ def _fetch_cloud_item_for_price(
         raise CloudAuditError(f"No existe {kind} con woo_id={woo_id} en Supabase.")
     row = rows[0]
     if kind == "variation":
-        row["name"] = f"{row.get('parent_name')} · {row.get('attributes_label') or 'variación'}"
+        row["name"] = f"{row.get('parent_name')} - {row.get('attributes_label') or 'variacion'}"
     return row
 
 
@@ -534,7 +534,7 @@ def preview_real_price_proposal(
 ) -> dict[str, Any]:
     """Previsualiza una propuesta interna sin escribir nada.
 
-    Se usa desde la UI para que el usuario vea qué se va a guardar antes de
+    Se usa desde la UI para que el usuario vea que se va a guardar antes de
     crear la propuesta. No toca WooCommerce ni Supabase.
     """
     settings = settings or load_settings()
@@ -576,13 +576,13 @@ def format_real_price_proposal_preview(preview: dict[str, Any]) -> str:
     lines = [
         "PREVIEW PROPUESTA DE PRECIO",
         "=" * 38,
-        f"Item: [{preview.get('item_kind')}] {preview.get('woo_id')} · {preview.get('name')}",
+        f"Item: [{preview.get('item_kind')}] {preview.get('woo_id')} - {preview.get('name')}",
         f"Precio actual interno: {old_price if old_price is not None else '-'}",
         f"Precio propuesto: {new_price if new_price is not None else '-'}",
     ]
     if delta is not None:
         if pct is None:
-            lines.append(f"Diferencia: {delta:.2f} (sin % por precio base 0/vacío)")
+            lines.append(f"Diferencia: {delta:.2f} (sin % por precio base 0/vacio)")
         else:
             lines.append(f"Diferencia: {delta:.2f} ({pct:.2f}%)")
     if preview.get("notes"):
@@ -590,7 +590,7 @@ def format_real_price_proposal_preview(preview: dict[str, Any]) -> str:
     lines.extend(["", f"Estado seguridad: {safety.get('status') or 'OK'}"])
     for msg in safety.get("messages") or []:
         lines.append(f"- {msg}")
-    lines.extend(["", "WooCommerce no será tocado al crear esta propuesta."])
+    lines.extend(["", "WooCommerce no sera tocado al crear esta propuesta."])
     return "\n".join(lines)
 
 
@@ -600,7 +600,7 @@ def get_real_price_proposal(session, proposal_id: str) -> dict[str, Any]:
     resp = session.client.table("price_change_proposals").select("*").eq("id", proposal_id).limit(1).execute()
     rows = getattr(resp, "data", None) or []
     if not rows:
-        raise CloudAuditError(f"No se encontró la propuesta {proposal_id}.")
+        raise CloudAuditError(f"No se encontro la propuesta {proposal_id}.")
     return rows[0]
 
 
@@ -660,22 +660,22 @@ def format_existing_price_proposal_preview(preview: dict[str, Any]) -> str:
         "=" * 38,
         f"Estado actual: {preview.get('status') or prop.get('status')}",
         f"Propuesta ID: {prop.get('id')}",
-        f"Item: [{preview.get('item_kind')}] {preview.get('woo_id')} · {preview.get('name')}",
+        f"Item: [{preview.get('item_kind')}] {preview.get('woo_id')} - {preview.get('name')}",
         f"Precio actual interno al crear propuesta: {old_price if old_price is not None else '-'}",
         f"Precio propuesto: {new_price if new_price is not None else '-'}",
     ]
     if delta is not None:
         if pct is None:
-            lines.append(f"Diferencia: {delta:.2f} (sin % por precio base 0/vacío)")
+            lines.append(f"Diferencia: {delta:.2f} (sin % por precio base 0/vacio)")
         else:
             lines.append(f"Diferencia: {delta:.2f} ({pct:.2f}%)")
     if preview.get("notes"):
         lines.append(f"Notas: {preview.get('notes')}")
     source = prop.get("source_row") or {}
     if source.get("created_by_email"):
-        lines.append(f"Creado por: {source.get('created_by_email')} · máquina: {source.get('machine') or '-'}")
+        lines.append(f"Creado por: {source.get('created_by_email')} - maquina: {source.get('machine') or '-'}")
     if source.get("reviewed_by_email"):
-        lines.append(f"Revisado por: {source.get('reviewed_by_email')} · rol: {source.get('reviewed_by_role') or '-'}")
+        lines.append(f"Revisado por: {source.get('reviewed_by_email')} - rol: {source.get('reviewed_by_role') or '-'}")
     lines.extend(["", f"Estado seguridad recalculado: {safety.get('status') or 'OK'}"])
     for msg in safety.get("messages") or []:
         lines.append(f"- {msg}")
@@ -721,12 +721,12 @@ def create_real_price_proposal(
 
     if validation["status"] == "ERROR":
         raise CloudAuditError(
-            "Validación de precio bloqueada:\n"
+            "Validacion de precio bloqueada:\n"
             + "\n".join(f"- {m}" for m in validation["messages"])
         )
     if validation["status"] == "WARNING" and not acknowledge_price_warning:
         raise CloudAuditError(
-            "Validación de precio requiere confirmación explícita:\n"
+            "Validacion de precio requiere confirmacion explicita:\n"
             + "\n".join(f"- {m}" for m in validation["messages"])
             + "\n\nSi revisaste el cambio, repite con --ack-price-warning."
         )
@@ -739,7 +739,7 @@ def create_real_price_proposal(
             if before is None:
                 raise CloudAuditError(f"No existe la propuesta {proposal_id} para actualizar.")
             if str(before.get("item_kind") or "") != kind or int(before.get("item_woo_id") or 0) != int(woo_id):
-                raise CloudAuditError("La propuesta seleccionada no corresponde al artículo editado.")
+                raise CloudAuditError("La propuesta seleccionada no corresponde al articulo editado.")
         else:
             before = _fetch_latest_price_proposal(session, item_kind=kind, item_woo_id=int(woo_id), status="pending")
         if before is not None:
@@ -784,7 +784,7 @@ def create_real_price_proposal(
             "old_price": old_price,
             "new_price": proposed_price,
             "delta": proposed_price - old_price if old_price is not None else None,
-            "notes": notes or "Propuesta real interna creada desde Supabase. No publicar en WooCommerce todavía.",
+            "notes": notes or "Propuesta real interna creada desde Supabase. No publicar en WooCommerce todavia.",
             "status": "pending",
             "created_by": session.user_id,
             "source_row": {
@@ -850,7 +850,7 @@ def create_real_price_proposal(
                 entity_type="price_change_proposal",
                 entity_id=str(woo_id),
                 before_data=_json_safe(before),
-                message="Falló v10 propuesta real interna.",
+                message="Fallo v10 propuesta real interna.",
                 error_detail=str(exc),
             ), settings)
         except Exception:
@@ -866,7 +866,7 @@ def review_latest_real_price_proposal(session, decision: str, proposal_id: str |
         raise CloudAuditError("Solo usuarios admin o worker activos pueden aprobar/rechazar propuestas reales internas.")
     normalized = (decision or "").strip().lower()
     if normalized not in {"approved", "rejected"}:
-        raise CloudAuditError("Decisión inválida. Usa approved o rejected.")
+        raise CloudAuditError("Decision invalida. Usa approved o rejected.")
     operation_id = new_operation_id("REALREVIEW")
     before = None
     try:
@@ -878,9 +878,9 @@ def review_latest_real_price_proposal(session, decision: str, proposal_id: str |
             before = _fetch_latest_price_proposal(session, status="pending")
         if before is None:
             raise CloudAuditError("No hay propuesta pendiente para revisar.")
-        # No revisar propuestas TEST_* aquí salvo que se pida por el flujo test anterior.
+        # No revisar propuestas TEST_* aqui salvo que se pida por el flujo test anterior.
         if (before.get("source_row") or {}).get("test") is True:
-            raise CloudAuditError("La última pendiente es de TEST. Usa el flujo de review test para esa propuesta.")
+            raise CloudAuditError("La ultima pendiente es de TEST. Usa el flujo de review test para esa propuesta.")
 
         write_snapshot(session, OperationSnapshot(
             operation_id=operation_id,
@@ -895,7 +895,7 @@ def review_latest_real_price_proposal(session, decision: str, proposal_id: str |
             "status": normalized,
             "reviewed_by": session.user_id,
             "reviewed_at": datetime.now(timezone.utc).isoformat(),
-            "notes": (before.get("notes") or "") + f"\n[v10] Revisión admin: {normalized}. No publicado en WooCommerce.",
+            "notes": (before.get("notes") or "") + f"\n[v10] Revision admin: {normalized}. No publicado en WooCommerce.",
             "source_row": {
                 **(before.get("source_row") or {}),
                 "review_operation_id": operation_id,
@@ -917,7 +917,7 @@ def review_latest_real_price_proposal(session, decision: str, proposal_id: str |
             entity_id=str(before.get("id")),
             before_data=_json_safe(before),
             after_data=_json_safe(written),
-            message=f"v12: usuario marcó propuesta real interna como {normalized}. WooCommerce no fue tocado.",
+            message=f"v12: usuario marco propuesta real interna como {normalized}. WooCommerce no fue tocado.",
         ), settings)
         return {"operation_id": operation_id, "decision": normalized, "proposal": written, "before": before}
     except CloudAuditError:
@@ -933,7 +933,7 @@ def review_latest_real_price_proposal(session, decision: str, proposal_id: str |
                 entity_type="price_change_proposal",
                 entity_id=str((before or {}).get("id") or proposal_id or "latest"),
                 before_data=_json_safe(before),
-                message="Falló v12 revisión de propuesta real interna.",
+                message="Fallo v12 revision de propuesta real interna.",
                 error_detail=str(exc),
             ), settings)
         except Exception:
@@ -947,7 +947,7 @@ def reject_real_price_proposal_group(
     reason: str,
     settings: Settings | None = None,
 ) -> dict[str, Any]:
-    """Rechaza una propuesta lógica completa sin tocar WooCommerce."""
+    """Rechaza una propuesta logica completa sin tocar WooCommerce."""
     settings = settings or load_settings()
     if (session.role or "").lower() not in {"admin", "worker"}:
         raise CloudAuditError("Solo admin o worker puede rechazar propuestas.")
@@ -960,9 +960,9 @@ def reject_real_price_proposal_group(
     response = session.client.table("price_change_proposals").select("*").in_("id", ids).limit(len(ids)).execute()
     rows = list(getattr(response, "data", None) or [])
     if len(rows) != len(ids):
-        raise CloudAuditError("No se pudieron cargar todas las líneas de la propuesta.")
+        raise CloudAuditError("No se pudieron cargar todas las lineas de la propuesta.")
     if any(_is_ui_deleted(row) for row in rows):
-        raise CloudAuditError("La propuesta contiene líneas borradas.")
+        raise CloudAuditError("La propuesta contiene lineas borradas.")
     if any(str(row.get("status") or "").strip().lower() != "pending" for row in rows):
         raise CloudAuditError("Solo se puede rechazar una propuesta completamente pendiente.")
 
@@ -974,7 +974,7 @@ def reject_real_price_proposal_group(
         entity_type="price_proposal_group",
         entity_id=str(ids[0]),
         before_data=_json_safe(rows),
-        reason="Snapshot antes de rechazar una propuesta lógica completa.",
+        reason="Snapshot antes de rechazar una propuesta logica completa.",
     ))
     now = datetime.now(timezone.utc).isoformat()
     for row in rows:
@@ -995,7 +995,7 @@ def reject_real_price_proposal_group(
             },
         }).eq("id", row.get("id")).eq("status", "pending").execute()
         if not (getattr(update_response, "data", None) or []):
-            raise CloudAuditError(f"No se confirmó el rechazo de la línea {row.get('id')}.")
+            raise CloudAuditError(f"No se confirmo el rechazo de la linea {row.get('id')}.")
     write_audit_event(session, AuditEvent(
         operation_id=operation_id,
         module="price_change_proposals",
@@ -1006,7 +1006,7 @@ def reject_real_price_proposal_group(
         entity_id=str(ids[0]),
         before_data=_json_safe(rows),
         after_data={"proposal_ids": ids, "reason": reason, "status": "rejected"},
-        message="Propuesta lógica rechazada sin escribir en WooCommerce.",
+        message="Propuesta logica rechazada sin escribir en WooCommerce.",
     ), settings)
     return {"operation_id": operation_id, "rejected_count": len(rows), "proposal_ids": ids}
 
@@ -1018,10 +1018,10 @@ def delete_real_price_proposal_group(
     settings: Settings | None = None,
     proposal_ids: list[str] | tuple[str, ...] | None = None,
 ) -> dict[str, Any]:
-    """Elimina únicamente los IDs reales seleccionados por la UI.
+    """Elimina unicamente los IDs reales seleccionados por la UI.
 
     `proposal_name` se conserva solo para trazabilidad y compatibilidad; nunca se
-    usa como condición de borrado.
+    usa como condicion de borrado.
     """
     settings = settings or load_settings()
     if not proposal_id:
@@ -1031,7 +1031,7 @@ def delete_real_price_proposal_group(
         resp = session.client.table("price_change_proposals").select("*").eq("id", proposal_id).limit(1).execute()
         rows = getattr(resp, "data", None) or []
         if not rows:
-            raise CloudAuditError(f"No se encontró la propuesta {proposal_id}.")
+            raise CloudAuditError(f"No se encontro la propuesta {proposal_id}.")
         selected = rows[0]
         selected_source = _source_row_dict(selected)
         group_name = (proposal_name or selected_source.get("ui_proposal_name") or "").strip()
@@ -1051,7 +1051,7 @@ def delete_real_price_proposal_group(
         protected_statuses = {"published", "publishing"}
         blocked = [row for row in target_rows if str(row.get("status") or "").strip().lower() in protected_statuses]
         if blocked:
-            raise CloudAuditError("No se puede borrar una propuesta publicada o en publicación. Crea una nueva propuesta de corrección.")
+            raise CloudAuditError("No se puede borrar una propuesta publicada o en publicacion. Crea una nueva propuesta de correccion.")
 
         before_data = _json_safe(target_rows)
         for row in target_rows:
@@ -1096,7 +1096,7 @@ def delete_real_price_proposal_group(
                 remaining.extend(getattr(check, "data", None) or [])
             if remaining:
                 # Supabase/RLS puede devolver DELETE sin error aunque no haya eliminado nada.
-                # Verificamos y, si sigue existiendo, aplicamos borrado lógico.
+                # Verificamos y, si sigue existiendo, aplicamos borrado logico.
                 soft_delete_rows()
             else:
                 hard_deleted = True
@@ -1128,7 +1128,7 @@ def delete_real_price_proposal_group(
                 severity="ERROR",
                 entity_type="price_change_proposal",
                 entity_id=str(proposal_id),
-                message="Falló el borrado de propuesta desde UI-ERP.",
+                message="Fallo el borrado de propuesta desde UI-ERP.",
                 error_detail=str(exc),
             ), settings)
         except Exception:
@@ -1279,20 +1279,20 @@ def format_real_price_proposals(rows: list[dict[str, Any]]) -> str:
         pct = None
         if delta is not None and old_price not in (None, 0):
             pct = (delta / old_price) * 100
-        lines.append(f"{idx}. {row.get('status')} · [{row.get('item_kind')}] {row.get('item_woo_id')} · {row.get('name')}")
+        lines.append(f"{idx}. {row.get('status')} - [{row.get('item_kind')}] {row.get('item_woo_id')} - {row.get('name')}")
         lines.append(f"   propuesta_id: {row.get('id')}")
-        lines.append(f"   precio anterior interno: {old_price} · propuesto: {new_price}")
+        lines.append(f"   precio anterior interno: {old_price} - propuesto: {new_price}")
         if delta is not None:
             if pct is None:
-                lines.append(f"   diferencia: {delta:.2f} (sin % por precio base 0/vacío)")
+                lines.append(f"   diferencia: {delta:.2f} (sin % por precio base 0/vacio)")
             else:
                 lines.append(f"   diferencia: {delta:.2f} ({pct:.2f}%)")
-        lines.append(f"   creado: {row.get('created_at')} · revisado: {row.get('reviewed_at') or '-'}")
+        lines.append(f"   creado: {row.get('created_at')} - revisado: {row.get('reviewed_at') or '-'}")
         source = row.get("source_row") or {}
         if source.get("created_by_email"):
-            lines.append(f"   creado por: {source.get('created_by_email')} · máquina: {source.get('machine') or '-'}")
+            lines.append(f"   creado por: {source.get('created_by_email')} - maquina: {source.get('machine') or '-'}")
         if source.get("reviewed_by_email"):
-            lines.append(f"   revisado por: {source.get('reviewed_by_email')} · rol: {source.get('reviewed_by_role') or '-'}")
+            lines.append(f"   revisado por: {source.get('reviewed_by_email')} - rol: {source.get('reviewed_by_role') or '-'}")
         lines.append("")
     return "\n".join(lines)
 
@@ -1339,11 +1339,11 @@ def run_cloud_real_price_proposal(item_kind: str, woo_id: int, new_price: float,
     print("Propuesta real interna creada/actualizada correctamente.")
     print(f"operation_id: {result['operation_id']}")
     print(f"action: {result['action']}")
-    print(f"item: [{proposal.get('item_kind')}] {proposal.get('item_woo_id')} · {item.get('name') or item.get('parent_name')}")
+    print(f"item: [{proposal.get('item_kind')}] {proposal.get('item_woo_id')} - {item.get('name') or item.get('parent_name')}")
     print(f"precio anterior: {result['old_price']}")
     print(f"precio propuesto: {result['new_price']}")
     safety = result.get("price_safety") or {}
-    print(f"validación precio: {safety.get('status')}")
+    print(f"validacion precio: {safety.get('status')}")
     for msg in safety.get("messages") or []:
         print(f" - {msg}")
     if safety.get("delta") is not None:
@@ -1354,10 +1354,10 @@ def run_cloud_real_price_proposal(item_kind: str, woo_id: int, new_price: float,
 
 
 def price_heart_attack_tests(session, item_kind: str, woo_id: int, settings: Settings | None = None) -> dict[str, Any]:
-    """Ejecuta pruebas de estrés de precio sin escribir datos.
+    """Ejecuta pruebas de estres de precio sin escribir datos.
 
     No crea propuestas, no toca WooCommerce y no actualiza Supabase. Solo usa la
-    misma lógica de validación que protege las propuestas reales.
+    misma logica de validacion que protege las propuestas reales.
     """
     settings = settings or load_settings()
     kind = (item_kind or "").strip().lower()
@@ -1414,12 +1414,12 @@ def price_heart_attack_tests(session, item_kind: str, woo_id: int, settings: Set
 def format_price_heart_attack_tests(result: dict[str, Any]) -> str:
     item = result.get("item") or {}
     lines = [
-        "PRUEBAS ATAQUE AL CORAZÓN · PRECIOS",
+        "PRUEBAS ATAQUE AL CORAZON - PRECIOS",
         "=" * 48,
         "No crea propuestas. No toca WooCommerce. No modifica Supabase.",
         "",
-        f"Item: [{result.get('item_kind')}] {result.get('woo_id')} · {item.get('name') or item.get('parent_name') or '-'}",
-        f"Precio actual interno usado: {result.get('current_price') if result.get('current_price') is not None else '0/vacío'}",
+        f"Item: [{result.get('item_kind')}] {result.get('woo_id')} - {item.get('name') or item.get('parent_name') or '-'}",
+        f"Precio actual interno usado: {result.get('current_price') if result.get('current_price') is not None else '0/vacio'}",
         f"Umbral WARNING: {result.get('warning_threshold_percent'):.2f}%",
         f"Umbral ERROR: {result.get('block_threshold_percent'):.2f}%",
         "",
@@ -1433,17 +1433,17 @@ def format_price_heart_attack_tests(result: dict[str, Any]) -> str:
         all_ok = all_ok and ok
         lines.append(f"{idx}. {case.get('title')}")
         lines.append(f"   Precio probado: {case.get('proposed_price')}")
-        lines.append(f"   Esperado: {expected} · Resultado: {actual} · {'OK' if ok else 'REVISAR'}")
+        lines.append(f"   Esperado: {expected} - Resultado: {actual} - {'OK' if ok else 'REVISAR'}")
         if validation.get("delta") is not None:
             pct = validation.get("delta_percent")
             if pct is None:
-                lines.append(f"   Diferencia: {validation.get('delta'):.2f} (sin % por base 0/vacía)")
+                lines.append(f"   Diferencia: {validation.get('delta'):.2f} (sin % por base 0/vacia)")
             else:
                 lines.append(f"   Diferencia: {validation.get('delta'):.2f} ({pct:.2f}%)")
         for msg in validation.get("messages") or []:
             lines.append(f"   - {msg}")
         lines.append("")
-    lines.append("RESULTADO GLOBAL: " + ("OK · barreras de precio responden como esperado." if all_ok else "REVISAR · alguna barrera no respondió como esperado."))
+    lines.append("RESULTADO GLOBAL: " + ("OK - barreras de precio responden como esperado." if all_ok else "REVISAR - alguna barrera no respondio como esperado."))
     return "\n".join(lines)
 
 
@@ -1476,7 +1476,7 @@ def run_cloud_review_real_price_proposal(decision: str, proposal_id: str = "") -
     print(f"operation_id: {result['operation_id']}")
     print(f"decision: {result['decision']}")
     print(f"proposal_id: {prop.get('id')}")
-    print(f"item: [{prop.get('item_kind')}] {prop.get('item_woo_id')} · {prop.get('name')}")
+    print(f"item: [{prop.get('item_kind')}] {prop.get('item_woo_id')} - {prop.get('name')}")
     print("WooCommerce no fue tocado.")
     return 0
 
@@ -1497,7 +1497,7 @@ def run_cloud_review_worker_price_test(decision: str) -> int:
     print(f"decision: {result['decision']}")
     print("Tabla: price_change_proposals")
     print(f"item_woo_id: {result['item_woo_id']}")
-    print("No se publicó nada en WooCommerce.")
+    print("No se publico nada en WooCommerce.")
     return 0
 
 def run_cloud_worker_price_test() -> int:
@@ -1561,7 +1561,7 @@ def _fetch_simulated_inventory_item(session) -> dict[str, Any] | None:
 def test_worker_simulated_inventory_change(session, settings: Settings | None = None) -> dict[str, Any]:
     """Crea/actualiza un item de inventario TEST_* reversible.
 
-    Es una prueba más cercana al trabajo real de tienda, pero aislada:
+    Es una prueba mas cercana al trabajo real de tienda, pero aislada:
     - item_id negativo reservado para pruebas
     - name TEST_WORKER_INVENTORY_ITEM
     - no enlaza WooCommerce
@@ -1637,7 +1637,7 @@ def test_worker_simulated_inventory_change(session, settings: Settings | None = 
             entity_id=str(TEST_INVENTORY_ITEM_ID),
             before_data=_json_safe(before),
             after_data=_json_safe(written),
-            message="Prueba real v8.6: usuario operativo creó/actualizó inventario simulado correctamente.",
+            message="Prueba real v8.6: usuario operativo creo/actualizo inventario simulado correctamente.",
         )
         write_audit_event(session, event, settings)
         return {
@@ -1663,7 +1663,7 @@ def test_worker_simulated_inventory_change(session, settings: Settings | None = 
             entity_id=str(TEST_INVENTORY_ITEM_ID),
             before_data=None,
             after_data=None,
-            message="Falló la prueba v8.6 de inventario simulado worker.",
+            message="Fallo la prueba v8.6 de inventario simulado worker.",
             error_detail=str(exc),
         )
         try:
@@ -1706,7 +1706,7 @@ def clean_worker_simulated_inventory(session, settings: Settings | None = None) 
                 data = getattr(resp, "data", None)
                 deleted = bool(data if isinstance(data, bool) else (data or False))
             except Exception:
-                # Fallback: si no se ejecutó el SQL v8.6, no borra; lo marca claramente.
+                # Fallback: si no se ejecuto el SQL v8.6, no borra; lo marca claramente.
                 session.client.table("inventory_items").update({
                     "commercial_status": "Cancelado",
                     "notes": "Inventario simulado marcado como cancelado por limpieza admin. Puede borrarse con RPC v8.6.",
@@ -1724,7 +1724,7 @@ def clean_worker_simulated_inventory(session, settings: Settings | None = None) 
             entity_id=str(TEST_INVENTORY_ITEM_ID),
             before_data=_json_safe(before),
             after_data={"deleted": deleted, "marked_inactive": marked_inactive},
-            message="Admin limpió o canceló el inventario simulado worker.",
+            message="Admin limpio o cancelo el inventario simulado worker.",
         )
         write_audit_event(session, event, settings)
         return {"operation_id": operation_id, "deleted": deleted, "marked_inactive": marked_inactive, "item_id": TEST_INVENTORY_ITEM_ID}
@@ -1741,7 +1741,7 @@ def clean_worker_simulated_inventory(session, settings: Settings | None = None) 
             entity_id=str(TEST_INVENTORY_ITEM_ID),
             before_data=_json_safe(before),
             after_data=None,
-            message="Falló la limpieza del inventario simulado worker.",
+            message="Fallo la limpieza del inventario simulado worker.",
             error_detail=str(exc),
         )
         try:
@@ -1871,7 +1871,7 @@ def run_cloud_clean_worker_order_test() -> int:
 
 
 # ---------------------------------------------------------------------------
-# v11 - Importación quirúrgica de un producto WooCommerce de prueba a Supabase
+# v11 - Importacion quirurgica de un producto WooCommerce de prueba a Supabase
 # ---------------------------------------------------------------------------
 
 def _woo_product_to_cloud_payload(product: dict[str, Any], session, settings: Settings) -> dict[str, Any]:
@@ -1901,7 +1901,7 @@ def _variation_label(variation: dict[str, Any]) -> str:
         option = attr.get("option") or ""
         if option:
             labels.append(f"{name}: {option}")
-    return " · ".join(labels)
+    return " - ".join(labels)
 
 
 def _woo_variation_to_cloud_payload(variation: dict[str, Any], parent: dict[str, Any], session, settings: Settings) -> dict[str, Any]:
@@ -1933,7 +1933,7 @@ def _find_woocommerce_product(client: WooCommerceClient, woo_id: int | None = No
     response = client.get("products", params={"search": query.strip(), "per_page": 20, "page": 1, "status": "any"})
     products = response.json()
     if not products:
-        raise CloudAuditError(f"WooCommerce no devolvió productos para la búsqueda: {query}")
+        raise CloudAuditError(f"WooCommerce no devolvio productos para la busqueda: {query}")
     # Preferimos coincidencia exacta por nombre si existe; si no, el primer resultado.
     normalized = query.strip().casefold()
     for product in products:
@@ -1945,7 +1945,7 @@ def _find_woocommerce_product(client: WooCommerceClient, woo_id: int | None = No
 def import_single_woocommerce_product_to_supabase(session, woo_id: int | None = None, query: str | None = None, settings: Settings | None = None) -> dict[str, Any]:
     """Importa un solo producto WooCommerce y sus variaciones a Supabase.
 
-    Uso pensado para el producto de prueba creado después de la migración.
+    Uso pensado para el producto de prueba creado despues de la migracion.
     No publica cambios en WooCommerce. Solo lee WooCommerce y actualiza Supabase.
     Requiere admin porque usa credenciales WooCommerce y modifica tablas maestras cloud.
     """
@@ -2016,7 +2016,7 @@ def import_single_woocommerce_product_to_supabase(session, woo_id: int | None = 
                 "variations_imported": len(variation_payloads),
                 "variation_ids": [v.get("woo_id") for v in variation_payloads],
             }),
-            message="Admin importó un producto WooCommerce concreto a Supabase. WooCommerce solo fue leído; no se publicó ningún cambio.",
+            message="Admin importo un producto WooCommerce concreto a Supabase. WooCommerce solo fue leido; no se publico ningun cambio.",
         )
         write_audit_event(session, event, settings)
         return {
@@ -2044,7 +2044,7 @@ def import_single_woocommerce_product_to_supabase(session, woo_id: int | None = 
                 entity_id=str(woo_id or query or "unknown"),
                 before_data=_json_safe({"product": product_before, "variations": variation_befores}),
                 after_data=None,
-                message="Falló la importación quirúrgica de producto WooCommerce a Supabase.",
+                message="Fallo la importacion quirurgica de producto WooCommerce a Supabase.",
                 error_detail=str(exc),
             ), settings)
         except Exception:
@@ -2065,12 +2065,12 @@ def run_cloud_import_woocommerce_product(woo_id: int | None = None, query: str |
 
     print("Producto WooCommerce importado a Supabase correctamente.")
     print(f"operation_id: {result['operation_id']}")
-    print(f"producto: {result['product_id']} · {result['name']}")
-    print(f"tipo: {result['type']} · precio: {result['price']}")
+    print(f"producto: {result['product_id']} - {result['name']}")
+    print(f"tipo: {result['type']} - precio: {result['price']}")
     print(f"variaciones importadas/actualizadas: {result['variations_imported']}")
     if result["variation_ids"]:
         print("variation_ids: " + ", ".join(str(v) for v in result["variation_ids"]))
-    print("WooCommerce solo fue leído. No se publicó ningún cambio.")
+    print("WooCommerce solo fue leido. No se publico ningun cambio.")
     return 0
 
 

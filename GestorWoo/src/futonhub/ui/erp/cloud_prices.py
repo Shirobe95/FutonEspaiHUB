@@ -28,14 +28,14 @@ class CloudPriceBoardMixin:
     def _cloud_search_products(self) -> None:
         """Buscador visual operativo desde Supabase.
 
-        Permite localizar un producto/variación y crear una propuesta desde la
+        Permite localizar un producto/variacion y crear una propuesta desde la
         misma ventana, sin copiar IDs de memoria.
         """
         if not self._ensure_cloud_session():
             return
 
         win = tk.Toplevel(self)
-        win.title("Buscar producto / variación")
+        win.title("Buscar producto / variacion")
         center_window(win, 1050, 620)
         win.minsize(900, 520)
         win.configure(bg=C_BG)
@@ -46,7 +46,7 @@ class CloudPriceBoardMixin:
         ttk.Label(frame, text="Buscar item en Supabase", style="Section.TLabel").pack(anchor=tk.W, pady=(0, 6))
         ttk.Label(
             frame,
-            text="Busca producto o variación, selecciona una fila y crea una propuesta. WooCommerce no se toca.",
+            text="Busca producto o variacion, selecciona una fila y crea una propuesta. WooCommerce no se toca.",
             style="Muted.TLabel",
         ).pack(anchor=tk.W, pady=(0, 10))
 
@@ -63,7 +63,7 @@ class CloudPriceBoardMixin:
         headings = {
             "kind": "Tipo",
             "woo_id": "Woo ID",
-            "name": "Producto/variación",
+            "name": "Producto/variacion",
             "type": "Clase",
             "price": "Precio",
             "stock": "Stock",
@@ -135,7 +135,7 @@ class CloudPriceBoardMixin:
         parent = parent or self
         new_price_text = simpledialog.askstring(
             "Nueva propuesta",
-            f"Item seleccionado:\n[{item_kind}] {woo_id} · {item_name}\n\nNuevo precio propuesto:",
+            f"Item seleccionado:\n[{item_kind}] {woo_id} - {item_name}\n\nNuevo precio propuesto:",
             parent=parent,
         )
         if not new_price_text:
@@ -143,7 +143,7 @@ class CloudPriceBoardMixin:
         notes = simpledialog.askstring(
             "Nueva propuesta",
             "Notas de la propuesta:",
-            initialvalue="Propuesta creada desde búsqueda del HUB.",
+            initialvalue="Propuesta creada desde busqueda del HUB.",
             parent=parent,
         ) or ""
         try:
@@ -163,7 +163,7 @@ class CloudPriceBoardMixin:
             return
         if not messagebox.askyesno(
             "Confirmar propuesta",
-            preview_text + "\n\n¿Crear esta propuesta interna?",
+            preview_text + "\n\nCrear esta propuesta interna",
             parent=parent,
         ):
             return
@@ -188,29 +188,29 @@ class CloudPriceBoardMixin:
         messagebox.showinfo(
             "Propuesta creada",
             "Propuesta real interna creada/actualizada correctamente.\n\n"
-            f"Operación: {result['operation_id']}\n"
-            f"Item: [{prop.get('item_kind')}] {prop.get('item_woo_id')} · {prop.get('name')}\n"
+            f"Operacion: {result['operation_id']}\n"
+            f"Item: [{prop.get('item_kind')}] {prop.get('item_woo_id')} - {prop.get('name')}\n"
             f"Precio anterior: {result['old_price']}\n"
             f"Precio propuesto: {result['new_price']}\n"
-            f"Validación: {(result.get('price_safety') or {}).get('status', 'OK')}\n\n"
+            f"Validacion: {(result.get('price_safety') or {}).get('status', 'OK')}\n\n"
             "WooCommerce no fue tocado.",
             parent=parent,
         )
 
     def _cloud_real_price_proposal(self) -> None:
-        """Entrada manual mantenida para desarrollo; ahora también muestra preview."""
+        """Entrada manual mantenida para desarrollo; ahora tambien muestra preview."""
         if not self._ensure_cloud_session():
             return
         item_kind = simpledialog.askstring("Propuesta real interna", "Tipo de item: product o variation", initialvalue="variation", parent=self)
         if not item_kind:
             return
-        woo_id_text = simpledialog.askstring("Propuesta real interna", "Woo ID del producto/variación en Supabase:", parent=self)
+        woo_id_text = simpledialog.askstring("Propuesta real interna", "Woo ID del producto/variacion en Supabase:", parent=self)
         if not woo_id_text:
             return
         try:
             self._create_price_proposal_from_item(item_kind.strip().lower(), int(woo_id_text.strip()), parent=self)
         except ValueError:
-            messagebox.showerror("Propuesta real interna", "Woo ID debe ser numérico.", parent=self)
+            messagebox.showerror("Propuesta real interna", "Woo ID debe ser numerico.", parent=self)
 
     def _cloud_review_real_price_proposal(self, decision: str, proposal_id: str | None = None) -> None:
         if not self._ensure_cloud_session():
@@ -220,11 +220,11 @@ class CloudPriceBoardMixin:
             messagebox.showwarning("Revisar propuesta", "Solo admin o worker pueden aprobar/rechazar propuestas.", parent=self)
             return
         label = "aprobar" if decision == "approved" else "rechazar"
-        target = proposal_id or "la última propuesta real pendiente no TEST"
+        target = proposal_id or "la ultima propuesta real pendiente no TEST"
         if not messagebox.askyesno(
             "Revisar propuesta real interna",
             f"Esto va a {label} {target}.\n\n"
-            "No se publicará nada en WooCommerce. Se generará snapshot y log.\n\n¿Continuar?",
+            "No se publicara nada en WooCommerce. Se generara snapshot y log.\n\nContinuar",
             parent=self,
         ):
             return
@@ -240,9 +240,9 @@ class CloudPriceBoardMixin:
         messagebox.showinfo(
             "Revisar propuesta real interna",
             "Propuesta real interna revisada correctamente.\n\n"
-            f"Operación: {result['operation_id']}\n"
-            f"Decisión: {result['decision']}\n"
-            f"Item: [{prop.get('item_kind')}] {prop.get('item_woo_id')} · {prop.get('name')}\n\n"
+            f"Operacion: {result['operation_id']}\n"
+            f"Decision: {result['decision']}\n"
+            f"Item: [{prop.get('item_kind')}] {prop.get('item_woo_id')} - {prop.get('name')}\n\n"
             "WooCommerce no fue tocado.",
             parent=self,
         )
@@ -285,7 +285,7 @@ class CloudPriceBoardMixin:
         tree = ttk.Treeview(frame, columns=columns, show="headings", height=16)
         headings = {
             "status": "Estado",
-            "item": "Producto/variación",
+            "item": "Producto/variacion",
             "woo_id": "Woo ID",
             "old": "Precio anterior",
             "new": "Propuesto",
@@ -362,7 +362,7 @@ class CloudPriceBoardMixin:
             preview_text = format_existing_price_proposal_preview(preview)
             if not messagebox.askyesno(
                 f"Confirmar {action.lower()}",
-                preview_text + f"\n\n¿Confirmas {action} esta propuesta?",
+                preview_text + f"\n\nConfirmas {action} esta propuesta",
                 parent=win,
             ):
                 return
@@ -399,24 +399,24 @@ class CloudPriceBoardMixin:
                 return
             row = rows[0]
             if row.get("status") == "ERROR":
-                self._show_text_window("Publicación bloqueada", format_woocommerce_publish_preview(preview))
+                self._show_text_window("Publicacion bloqueada", format_woocommerce_publish_preview(preview))
                 return
             ack = False
             if row.get("status") == "WARNING":
                 if not messagebox.askyesno(
                     "Warnings amarillos",
-                    "La propuesta tiene warnings amarillos. Revisa el preview.\n\n¿Confirmas que quieres continuar con publicación protegida?",
+                    "La propuesta tiene warnings amarillos. Revisa el preview.\n\nConfirmas que quieres continuar con publicacion protegida",
                     parent=win,
                 ):
                     return
                 ack = True
             confirm = simpledialog.askstring(
-                "Confirmación requerida",
+                "Confirmacion requerida",
                 "Escribe PUBLICAR para cambiar el precio real en WooCommerce:",
                 parent=win,
             )
             if (confirm or "").strip().upper() != "PUBLICAR":
-                messagebox.showinfo("Publicación cancelada", "No se publicó nada en WooCommerce.", parent=win)
+                messagebox.showinfo("Publicacion cancelada", "No se publico nada en WooCommerce.", parent=win)
                 return
             try:
                 result = publish_woocommerce_price(
@@ -429,7 +429,7 @@ class CloudPriceBoardMixin:
             except Exception as exc:
                 messagebox.showerror("Publicar WooCommerce", f"No se pudo publicar.\n\n{exc}", parent=win)
                 return
-            self._show_text_window("Publicación WooCommerce", format_woocommerce_publish_result(result))
+            self._show_text_window("Publicacion WooCommerce", format_woocommerce_publish_result(result))
             reload_rows()
 
         buttons = ttk.Frame(frame)
@@ -445,14 +445,14 @@ class CloudPriceBoardMixin:
         reload_rows()
 
     def _cloud_price_heart_attack_tests(self) -> None:
-        """Prueba de estrés de validaciones de precio desde la UI.
+        """Prueba de estres de validaciones de precio desde la UI.
 
         No crea propuestas, no modifica Supabase y no toca WooCommerce.
         """
         if not self._ensure_cloud_session():
             return
         item_kind = simpledialog.askstring(
-            "Test estrés precios",
+            "Test estres precios",
             "Tipo de item: product o variation",
             initialvalue="variation",
             parent=self,
@@ -461,11 +461,11 @@ class CloudPriceBoardMixin:
             return
         item_kind = item_kind.strip().lower()
         if item_kind not in {"product", "variation"}:
-            messagebox.showerror("Test estrés precios", "Tipo de item inválido. Usa product o variation.", parent=self)
+            messagebox.showerror("Test estres precios", "Tipo de item invalido. Usa product o variation.", parent=self)
             return
         woo_id_text = simpledialog.askstring(
-            "Test estrés precios",
-            "Woo ID del producto/variación en Supabase:",
+            "Test estres precios",
+            "Woo ID del producto/variacion en Supabase:",
             parent=self,
         )
         if not woo_id_text:
@@ -473,11 +473,11 @@ class CloudPriceBoardMixin:
         try:
             woo_id = int(woo_id_text.strip())
         except ValueError:
-            messagebox.showerror("Test estrés precios", "Woo ID debe ser numérico.", parent=self)
+            messagebox.showerror("Test estres precios", "Woo ID debe ser numerico.", parent=self)
             return
         try:
             result = price_heart_attack_tests(self._cloud_session, item_kind, woo_id, load_settings())
         except Exception as exc:
-            messagebox.showerror("Test estrés precios", f"No se pudieron ejecutar las pruebas.\n\n{exc}", parent=self)
+            messagebox.showerror("Test estres precios", f"No se pudieron ejecutar las pruebas.\n\n{exc}", parent=self)
             return
-        self._show_text_window("Test estrés precios", format_price_heart_attack_tests(result))
+        self._show_text_window("Test estres precios", format_price_heart_attack_tests(result))

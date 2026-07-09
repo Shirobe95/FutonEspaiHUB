@@ -42,7 +42,7 @@ class FutonEspaiHub(LoginMixin, DiagnosticsMixin, ProjectCatalogMixin, ProjectCa
         self.after(1000, self._poll_processes)
 
     def _add_footer_menu(self, parent: ttk.Frame, label: str, items: list[tuple[str, object]]) -> None:
-        """Añade un menú compacto al pie del HUB.
+        """Anade un menu compacto al pie del HUB.
 
         Mantiene la pantalla limpia: en vez de una fila infinita de botones,
         las herramientas secundarias quedan agrupadas.
@@ -118,10 +118,10 @@ class FutonEspaiHub(LoginMixin, DiagnosticsMixin, ProjectCatalogMixin, ProjectCa
         if not self.projects:
             empty = ttk.Frame(body, padding=26)
             empty.pack(fill=tk.BOTH, expand=True)
-            ttk.Label(empty, text="HUB bloqueado hasta iniciar sesión", style="Section.TLabel").pack(anchor=tk.CENTER, pady=(80, 8))
+            ttk.Label(empty, text="HUB bloqueado hasta iniciar sesion", style="Section.TLabel").pack(anchor=tk.CENTER, pady=(80, 8))
             ttk.Label(
                 empty,
-                text="Inicia sesión en Supabase para cargar solo las herramientas permitidas para tu rol.",
+                text="Inicia sesion en Supabase para cargar solo las herramientas permitidas para tu rol.",
                 style="Muted.TLabel",
                 justify=tk.CENTER,
             ).pack(anchor=tk.CENTER)
@@ -154,8 +154,8 @@ class FutonEspaiHub(LoginMixin, DiagnosticsMixin, ProjectCatalogMixin, ProjectCa
             show_operational_test = False
 
         if show_operational_test and self._has_cloud_session():
-            # Menú compacto de pruebas operativas. Deja el pie limpio aunque
-            # mantengamos herramientas de verificación durante el desarrollo.
+            # Menu compacto de pruebas operativas. Deja el pie limpio aunque
+            # mantengamos herramientas de verificacion durante el desarrollo.
             self._add_footer_menu(
                 footer,
                 "Pruebas",
@@ -164,7 +164,7 @@ class FutonEspaiHub(LoginMixin, DiagnosticsMixin, ProjectCatalogMixin, ProjectCa
                     ("Inventario real interno", self._cloud_inventory_internal_board),
                     ("Bandeja propuestas", self._cloud_price_proposals_board),
                     ("Propuesta real precio", self._cloud_real_price_proposal),
-                    ("Test estrés precios", self._cloud_price_heart_attack_tests),
+                    ("Test estres precios", self._cloud_price_heart_attack_tests),
                     ("---", None),
                     ("Precio simulado", self._cloud_worker_price_test),
                     ("Inventario simulado", self._cloud_worker_inventory_test),
@@ -213,7 +213,7 @@ class FutonEspaiHub(LoginMixin, DiagnosticsMixin, ProjectCatalogMixin, ProjectCa
         if show_local_diagnostics or self._is_authenticated_admin():
             ttk.Button(
                 footer,
-                text="Diagnóstico del sistema",
+                text="Diagnostico del sistema",
                 command=self._show_diagnostics,
             ).pack(side=tk.RIGHT, padx=(0, 10))
             ttk.Button(

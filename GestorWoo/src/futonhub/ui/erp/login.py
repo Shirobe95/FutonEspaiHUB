@@ -13,8 +13,8 @@ class LoginMixin:
     def _effective_role(self) -> str | None:
         """Rol real para construir la interfaz.
 
-        En modo Supabase no se muestra ninguna herramienta hasta tener sesión
-        autenticada. Esto evita que el rol local del .env enseñe herramientas
+        En modo Supabase no se muestra ninguna herramienta hasta tener sesion
+        autenticada. Esto evita que el rol local del .env ensene herramientas
         antes del login real.
         """
         try:
@@ -39,14 +39,14 @@ class LoginMixin:
             if self._cloud_session is not None:
                 role = self._cloud_session.role or settings.sync_role
                 email = self._cloud_session.email or settings.hub_user_email or "sin usuario online"
-                return f"Online: Supabase · Sesión activa · Rol: {role} · Usuario: {email}"
+                return f"Online: Supabase - Sesion activa - Rol: {role} - Usuario: {email}"
             role = settings.sync_role
             email = settings.hub_user_email or "sin usuario online"
             if settings.app_mode == "supabase_guarded":
-                return f"Online: Supabase · Sin login · Rol local: {role} · Usuario: {email}"
-            return f"Online: desactivado · Rol local: {role}"
+                return f"Online: Supabase - Sin login - Rol local: {role} - Usuario: {email}"
+            return f"Online: desactivado - Rol local: {role}"
         except Exception as exc:
-            return f"Online: no se pudo comprobar · {exc}"
+            return f"Online: no se pudo comprobar - {exc}"
 
     def _show_login_overlay(self) -> tk.Frame:
         """Muestra el estado de login dentro de la ventana principal.
@@ -72,7 +72,7 @@ class LoginMixin:
         content.pack(fill=tk.BOTH, expand=True)
         ttk.Label(
             content,
-            text="Iniciando sesión en Supabase...",
+            text="Iniciando sesion en Supabase...",
             style="Section.TLabel",
         ).pack(anchor=tk.W)
         ttk.Label(
@@ -102,13 +102,13 @@ class LoginMixin:
         try:
             settings = load_settings()
         except Exception as exc:
-            messagebox.showerror("Login Supabase", f"No se pudo leer configuración.\n\n{exc}")
+            messagebox.showerror("Login Supabase", f"No se pudo leer configuracion.\n\n{exc}")
             return
 
         if settings.app_mode != "supabase_guarded":
             messagebox.showinfo(
                 "Login Supabase",
-                "El HUB no está en modo supabase_guarded. Revisa GestorWoo/.env.",
+                "El HUB no esta en modo supabase_guarded. Revisa GestorWoo/.env.",
             )
             return
 
@@ -122,7 +122,7 @@ class LoginMixin:
             return
         password = simpledialog.askstring(
             "Login Supabase",
-            f"Contraseña para {email}:",
+            f"Contrasena para {email}:",
             parent=self,
             show="*",
         )
@@ -152,19 +152,19 @@ class LoginMixin:
             if isinstance(exc, SupabaseAuthError):
                 messagebox.showerror("Login Supabase", str(exc))
             else:
-                messagebox.showerror("Login Supabase", f"No se pudo iniciar sesión.\n\n{exc}")
+                messagebox.showerror("Login Supabase", f"No se pudo iniciar sesion.\n\n{exc}")
             return
         self._cloud_session = session
         self._rebuild_layout()
         messagebox.showinfo(
             "Login Supabase",
-            f"Sesión iniciada correctamente.\n\nUsuario: {session.email}\nRol cloud: {session.role or '(sin rol)'}",
+            f"Sesion iniciada correctamente.\n\nUsuario: {session.email}\nRol cloud: {session.role or '(sin rol)'}",
         )
 
     def _ensure_cloud_session(self) -> bool:
         if self._cloud_session is not None:
             return True
-        messagebox.showinfo("Login requerido", "Inicia sesión en Supabase antes de usar esta herramienta.")
+        messagebox.showinfo("Login requerido", "Inicia sesion en Supabase antes de usar esta herramienta.")
         return False
 
     def _require_admin_session(self) -> bool:
@@ -174,7 +174,7 @@ class LoginMixin:
         if role != "admin":
             messagebox.showwarning(
                 "Caja negra cloud",
-                "Esta herramienta solo está disponible para usuarios admin.",
+                "Esta herramienta solo esta disponible para usuarios admin.",
             )
             return False
         return True

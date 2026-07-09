@@ -25,7 +25,7 @@ class ErpInventoryDetailMixin:
         stock_total = item.stock_total if item.stock_total != "-" else item.stock
         rows = [
             ("ID", item.code),
-            ("CÃ³digo HUB", self._inventory_pack_parent_code(item) or self._clean_inventory_value((item.raw or {}).get("hub_item_code"), "-")),
+            ("Codigo HUB", self._inventory_pack_parent_code(item) or self._clean_inventory_value((item.raw or {}).get("hub_item_code"), "-")),
             ("Tipo item", self._clean_inventory_value((item.raw or {}).get("item_record_type") or (item.raw or {}).get("hub_search_record_type"), "simple")),
             ("Nombre", item.name),
             ("Precio Woo", item.price),
@@ -160,7 +160,7 @@ class ErpInventoryDetailMixin:
         for row in ordered:
             raw_value = row.get("after")
             try:
-                values.append(float(str(raw_value).replace("â‚¬", "").replace(",", ".").strip()))
+                values.append(float(str(raw_value).replace("EUR", "").replace(",", ".").strip()))
             except Exception:
                 continue
         if values:
