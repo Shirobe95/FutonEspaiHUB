@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from hashlib import sha256
-from typing import Any
+from typing import Any, Iterable, Mapping
 
 from futonhub.cloud.audit import AuditEvent, CloudAuditError, OperationSnapshot, new_operation_id, write_audit_event, write_snapshot
 from gestorwoo.config import Settings, load_settings
+from gestorwoo.woocommerce import WooCommerceClient, WooCommerceError
 
 
 def _json_safe(value: Any) -> Any:
@@ -71,6 +72,19 @@ def _source_flag_category(source: dict[str, Any], key: str) -> str:
 def _safe_actor_reference(value: Any) -> str:
     text = str(value or "").strip().lower()
     return f"actor:{sha256(text.encode('utf-8')).hexdigest()[:10]}" if text else "-"
+
+
+def _authenticated_actor(session) -> dict[str, str]:
+    user_id = str(getattr(session, "user_id", None) or "").strip()
+    user_name = str(
+        getattr(session, "user_name", None)
+        or getattr(session, "display_name", None)
+        or getattr(session, "email", None)
+        or ""
+    ).strip()
+    if not user_id or not user_name:
+        raise CloudAuditError("La operacion de precios requiere una sesion de usuario identificable.")
+    return {"user_id": user_id, "user_name": user_name}
 
 
 def _is_ui_deleted(row: dict[str, Any]) -> bool:
@@ -235,7 +249,7 @@ def build_price_proposal_restore_plan(
         ],
     }
 
-from futonhub.cloud.services.prices import PRICE_PROPOSAL_STATUSES, format_price_safety_for_search as _format_price_safety_for_search, money_or_none as _safe_money, price_safety_preview as _price_safety_preview, short_row_value as _short_row_value
+from futonhub.cloud.services.prices import PRICE_PROPOSAL_STATUSES, PRICE_PROPOSAL_WORKFLOW_STATES, format_price_safety_for_search as _format_price_safety_for_search, money_or_none as _safe_money, price_safety_preview as _price_safety_preview, short_row_value as _short_row_value
 
 # ---------------------------------------------------------------------------
 # v10 - Lectura operativa real desde Supabase y propuestas internas reales
@@ -284,7 +298,7 @@ def _legacy_price_safety_preview(item: dict[str, Any], kind: str, proposed_price
     """Clasifica riesgos de precio antes de crear/publicar propuestas.
 
     status puede ser OK, WARNING o ERROR. ERROR bloquea; WARNING requiere
-    confirmacion explicita. No toca WooCommerce.
+    revision visible en el preview. No toca WooCommerce.
     """
     current = _current_price_from_item(item)
     kind = (kind or "").strip().lower()
@@ -323,7 +337,7 @@ def _legacy_price_safety_preview(item: dict[str, Any], kind: str, proposed_price
             elif drop_percent >= settings.price_drop_warning_percent and status != "ERROR":
                 messages.append(
                     f"WARNING: bajada de precio del {drop_percent:.2f}%, supera el aviso configurado "
-                    f"({settings.price_drop_warning_percent:.2f}%). Requiere confirmacion explicita."
+                    f"({settings.price_drop_warning_percent:.2f}%). Requiere revisar el preview antes de aplicar."
                 )
                 status = "WARNING"
 
@@ -497,6 +511,30 @@ def _fetch_cloud_item_for_price(
         row.setdefault("type", "pack")
         row["item_kind"] = "pack"
         return row
+    snapshot = dict(item_snapshot or {})
+    if kind == "product" and snapshot:
+        try:
+            snapshot_woo_id = int(snapshot.get("woo_id"))
+        except (TypeError, ValueError):
+            snapshot_woo_id = 0
+        if snapshot_woo_id == int(woo_id):
+            snapshot.setdefault("name", f"Producto Woo {woo_id}")
+            snapshot.setdefault("price", snapshot.get("effective_price") or snapshot.get("woo_price"))
+            snapshot["item_kind"] = "product"
+            return snapshot
+    if kind == "variation" and snapshot:
+        try:
+            snapshot_woo_id = int(snapshot.get("woo_id"))
+            snapshot_parent_id = int(snapshot.get("woo_parent_id") or snapshot.get("parent_woo_id"))
+        except (TypeError, ValueError):
+            snapshot_woo_id = 0
+            snapshot_parent_id = 0
+        if snapshot_woo_id == int(woo_id) and snapshot_parent_id > 0:
+            snapshot.setdefault("name", snapshot.get("parent_name") or f"Variation Woo {woo_id}")
+            snapshot.setdefault("attributes_label", snapshot.get("sku") or "variation")
+            snapshot.setdefault("price", snapshot.get("effective_price") or snapshot.get("woo_price"))
+            snapshot["item_kind"] = "variation"
+            return snapshot
     table = "product_variations" if kind == "variation" else "products"
     resp = session.client.table(table).select("*").eq("woo_id", int(woo_id)).limit(1).execute()
     rows = getattr(resp, "data", None) or []
@@ -679,7 +717,11 @@ def format_existing_price_proposal_preview(preview: dict[str, Any]) -> str:
     lines.extend(["", f"Estado seguridad recalculado: {safety.get('status') or 'OK'}"])
     for msg in safety.get("messages") or []:
         lines.append(f"- {msg}")
-    lines.extend(["", "Aprobar/rechazar NO toca WooCommerce. Solo cambia el estado interno y genera caja negra."])
+    lines.extend([
+        "",
+        "Los borradores pueden editarse, recalcularse o aplicarse desde este preview; "
+        "las propuestas aplicadas son de solo lectura.",
+    ])
     return "\n".join(lines)
 
 def create_real_price_proposal(
@@ -694,12 +736,14 @@ def create_real_price_proposal(
     source_row_updates: dict[str, Any] | None = None,
     item_snapshot: dict[str, Any] | None = None,
     price_at_creation: float | None = None,
+    force_insert: bool = False,
 ) -> dict[str, Any]:
     """Crea/actualiza una propuesta interna real sobre producto migrado.
 
     No publica nada en WooCommerce. Solo escribe en Supabase y registra caja negra.
     """
     settings = settings or load_settings()
+    actor = _authenticated_actor(session)
     kind = (item_kind or "").strip().lower()
     item = _fetch_cloud_item_for_price(
         session,
@@ -726,9 +770,9 @@ def create_real_price_proposal(
         )
     if validation["status"] == "WARNING" and not acknowledge_price_warning:
         raise CloudAuditError(
-            "Validacion de precio requiere confirmacion explicita:\n"
+            "Validacion de precio requiere revisar el preview:\n"
             + "\n".join(f"- {m}" for m in validation["messages"])
-            + "\n\nSi revisaste el cambio, repite con --ack-price-warning."
+            + "\n\nVuelve a ejecutar la accion desde el preview actualizado."
         )
 
     try:
@@ -740,7 +784,7 @@ def create_real_price_proposal(
                 raise CloudAuditError(f"No existe la propuesta {proposal_id} para actualizar.")
             if str(before.get("item_kind") or "") != kind or int(before.get("item_woo_id") or 0) != int(woo_id):
                 raise CloudAuditError("La propuesta seleccionada no corresponde al articulo editado.")
-        else:
+        elif not force_insert:
             before = _fetch_latest_price_proposal(session, item_kind=kind, item_woo_id=int(woo_id), status="pending")
         if before is not None:
             snapshot = OperationSnapshot(
@@ -793,6 +837,10 @@ def create_real_price_proposal(
                 "created_by_email": session.email,
                 "role": session.role or settings.sync_role,
                 "machine": settings.machine_name,
+                "workflow_state": "DRAFT",
+                "created_by_user_id": actor["user_id"],
+                "created_by_user_name": actor["user_name"],
+                "created_at_utc": datetime.now(timezone.utc).isoformat(),
                 "woo_publish": False,
                 "item_snapshot": persisted_item_snapshot,
                 "price_at_creation": old_price,
@@ -1018,14 +1066,15 @@ def delete_real_price_proposal_group(
     settings: Settings | None = None,
     proposal_ids: list[str] | tuple[str, ...] | None = None,
 ) -> dict[str, Any]:
-    """Elimina unicamente los IDs reales seleccionados por la UI.
+    """Cancela los IDs reales seleccionados y conserva su historial.
 
-    `proposal_name` se conserva solo para trazabilidad y compatibilidad; nunca se
-    usa como condicion de borrado.
+    El nombre historico de la funcion se conserva por compatibilidad. No realiza
+    borrados fisicos ni oculta los registros cancelados del listado.
     """
     settings = settings or load_settings()
+    actor = _authenticated_actor(session)
     if not proposal_id:
-        raise CloudAuditError("Selecciona una propuesta real para borrar.")
+        raise CloudAuditError("Selecciona un borrador real para cancelar.")
     operation_id = new_operation_id("PRICEDEL")
     try:
         resp = session.client.table("price_change_proposals").select("*").eq("id", proposal_id).limit(1).execute()
@@ -1051,71 +1100,51 @@ def delete_real_price_proposal_group(
         protected_statuses = {"published", "publishing"}
         blocked = [row for row in target_rows if str(row.get("status") or "").strip().lower() in protected_statuses]
         if blocked:
-            raise CloudAuditError("No se puede borrar una propuesta publicada o en publicacion. Crea una nueva propuesta de correccion.")
+            raise CloudAuditError("No se puede cancelar una propuesta aplicada o en aplicacion. Usa rollback o crea una propuesta de correccion.")
 
         before_data = _json_safe(target_rows)
         for row in target_rows:
             write_snapshot(session, OperationSnapshot(
                 operation_id=operation_id,
                 module="price_change_proposals",
-                action="ui_delete_price_proposal",
+                action="ui_cancel_price_proposal",
                 entity_type="price_change_proposal",
                 entity_id=str(row.get("id")),
                 before_data=_json_safe(row),
-                reason="UI-ERP: snapshot antes de borrar propuesta de Cambio de Precios.",
+                reason="UI-ERP: snapshot antes de cancelar un borrador de Cambio de Precios.",
             ))
 
-        ids = [row.get("id") for row in target_rows if row.get("id")]
-        hard_deleted = False
-        soft_deleted = False
-
-        def soft_delete_rows() -> None:
-            nonlocal soft_deleted
-            now = datetime.now(timezone.utc).isoformat()
-            for row in target_rows:
-                source = _source_row_dict(row)
-                source.update({
-                    "ui_deleted": True,
-                    "ui_deleted_at": now,
-                    "ui_deleted_by_email": session.email,
-                    "ui_delete_operation_id": operation_id,
-                })
-                session.client.table("price_change_proposals").update({
-                    "status": "rejected",
-                    "source_row": source,
-                    "notes": (row.get("notes") or "") + "\n[UI-ERP] Propuesta borrada/ocultada desde Cambio de Precios.",
-                }).eq("id", row.get("id")).execute()
-            soft_deleted = True
-
-        try:
-            for row_id in ids:
-                session.client.table("price_change_proposals").delete().eq("id", row_id).execute()
-            remaining = []
-            for row_id in ids:
-                check = session.client.table("price_change_proposals").select("id, source_row").eq("id", row_id).limit(1).execute()
-                remaining.extend(getattr(check, "data", None) or [])
-            if remaining:
-                # Supabase/RLS puede devolver DELETE sin error aunque no haya eliminado nada.
-                # Verificamos y, si sigue existiendo, aplicamos borrado logico.
-                soft_delete_rows()
-            else:
-                hard_deleted = True
-        except Exception:
-            soft_delete_rows()
+        now = datetime.now(timezone.utc).isoformat()
+        for row in target_rows:
+            source = _source_row_dict(row)
+            source.update({
+                "workflow_state": "CANCELLED",
+                "cancelled_at_utc": now,
+                "cancelled_by_user_id": actor["user_id"],
+                "cancelled_by_user_name": actor["user_name"],
+                "ui_delete_operation_id": operation_id,
+            })
+            response = session.client.table("price_change_proposals").update({
+                "status": "cancelled",
+                "source_row": source,
+                "notes": (row.get("notes") or "") + "\n[UI-ERP] Borrador cancelado; historial conservado.",
+            }).eq("id", row.get("id")).execute()
+            if not (getattr(response, "data", None) or []):
+                raise CloudAuditError(f"No se confirmo la cancelacion de {row.get('id')}.")
 
         write_audit_event(session, AuditEvent(
             operation_id=operation_id,
             module="price_change_proposals",
-            action="ui_delete_price_proposal",
+            action="ui_cancel_price_proposal",
             status="OK",
             severity="INFO",
             entity_type="price_change_proposal",
             entity_id=str(proposal_id),
             before_data=before_data,
-            after_data={"deleted_count": len(target_rows), "hard_deleted": hard_deleted, "soft_deleted": soft_deleted, "proposal_name": group_name},
-            message="UI-ERP: propuesta de Cambio de Precios borrada desde la bandeja.",
+            after_data={"cancelled_count": len(target_rows), "hard_deleted": False, "proposal_name": group_name},
+            message="UI-ERP: borrador cancelado sin eliminar su historial.",
         ), settings)
-        return {"operation_id": operation_id, "deleted_count": len(target_rows), "hard_deleted": hard_deleted, "soft_deleted": soft_deleted, "proposal_name": group_name}
+        return {"operation_id": operation_id, "deleted_count": len(target_rows), "cancelled_count": len(target_rows), "hard_deleted": False, "soft_deleted": True, "proposal_name": group_name}
     except CloudAuditError:
         raise
     except Exception as exc:
@@ -1123,12 +1152,12 @@ def delete_real_price_proposal_group(
             write_audit_event(session, AuditEvent(
                 operation_id=operation_id,
                 module="price_change_proposals",
-                action="ui_delete_price_proposal_failed",
+                action="ui_cancel_price_proposal_failed",
                 status="ERROR",
                 severity="ERROR",
                 entity_type="price_change_proposal",
                 entity_id=str(proposal_id),
-                message="Fallo el borrado de propuesta desde UI-ERP.",
+                message="Fallo la cancelacion del borrador desde UI-ERP.",
                 error_detail=str(exc),
             ), settings)
         except Exception:
@@ -1922,6 +1951,252 @@ def _woo_variation_to_cloud_payload(variation: dict[str, Any], parent: dict[str,
         "synced_at": datetime.now(timezone.utc).isoformat(),
         "updated_at": datetime.now(timezone.utc).isoformat(),
         "updated_by": session.user_id,
+    }
+
+
+def _required_positive_int(value: Any, *, field: str) -> int:
+    try:
+        parsed = int(str(value).strip())
+    except (TypeError, ValueError) as exc:
+        raise CloudAuditError(f"{field} debe ser un entero positivo.") from exc
+    if parsed <= 0:
+        raise CloudAuditError(f"{field} debe ser un entero positivo.")
+    return parsed
+
+
+def _variation_price_context(variation: Mapping[str, Any], *, parent_woo_id: int) -> dict[str, Any]:
+    """Return the Woo-owned current-price context persisted with a proposal line."""
+    return {
+        "id": _required_positive_int(variation.get("id"), field="woo_id"),
+        "parent_woo_id": parent_woo_id,
+        "sku": variation.get("sku") or "",
+        "name": variation.get("name") or "",
+        "regular_price": variation.get("regular_price"),
+        "sale_price": variation.get("sale_price"),
+        "price": variation.get("price"),
+        "on_sale": variation.get("on_sale"),
+        "date_on_sale_from": variation.get("date_on_sale_from"),
+        "date_on_sale_to": variation.get("date_on_sale_to"),
+        "status": variation.get("status"),
+        "stock_status": variation.get("stock_status"),
+        "manage_stock": variation.get("manage_stock"),
+        "stock_quantity": variation.get("stock_quantity"),
+        "attributes": list(variation.get("attributes") or []),
+        "date_modified": variation.get("date_modified"),
+        "date_modified_gmt": variation.get("date_modified_gmt"),
+        "woo_date_modified": variation.get("date_modified_gmt") or variation.get("date_modified"),
+        "price_source": "WOO_LIVE",
+        "price_read_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def _variation_payload_changed(existing: Mapping[str, Any], payload: Mapping[str, Any]) -> bool:
+    """Compare replica data while ignoring audit timestamps owned by Supabase."""
+    for field in (
+        "parent_woo_id",
+        "parent_name",
+        "sku",
+        "status",
+        "regular_price",
+        "sale_price",
+        "price",
+        "stock_status",
+        "stock_quantity",
+        "attributes_json",
+        "attributes_label",
+        "raw_json",
+    ):
+        if _json_safe(existing.get(field)) != _json_safe(payload.get(field)):
+            return True
+    return False
+
+
+def ensure_woo_variations_synced(
+    session,
+    variations: Iterable[Mapping[str, Any]],
+    *,
+    woo_client: Any,
+    reason: str,
+    settings: Settings | None = None,
+    replica_write: bool = False,
+    live_cache: dict[str, dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Read exact Woo variations and optionally synchronize their Supabase replica.
+
+    This is intentionally narrower than the legacy whole-product importer. It
+    retains Woo as price authority and never deletes a replica row. Production
+    writes require an identified actor and explicit ``replica_write=True``;
+    tests exercise that branch exclusively with fake Woo and Supabase clients.
+    """
+    actor = _authenticated_actor(session)
+    if not str(reason or "").strip():
+        raise CloudAuditError("La sincronizacion Woo requiere un motivo trazable.")
+    cache = live_cache if live_cache is not None else {}
+    requested: dict[int, dict[str, Any]] = {}
+    rejected: list[dict[str, Any]] = []
+
+    for raw in variations:
+        row = dict(raw)
+        try:
+            woo_id = _required_positive_int(row.get("woo_id"), field="woo_id")
+            parent_woo_id = _required_positive_int(row.get("woo_parent_id") or row.get("parent_woo_id"), field="parent_woo_id")
+        except CloudAuditError as exc:
+            rejected.append({
+                "woo_id": str(row.get("woo_id") or ""),
+                "woo_live_status": "READ_ERROR",
+                "supabase_replica_status": "NOT_CHECKED",
+                "sync_action": "BLOCKED_SYNC_ERROR",
+                "proposal_line_status": "BLOCKED_SYNC_ERROR",
+                "apply_allowed": "NO",
+                "reason": str(exc),
+            })
+            continue
+        expected_sku = str(row.get("woo_sku") or row.get("expected_woo_sku") or "").strip()
+        prior = requested.get(woo_id)
+        if prior and (
+            prior["parent_woo_id"] != parent_woo_id
+            or (prior["expected_woo_sku"] and expected_sku and prior["expected_woo_sku"] != expected_sku)
+        ):
+            rejected.append({
+                "woo_id": woo_id,
+                "woo_parent_id": parent_woo_id,
+                "woo_live_status": "READ_ERROR",
+                "supabase_replica_status": "NOT_CHECKED",
+                "sync_action": "BLOCKED_SYNC_ERROR",
+                "proposal_line_status": "BLOCKED_SYNC_ERROR",
+                "apply_allowed": "NO",
+                "reason": "El mismo woo_id recibio identidades parent/SKU incompatibles.",
+            })
+            continue
+        requested.setdefault(woo_id, {
+            "woo_id": woo_id,
+            "parent_woo_id": parent_woo_id,
+            "expected_woo_sku": expected_sku,
+            "parent_name": str(row.get("parent_name") or "").strip(),
+        })
+
+    results: list[dict[str, Any]] = []
+    contexts_by_woo_id: dict[str, dict[str, Any]] = {}
+    for woo_id in sorted(requested):
+        target = requested[woo_id]
+        cache_key = f"variation:{woo_id}"
+        try:
+            if cache_key in cache:
+                variation = dict(cache[cache_key])
+            else:
+                endpoint = f"products/{target['parent_woo_id']}/variations/{woo_id}"
+                response = woo_client.get(endpoint)
+                variation = response.json() if hasattr(response, "json") else response
+                if not isinstance(variation, dict):
+                    raise CloudAuditError("WooCommerce no devolvio un objeto variation.")
+                variation = dict(variation)
+                cache[cache_key] = dict(variation)
+            if _required_positive_int(variation.get("id"), field="Woo variation id") != woo_id:
+                raise CloudAuditError("Woo devolvio una variation distinta del woo_id solicitado.")
+            reported_parent = variation.get("parent_id")
+            if reported_parent not in (None, "") and _required_positive_int(reported_parent, field="Woo parent_id") != target["parent_woo_id"]:
+                raise CloudAuditError("Woo devolvio un parent_id distinto de la identidad solicitada.")
+            live_sku = str(variation.get("sku") or "").strip()
+            if target["expected_woo_sku"] and live_sku != target["expected_woo_sku"]:
+                raise CloudAuditError("Woo devolvio un SKU distinto del SKU exacto esperado.")
+
+            parent = {
+                "id": target["parent_woo_id"],
+                "name": target["parent_name"] or f"Producto Woo {target['parent_woo_id']}",
+            }
+            payload = _woo_variation_to_cloud_payload(variation, parent, session, settings)  # type: ignore[arg-type]
+            replica_resp = (
+                session.client.table("product_variations")
+                .select("*")
+                .eq("woo_id", woo_id)
+                .limit(1)
+                .execute()
+            )
+            replica_rows = list(getattr(replica_resp, "data", None) or [])
+            existing = dict(replica_rows[0]) if replica_rows else None
+            action = "INSERT" if existing is None else ("UPDATE" if _variation_payload_changed(existing, payload) else "NO_CHANGE")
+            replica_status = "MISSING" if existing is None else ("OUTDATED" if action == "UPDATE" else "CURRENT")
+            if replica_write and action == "INSERT":
+                session.client.table("product_variations").insert(payload).execute()
+                replica_status = "SYNCED"
+            elif replica_write and action == "UPDATE":
+                write_snapshot(session, OperationSnapshot(
+                    operation_id=new_operation_id("WOOVARSYNC"),
+                    module="price_proposals",
+                    action="woo_variation_replica_update",
+                    entity_type="product_variations",
+                    entity_id=str(woo_id),
+                    before_data=_json_safe(existing),
+                    reason=f"{reason}: snapshot antes de sincronizar variation Woo.",
+                ))
+                session.client.table("product_variations").update(payload).eq("woo_id", woo_id).execute()
+                replica_status = "SYNCED"
+            elif not replica_write and action != "NO_CHANGE":
+                replica_status = "PENDING_SYNC"
+
+            context = _variation_price_context(variation, parent_woo_id=target["parent_woo_id"])
+            context["supabase_synced_at"] = payload.get("synced_at") if replica_write else (existing or {}).get("synced_at")
+            context["sync_action"] = action
+            contexts_by_woo_id[str(woo_id)] = context
+            result = {
+                "woo_id": woo_id,
+                "woo_parent_id": target["parent_woo_id"],
+                "woo_sku": live_sku,
+                "woo_live_status": "FOUND",
+                "supabase_replica_status": replica_status,
+                "sync_action": action,
+                "proposal_line_status": "READY",
+                "apply_allowed": "YES",
+                "price_context": context,
+                "reason": "",
+            }
+            if replica_write:
+                write_audit_event(session, AuditEvent(
+                    operation_id=new_operation_id("WOOVARSYNC"),
+                    module="price_proposals",
+                    action="ensure_woo_variations_synced",
+                    status="OK",
+                    severity="INFO",
+                    entity_type="product_variations",
+                    entity_id=str(woo_id),
+                    before_data=_json_safe(existing),
+                    after_data=_json_safe({
+                        "sync_action": action,
+                        "reason": reason,
+                        "actor": actor,
+                        "price_context": context,
+                    }),
+                    message="Sincronizacion bajo demanda de variation Woo para propuesta de precio.",
+                ), settings or load_settings())
+            results.append(result)
+        except Exception as exc:
+            results.append({
+                "woo_id": woo_id,
+                "woo_parent_id": target["parent_woo_id"],
+                "woo_sku": target["expected_woo_sku"],
+                "woo_live_status": "READ_ERROR",
+                "supabase_replica_status": "NOT_CHECKED",
+                "sync_action": "BLOCKED_SYNC_ERROR",
+                "proposal_line_status": "BLOCKED_SYNC_ERROR",
+                "apply_allowed": "NO",
+                "price_context": {},
+                "reason": str(exc),
+            })
+
+    all_results = results + rejected
+    return {
+        "reason": str(reason),
+        "actor": actor,
+        "replica_write": bool(replica_write),
+        "variations_requested": len(requested),
+        "results": all_results,
+        "contexts_by_woo_id": contexts_by_woo_id,
+        "counts": {
+            "insert": sum(row.get("sync_action") == "INSERT" for row in all_results),
+            "update": sum(row.get("sync_action") == "UPDATE" for row in all_results),
+            "no_change": sum(row.get("sync_action") == "NO_CHANGE" for row in all_results),
+            "blocked": sum(row.get("sync_action") == "BLOCKED_SYNC_ERROR" for row in all_results),
+        },
     }
 
 

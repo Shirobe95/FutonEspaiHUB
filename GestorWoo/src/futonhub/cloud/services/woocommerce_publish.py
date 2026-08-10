@@ -13,6 +13,15 @@ from gestorwoo.config import Settings, load_settings
 from gestorwoo.woocommerce import WooCommerceClient
 
 
+class PriceProposalRevalidationRequired(CloudAuditError):
+    """Signals that a draft was refreshed from live Woo data and needs review."""
+
+    def __init__(self, message: str, *, preview: dict[str, Any], differences: list[dict[str, Any]]):
+        super().__init__(message)
+        self.preview = preview
+        self.differences = differences
+
+
 
 
 def _blackbox_record_exists(session, table: str, operation_id: str) -> bool:
@@ -56,6 +65,19 @@ def _json_safe(value: Any) -> Any:
         return json.loads(json.dumps(value, ensure_ascii=False, default=str))
     except Exception:
         return {"_raw": str(value)}
+
+
+def _authenticated_actor(session) -> dict[str, str]:
+    user_id = str(getattr(session, "user_id", None) or "").strip()
+    user_name = str(
+        getattr(session, "user_name", None)
+        or getattr(session, "display_name", None)
+        or getattr(session, "email", None)
+        or ""
+    ).strip()
+    if not user_id or not user_name:
+        raise CloudAuditError("La aplicacion de precios requiere una sesion de usuario identificable.")
+    return {"user_id": user_id, "user_name": user_name}
 
 # ================================
 # v11.2 - Preview protegido de publicacion WooCommerce
@@ -106,7 +128,194 @@ def _pricing_snapshot(data: dict[str, Any] | None) -> dict[str, Any]:
         "on_sale": data.get("on_sale"),
         "date_on_sale_from": data.get("date_on_sale_from"),
         "date_on_sale_to": data.get("date_on_sale_to"),
+        "date_on_sale_from_gmt": data.get("date_on_sale_from_gmt"),
+        "date_on_sale_to_gmt": data.get("date_on_sale_to_gmt"),
     }
+
+
+def _pricing_restore_payload(snapshot: dict[str, Any] | None) -> dict[str, Any]:
+    snapshot = snapshot or {}
+    return {
+        key: snapshot.get(key)
+        for key in (
+            "regular_price",
+            "sale_price",
+            "date_on_sale_from",
+            "date_on_sale_to",
+            "date_on_sale_from_gmt",
+            "date_on_sale_to_gmt",
+        )
+        if key in snapshot
+    }
+
+
+def _pricing_payload_matches(expected: dict[str, Any], actual: dict[str, Any] | None) -> bool:
+    actual = actual or {}
+    for key, value in expected.items():
+        actual_value = actual.get(key)
+        if key in {"regular_price", "sale_price"}:
+            if value in (None, "") and actual_value in (None, ""):
+                continue
+            expected_money = _safe_money(value)
+            actual_money = _safe_money(actual_value)
+            if (
+                expected_money is not None
+                and actual_money is not None
+                and abs(expected_money - actual_money) <= 0.009
+            ):
+                continue
+        if actual_value != value:
+            return False
+    return True
+
+
+def _proposal_entry_origin(proposal: dict[str, Any]) -> str:
+    source = proposal.get("source_row") if isinstance(proposal.get("source_row"), dict) else {}
+    return str(source.get("entry_origin") or "DIRECT_ITEM").strip().upper()
+
+
+def _is_revalidatable_publish_row(row: dict[str, Any]) -> bool:
+    status = str(row.get("status") or "").strip().upper()
+    reason = str(row.get("reason") or "").strip().lower()
+    if status == "DESACTUALIZADA":
+        return True
+    return status == "BLOCKED_INVALID_PAYLOAD" and (
+        "contexto woo cambio" in reason
+        or "payload recalculado" in reason
+    )
+
+
+def _refresh_price_proposal_group_from_live(
+    session,
+    rows: list[dict[str, Any]],
+    *,
+    actor: dict[str, str],
+    settings: Settings,
+) -> list[dict[str, Any]]:
+    """Refreshes only a pending draft after a live divergence; never writes Woo."""
+    if not rows or any(not _is_revalidatable_publish_row(row) for row in rows):
+        raise CloudAuditError("La divergencia no puede recalcularse automaticamente.")
+    operation_id = new_operation_id("PRICEREVALIDATE")
+    now = datetime.now(timezone.utc).isoformat()
+    before_rows = [dict(row.get("proposal") or {}) for row in rows]
+    write_snapshot(session, OperationSnapshot(
+        operation_id=operation_id,
+        module="price_change_proposals",
+        action="user_revalidate_price_proposal_group",
+        entity_type="price_proposal_group",
+        entity_id=str((rows[0].get("proposal") or {}).get("id") or "group"),
+        before_data=_json_safe(before_rows),
+        reason="Snapshot antes de recalcular un borrador por divergencia live de Woo.",
+    ))
+    differences: list[dict[str, Any]] = []
+    for row in rows:
+        proposal = dict(row.get("proposal") or {})
+        proposal_id = str(proposal.get("id") or "")
+        source = proposal.get("source_row") if isinstance(proposal.get("source_row"), dict) else {}
+        live_context = dict(row.get("woo_before_full") or {})
+        live_price = _effective_woo_price(live_context)
+        if not proposal_id or live_price is None:
+            raise CloudAuditError("No se pudo identificar o valorar una linea divergente.")
+        previous_old = _safe_money(proposal.get("old_price"))
+        previous_new = _safe_money(proposal.get("new_price"))
+        refreshed_new = previous_new
+        entry_origin = _proposal_entry_origin(proposal)
+        if entry_origin == "DERIVED_COMBINATION":
+            component_delta = _safe_money(source.get("component_delta"))
+            if component_delta is None:
+                raise CloudAuditError(f"{proposal_id} no conserva el delta derivado exacto.")
+            refreshed_new = float(live_price) + float(component_delta)
+        if refreshed_new is None or refreshed_new <= 0:
+            raise CloudAuditError(f"{proposal_id} produce un precio recalculado invalido.")
+        payload, strategy = _pricing_payload_for_effective_price(live_context, float(refreshed_new))
+        target = row.get("target") or {}
+        refreshed_context = {
+            **_pricing_snapshot(live_context),
+            "id": live_context.get("id"),
+            "parent_id": target.get("parent_woo_id"),
+            "date_modified": live_context.get("date_modified"),
+            "date_modified_gmt": live_context.get("date_modified_gmt"),
+        }
+        item_snapshot = dict(source.get("item_snapshot") or {})
+        item_snapshot.update({
+            "price": float(live_price),
+            "regular_price": live_context.get("regular_price"),
+            "sale_price": live_context.get("sale_price"),
+            "price_at_creation": float(live_price),
+            "proposed_price": float(refreshed_new),
+        })
+        source_update = {
+            **source,
+            "workflow_state": "READY",
+            "ready_at_utc": now,
+            "revalidated_by_user_id": actor["user_id"],
+            "revalidated_by_user_name": actor["user_name"],
+            "revalidated_machine": settings.machine_name,
+            "revalidation_operation_id": operation_id,
+            "price_at_creation": float(live_price),
+            "proposed_price": float(refreshed_new),
+            "proposal_price_snapshot": {
+                "price_at_creation": float(live_price),
+                "proposed_price": float(refreshed_new),
+                "delta": float(refreshed_new) - float(live_price),
+                "source": "woo_live_revalidation",
+            },
+            "item_snapshot": item_snapshot,
+        }
+        if entry_origin == "DERIVED_COMBINATION":
+            source_update.update({
+                "derived_status": "NO_CHANGE" if abs(float(refreshed_new) - float(live_price)) <= 0.009 else "READY",
+                "publication_allowed": "YES",
+                "blocking_reason": "",
+                "woo_price_context_at_creation": refreshed_context,
+                "future_pricing_payload": dict(payload),
+                "pricing_strategy": strategy,
+            })
+        update_response = (
+            session.client.table("price_change_proposals")
+            .update({
+                "old_price": float(live_price),
+                "new_price": float(refreshed_new),
+                "delta": float(refreshed_new) - float(live_price),
+                "source_row": source_update,
+            })
+            .eq("id", proposal_id)
+            .eq("status", "pending")
+            .execute()
+        )
+        if not (getattr(update_response, "data", None) or []):
+            raise CloudAuditError(f"No se confirmo la revalidacion del borrador {proposal_id}.")
+        differences.append({
+            "proposal_id": proposal_id,
+            "entry_origin": entry_origin,
+            "canonical_key": row.get("canonical_key"),
+            "code": row.get("code"),
+            "name": row.get("name"),
+            "previous_old_price": previous_old,
+            "live_old_price": float(live_price),
+            "previous_new_price": previous_new,
+            "revalidated_new_price": float(refreshed_new),
+            "previous_reason": row.get("reason"),
+            "pricing_payload": dict(payload),
+        })
+    write_audit_event(session, AuditEvent(
+        operation_id=operation_id,
+        module="price_change_proposals",
+        action="user_revalidate_price_proposal_group",
+        status="OK",
+        severity="WARNING",
+        entity_type="price_proposal_group",
+        entity_id=str((rows[0].get("proposal") or {}).get("id") or "group"),
+        before_data=_json_safe(before_rows),
+        after_data=_json_safe({
+            "differences": differences,
+            "revalidated_by_user_id": actor["user_id"],
+            "revalidated_by_user_name": actor["user_name"],
+            "revalidated_machine": settings.machine_name,
+        }),
+        message="Borrador recalculado tras detectar divergencias live; no se publico en Woo.",
+    ), settings)
+    return differences
 
 
 def _proposal_item_snapshot(proposal: dict[str, Any]) -> dict[str, Any]:
@@ -278,8 +487,7 @@ def preview_woocommerce_publish(session, *, proposal_id: str | None = None, limi
     publicacion futura, pero aqui WooCommerce solo se consulta.
     """
     settings = settings or load_settings()
-    if (session.role or "").lower() != "admin":
-        raise CloudAuditError("Solo admin puede generar preview de publicacion WooCommerce.")
+    _authenticated_actor(session)
     operation_id = new_operation_id("WOOPREVIEW")
     client = WooCommerceClient(settings.woocommerce_url, settings.consumer_key, settings.consumer_secret)
     proposals = _fetch_approved_price_proposals(session, proposal_id=proposal_id, limit=limit)
@@ -410,9 +618,9 @@ def format_woocommerce_publish_preview(result: dict[str, Any]) -> str:
     if counts.get("ERROR", 0):
         lines.append("BLOQUEO: hay errores rojos. No se debe publicar hasta corregirlos.")
     elif counts.get("WARNING", 0):
-        lines.append("AVISO: hay warnings amarillos. Revision admin obligatoria antes de publicar en una futura fase.")
+        lines.append("AVISO: hay warnings amarillos. Revisa sus diferencias antes de aplicar.")
     else:
-        lines.append("Preview limpio: listo para preparar la fase futura de confirmacion escrita, todavia sin publicar.")
+        lines.append("Preview limpio: listo para revalidar y aplicar sin un paso adicional.")
     return "\n".join(lines)
 
 
@@ -445,12 +653,11 @@ def _format_publish_row_for_confirm(row: dict[str, Any]) -> str:
 
 
 def publish_woocommerce_price(session, *, proposal_id: str, confirm: str = "", acknowledge_warnings: bool = False, settings: Settings | None = None) -> dict[str, Any]:
-    """Publica UNA propuesta aprobada en WooCommerce con triple candado.
+    """Compatibilidad historica para publicar una propuesta ya aprobada.
 
-    Seguridad v11.4:
-    - solo admin
+    Seguridad:
+    - requiere usuario autenticado
     - exige proposal_id concreto
-    - exige --confirm PUBLICAR
     - genera preview justo antes
     - bloquea ERROR
     - WARNING exige --ack-woo-warning
@@ -458,14 +665,10 @@ def publish_woocommerce_price(session, *, proposal_id: str, confirm: str = "", a
     - marca la propuesta como published en Supabase y actualiza el espejo cloud del precio
     """
     settings = settings or load_settings()
-    if (session.role or "").lower() != "admin":
-        raise CloudAuditError("Solo admin puede publicar cambios en WooCommerce.")
+    _authenticated_actor(session)
     proposal_id = (proposal_id or "").strip()
     if not proposal_id:
         raise CloudAuditError("Debes indicar --proposal-id. En v11.4 solo se publica una propuesta por operacion.")
-    if (confirm or "").strip().upper() != "PUBLICAR":
-        raise CloudAuditError("Publicacion bloqueada. Debes repetir con --confirm PUBLICAR.")
-
     operation_id = new_operation_id("WOOPUBLISH")
     lock_key = f"woocommerce_publish:{proposal_id}"
     lock_acquired = False
@@ -748,15 +951,37 @@ def preview_price_proposal_group_publish(
 ) -> dict[str, Any]:
     """Preflight completo de una propuesta logica. Solo realiza lecturas."""
     settings = settings or load_settings()
-    if (session.role or "").lower() != "admin":
-        raise CloudAuditError("Solo admin puede preparar una publicacion WooCommerce.")
     rows = _fetch_price_proposal_rows(session, proposal_ids)
     woo = client or WooCommerceClient(settings.woocommerce_url, settings.consumer_key, settings.consumer_secret)
     result_rows: list[dict[str, Any]] = []
     targets: dict[str, list[str]] = {}
+    exclusions_by_id: dict[str, dict[str, Any]] = {}
 
     for proposal in rows:
         source = proposal.get("source_row") if isinstance(proposal.get("source_row"), dict) else {}
+        for exclusion in source.get("combination_exclusions") or []:
+            if isinstance(exclusion, dict):
+                key = str(exclusion.get("combination_woo_id") or exclusion.get("combination_sku") or "")
+                if key:
+                    exclusions_by_id[key] = dict(exclusion)
+
+    for proposal in rows:
+        source = proposal.get("source_row") if isinstance(proposal.get("source_row"), dict) else {}
+        modified_components = [
+            component
+            for component in (source.get("modified_components") or [])
+            if isinstance(component, dict)
+        ]
+        component_summary = " | ".join(
+            f"{component.get('component_sku') or component.get('component_item_id') or '-'}: "
+            f"{component.get('old_price') or '-'} -> {component.get('new_price') or '-'} "
+            f"(delta {component.get('weighted_delta') or component.get('unit_delta') or '-'})"
+            for component in modified_components
+        )
+        quantity_summary = ", ".join(
+            f"{component.get('component_sku') or component.get('component_item_id') or '-'} x{component.get('quantity') or '1'}"
+            for component in modified_components
+        )
         canonical_key = "-"
         status = "VALIDO"
         reason = "Validacion correcta."
@@ -766,6 +991,10 @@ def preview_price_proposal_group_publish(
         new_price = _safe_money(proposal.get("new_price"))
         woo_price = None
         messages: list[str] = []
+        entry_origin = _proposal_entry_origin(proposal)
+        pricing_payload: dict[str, Any] = {}
+        pricing_strategy = ""
+        functional_status = "READY"
         try:
             kind, _woo_id, canonical_key = _proposal_canonical_identity(proposal)
             proposal_status = str(proposal.get("status") or "").strip().lower()
@@ -783,13 +1012,68 @@ def preview_price_proposal_group_publish(
             woo_price = _effective_woo_price(woo_data)
             if woo_price is None:
                 raise CloudAuditError("WooCommerce no devuelve un precio efectivo.")
-            if abs(float(old_price) - float(woo_price)) > 0.009:
+            if entry_origin == "DERIVED_COMBINATION":
+                persisted_status = str(source.get("derived_status") or "").strip().upper()
+                if source.get("publication_allowed") != "YES" or persisted_status not in {"READY", "NO_CHANGE"}:
+                    status = persisted_status if persisted_status.startswith("BLOCKED_") else "BLOCKED_TRACEABILITY_ERROR"
+                    functional_status = status
+                    reason = str(source.get("blocking_reason") or "La linea derivada no esta autorizada para publicacion.")
+                stored_context = source.get("woo_price_context_at_creation")
+                if status.startswith("BLOCKED_"):
+                    pass
+                elif not isinstance(stored_context, dict):
+                    status = "BLOCKED_MISSING_PRICE_CONTEXT"
+                    functional_status = status
+                    reason = "La combinacion derivada no conserva el contexto Woo completo de creacion."
+                else:
+                    required = {
+                        "id", "parent_id", "price", "regular_price", "sale_price", "on_sale",
+                        "date_on_sale_from", "date_on_sale_to",
+                    }
+                    missing = sorted(required.difference(stored_context))
+                    if not stored_context.get("date_modified") and not stored_context.get("date_modified_gmt"):
+                        missing.append("date_modified/date_modified_gmt")
+                    if missing:
+                        status = "BLOCKED_MISSING_PRICE_CONTEXT"
+                        functional_status = status
+                        reason = "Falta contexto Woo persistido: " + ", ".join(missing)
+                    else:
+                        current_context = {
+                            **_pricing_snapshot(woo_data),
+                            "id": woo_data.get("id"),
+                            "parent_id": target.get("parent_woo_id"),
+                            "date_modified": woo_data.get("date_modified"),
+                            "date_modified_gmt": woo_data.get("date_modified_gmt"),
+                        }
+                        changed = [
+                            key for key in stored_context
+                            if key in current_context and stored_context.get(key) != current_context.get(key)
+                        ]
+                        if changed:
+                            status = "BLOCKED_INVALID_PAYLOAD"
+                            functional_status = status
+                            reason = "El contexto Woo cambio desde el preview: " + ", ".join(sorted(changed))
+            if str(status).startswith("BLOCKED_"):
+                pass
+            elif abs(float(old_price) - float(woo_price)) > 0.009:
                 status = "DESACTUALIZADA"
+                functional_status = "BLOCKED_INVALID_PAYLOAD" if entry_origin == "DERIVED_COMBINATION" else status
                 reason = (
                     f"Precio registrado {old_price:.2f}; "
                     f"precio Woo actual {woo_price:.2f}."
                 )
             else:
+                pricing_payload, pricing_strategy = _pricing_payload_for_effective_price(
+                    woo_data,
+                    float(new_price),
+                )
+                if entry_origin == "DERIVED_COMBINATION":
+                    persisted_payload = source.get("future_pricing_payload")
+                    if not isinstance(persisted_payload, dict) or persisted_payload != pricing_payload:
+                        status = "BLOCKED_INVALID_PAYLOAD"
+                        functional_status = status
+                        reason = "El payload recalculado no coincide con el preview persistido."
+                        raise CloudAuditError(reason)
                 validation = _price_safety_preview(
                     target["cloud_item"],
                     kind,
@@ -799,13 +1083,20 @@ def preview_price_proposal_group_publish(
                 messages = list(validation.get("messages") or [])
                 if validation.get("status") == "ERROR":
                     status = "NO PUBLICABLE"
+                    functional_status = "BLOCKED_INVALID_PAYLOAD"
                     reason = " ".join(messages)
                 elif validation.get("status") == "WARNING":
-                    status = "WARNING"
+                    status = "READY" if entry_origin == "DERIVED_COMBINATION" else "WARNING"
+                    functional_status = "READY"
                     reason = " ".join(messages)
+                elif entry_origin == "DERIVED_COMBINATION":
+                    status = "NO_CHANGE" if abs(float(new_price) - float(woo_price)) <= 0.009 else "READY"
+                    functional_status = status
         except Exception as exc:
-            status = "ERROR"
-            reason = str(exc)
+            if not str(status).startswith("BLOCKED_"):
+                status = "ERROR"
+                functional_status = "BLOCKED_TRACEABILITY_ERROR"
+                reason = str(exc)
 
         result_rows.append({
             "proposal_id": str(proposal.get("id") or ""),
@@ -814,6 +1105,8 @@ def preview_price_proposal_group_publish(
             "code": str(source.get("ui_line_code") or canonical_key),
             "name": str(source.get("ui_line_name") or proposal.get("name") or canonical_key),
             "proposal_status": str(proposal.get("status") or ""),
+            "entry_origin": entry_origin,
+            "functional_status": functional_status,
             "old_price_proposal": old_price,
             "woo_current_price": woo_price,
             "new_price": new_price,
@@ -824,6 +1117,10 @@ def preview_price_proposal_group_publish(
             "target": target,
             "woo_before": _pricing_snapshot(woo_data),
             "woo_before_full": woo_data,
+            "pricing_payload": pricing_payload,
+            "pricing_strategy": pricing_strategy,
+            "component_summary": component_summary,
+            "quantity_summary": quantity_summary,
             "proposal": proposal,
         })
 
@@ -838,6 +1135,7 @@ def preview_price_proposal_group_publish(
             duplicate = duplicate_keys.get(str(target.get("remote_key") or ""))
             if duplicate:
                 row["status"] = "DESTINO DUPLICADO"
+                row["functional_status"] = "BLOCKED_TRACEABILITY_ERROR"
                 row["reason"] = (
                     f"El destino {target.get('remote_key')} tambien corresponde a: "
                     + ", ".join(duplicate)
@@ -849,21 +1147,36 @@ def preview_price_proposal_group_publish(
         "warnings": 0,
         "errors": 0,
         "stale": 0,
+        "direct": sum(_proposal_entry_origin(row) == "DIRECT_ITEM" for row in rows),
+        "derived": sum(_proposal_entry_origin(row) == "DERIVED_COMBINATION" for row in rows),
+        "woo_writes": 0,
+        "excluded": len(exclusions_by_id),
     }
     for row in result_rows:
         state = row["status"]
-        if state == "VALIDO":
+        if state in {"VALIDO", "READY", "NO_CHANGE"}:
             counts["valid"] += 1
+            if state != "NO_CHANGE":
+                counts["woo_writes"] += 1
         elif state == "WARNING":
             counts["warnings"] += 1
         else:
             counts["errors"] += 1
             if state == "DESACTUALIZADA":
                 counts["stale"] += 1
+    blocked_rows = [
+        row
+        for row in result_rows
+        if row["status"] not in {"VALIDO", "WARNING", "READY", "NO_CHANGE"}
+    ]
     return {
         "rows": result_rows,
+        "exclusions": list(exclusions_by_id.values()),
         "counts": counts,
         "blocking": counts["errors"] > 0,
+        "revalidation_possible": bool(blocked_rows) and all(
+            _is_revalidatable_publish_row(row) for row in blocked_rows
+        ),
         "duplicate_targets": duplicate_keys,
     }
 
@@ -872,15 +1185,14 @@ def publish_price_proposal_group(
     session,
     *,
     proposal_ids: list[str] | tuple[str, ...],
-    confirm: str,
+    confirm: str | None = None,
     settings: Settings | None = None,
     client: WooCommerceClient | None = None,
     progress=None,
 ) -> dict[str, Any]:
     """Publica un lote con preflight completo y rollback compensatorio."""
     settings = settings or load_settings()
-    if (confirm or "") != "PUBLICAR":
-        raise CloudAuditError("Publicacion bloqueada. Escribe exactamente PUBLICAR.")
+    actor = _authenticated_actor(session)
     ids = list(dict.fromkeys(str(value).strip() for value in proposal_ids if str(value).strip()))
     rows_now = _fetch_price_proposal_rows(session, ids)
     statuses = {str(row.get("status") or "").strip().lower() for row in rows_now}
@@ -890,17 +1202,73 @@ def publish_price_proposal_group(
         raise CloudAuditError("La propuesta ya no esta completamente pendiente.")
 
     woo = client or WooCommerceClient(settings.woocommerce_url, settings.consumer_key, settings.consumer_secret)
+
+    def require_review_after_live_refresh(candidate: dict[str, Any]) -> None:
+        if not candidate.get("blocking"):
+            return
+        blocked_rows = [
+            row
+            for row in candidate.get("rows") or []
+            if row.get("status") not in {"VALIDO", "WARNING", "READY", "NO_CHANGE"}
+        ]
+        if not blocked_rows or any(not _is_revalidatable_publish_row(row) for row in blocked_rows):
+            return
+        differences = _refresh_price_proposal_group_from_live(
+            session,
+            blocked_rows,
+            actor=actor,
+            settings=settings,
+        )
+        refreshed = preview_price_proposal_group_publish(
+            session,
+            proposal_ids=ids,
+            settings=settings,
+            client=woo,
+        )
+        if refreshed.get("blocking"):
+            raise CloudAuditError("La propuesta sigue bloqueada despues de recalcular el borrador.")
+        difference_by_id = {str(row.get("proposal_id")): row for row in differences}
+        display_rows: list[dict[str, Any]] = []
+        for row in refreshed.get("rows") or []:
+            difference = difference_by_id.get(str(row.get("proposal_id")))
+            if not difference:
+                continue
+            display_rows.append({
+                **row,
+                "old_price_proposal": difference.get("previous_old_price"),
+                "woo_current_price": difference.get("live_old_price"),
+                "new_price": difference.get("revalidated_new_price"),
+                "delta": (
+                    float(difference["revalidated_new_price"]) - float(difference["live_old_price"])
+                    if difference.get("revalidated_new_price") is not None
+                    and difference.get("live_old_price") is not None
+                    else None
+                ),
+                "reason": "Borrador recalculado con el estado live. Revisa esta diferencia antes de aplicar.",
+            })
+        refreshed.update({
+            "revalidation_required": True,
+            "revalidation_differences": differences,
+            "display_rows": display_rows,
+        })
+        raise PriceProposalRevalidationRequired(
+            "La informacion cambio desde el preview. El borrador se recalculo sin publicar; revisa las diferencias.",
+            preview=refreshed,
+            differences=differences,
+        )
+
     preflight = preview_price_proposal_group_publish(
         session,
         proposal_ids=ids,
         settings=settings,
         client=woo,
     )
+    require_review_after_live_refresh(preflight)
     if preflight["blocking"]:
         blocked = [
             f"{row['canonical_key']}: {row['status']} - {row['reason']}"
             for row in preflight["rows"]
-            if row["status"] not in {"VALIDO", "WARNING"}
+            if row["status"] not in {"VALIDO", "WARNING", "READY", "NO_CHANGE"}
         ]
         raise CloudAuditError("Publicacion bloqueada antes de escribir:\n" + "\n".join(blocked[:10]))
 
@@ -924,7 +1292,43 @@ def publish_price_proposal_group(
         # Revalidacion de estado justo antes de snapshot/escritura.
         current_rows = _fetch_price_proposal_rows(session, ids)
         if any(str(row.get("status") or "").strip().lower() != "pending" for row in current_rows):
-            raise CloudAuditError("La propuesta cambio de estado durante la confirmacion.")
+            raise CloudAuditError("La propuesta cambio de estado durante la revalidacion.")
+
+        locked_preflight = preview_price_proposal_group_publish(
+            session,
+            proposal_ids=ids,
+            settings=settings,
+            client=woo,
+        )
+        require_review_after_live_refresh(locked_preflight)
+        if locked_preflight["blocking"]:
+            changed = [
+                f"{row['canonical_key']}: {row['status']} - {row['reason']}"
+                for row in locked_preflight["rows"]
+                if row["status"] not in {"VALIDO", "WARNING", "READY", "NO_CHANGE"}
+            ]
+            raise CloudAuditError(
+                "La revalidacion detecto cambios; revisa solo estas diferencias:\n"
+                + "\n".join(changed[:20])
+            )
+        initial_by_id = {row["proposal_id"]: row for row in preflight["rows"]}
+        changed_rows: list[str] = []
+        for row in locked_preflight["rows"]:
+            previous = initial_by_id.get(row["proposal_id"]) or {}
+            if (
+                previous.get("woo_before") != row.get("woo_before")
+                or previous.get("pricing_payload") != row.get("pricing_payload")
+                or previous.get("new_price") != row.get("new_price")
+            ):
+                changed_rows.append(
+                    f"{row['canonical_key']}: contexto o payload Woo cambio desde el preview."
+                )
+        if changed_rows:
+            raise CloudAuditError(
+                "La revalidacion detecto cambios; no se publico nada:\n"
+                + "\n".join(changed_rows[:20])
+            )
+        preflight = locked_preflight
 
         snapshot_data = [{
             "canonical_key": row["canonical_key"],
@@ -933,6 +1337,8 @@ def publish_price_proposal_group(
             "old_price": row["old_price_proposal"],
             "new_price": row["new_price"],
             "proposal_id": row["proposal_id"],
+            "entry_origin": row.get("entry_origin"),
+            "pricing_payload": row.get("pricing_payload"),
         } for row in preflight["rows"]]
         _ensure_snapshot_persisted(session, OperationSnapshot(
             operation_id=operation_id,
@@ -945,9 +1351,21 @@ def publish_price_proposal_group(
         ))
 
         for row_id in ids:
+            current = next((row for row in current_rows if str(row.get("id")) == row_id), {})
+            source = current.get("source_row") if isinstance(current.get("source_row"), dict) else {}
             response = (
                 session.client.table("price_change_proposals")
-                .update({"status": "publishing", "error_message": None})
+                .update({
+                    "status": "publishing",
+                    "error_message": None,
+                    "source_row": {
+                        **source,
+                        "workflow_state": "APPLYING",
+                        "applying_by_user_id": actor["user_id"],
+                        "applying_by_user_name": actor["user_name"],
+                        "applying_at_utc": datetime.now(timezone.utc).isoformat(),
+                    },
+                })
                 .eq("id", row_id)
                 .eq("status", "pending")
                 .execute()
@@ -961,16 +1379,33 @@ def publish_price_proposal_group(
             if progress:
                 progress(index, total, row["canonical_key"])
             target = row["target"]
-            payload, strategy = _pricing_payload_for_effective_price(
-                row.get("woo_before_full") or {},
-                float(row["new_price"]),
-            )
+            payload = dict(row.get("pricing_payload") or {})
+            strategy = str(row.get("pricing_strategy") or "")
+            if not payload:
+                payload, strategy = _pricing_payload_for_effective_price(
+                    row.get("woo_before_full") or {},
+                    float(row["new_price"]),
+                )
+            if row.get("status") == "NO_CHANGE":
+                published.append({
+                    **row,
+                    "pricing_payload": {},
+                    "pricing_strategy": "no_change",
+                    "woo_after": row.get("woo_before_full") or {},
+                    "inventory_sync": None,
+                    "write_performed": False,
+                })
+                continue
             _write_remote_target(woo, target, payload)
             verified = _fetch_remote_target(woo, target)
             verified_price = _effective_woo_price(verified)
             if verified_price is None or abs(verified_price - float(row["new_price"])) > 0.009:
                 raise CloudAuditError(
                     f"{row['canonical_key']} no confirmo el precio {row['new_price']:.2f}."
+                )
+            if not _pricing_payload_matches(payload, verified):
+                raise CloudAuditError(
+                    f"{row['canonical_key']} no confirmo el payload de precio exacto enviado."
                 )
             inventory_sync = sync_woocommerce_price_inventory_state(
                 session,
@@ -995,12 +1430,15 @@ def publish_price_proposal_group(
                 "pricing_strategy": strategy,
                 "woo_after": verified,
                 "inventory_sync": inventory_sync,
+                "write_performed": True,
             })
 
         now = datetime.now(timezone.utc).isoformat()
+        published_by_id = {str(row.get("proposal_id")): row for row in published}
         for row in preflight["rows"]:
             proposal = row["proposal"]
             source = proposal.get("source_row") if isinstance(proposal.get("source_row"), dict) else {}
+            published_row = published_by_id.get(str(row.get("proposal_id"))) or {}
             update = {
                 "status": "published",
                 "published_at": now,
@@ -1011,7 +1449,19 @@ def publish_price_proposal_group(
                     "publish_operation_id": operation_id,
                     "published_by_email": session.email,
                     "published_machine": settings.machine_name,
+                    "workflow_state": "APPLIED",
+                    "applied_by_user_id": actor["user_id"],
+                    "applied_by_user_name": actor["user_name"],
+                    "applied_at_utc": now,
+                    "applied_machine": settings.machine_name,
+                    "snapshot_operation_id": operation_id,
+                    "entry_origin": row.get("entry_origin") or _proposal_entry_origin(proposal),
                     "remote_target": _json_safe(row["target"]),
+                    "woo_before_apply": _json_safe(row.get("woo_before_full") or row.get("woo_before") or {}),
+                    "pricing_payload_sent": _json_safe(published_row.get("pricing_payload") or row.get("pricing_payload") or {}),
+                    "pricing_strategy_applied": published_row.get("pricing_strategy") or row.get("pricing_strategy"),
+                    "woo_after_verified": _json_safe(published_row.get("woo_after") or {}),
+                    "woo_write_performed": bool(published_row.get("write_performed")),
                     "price_before_publish": row["woo_current_price"],
                     "published_price": row["new_price"],
                 },
@@ -1028,6 +1478,18 @@ def publish_price_proposal_group(
                     f"No se confirmo el estado published para {row['canonical_key']}."
                 )
 
+        line_results = [{
+            "proposal_id": row.get("proposal_id"),
+            "entry_origin": row.get("entry_origin"),
+            "canonical_key": row.get("canonical_key"),
+            "woo_id": (row.get("target") or {}).get("woo_id"),
+            "parent_woo_id": (row.get("target") or {}).get("parent_woo_id"),
+            "old_price": row.get("woo_current_price"),
+            "new_price": row.get("new_price"),
+            "pricing_payload": row.get("pricing_payload"),
+            "write_performed": bool(row.get("write_performed")),
+            "result": "APPLIED" if row.get("write_performed") else "NO_CHANGE",
+        } for row in published]
         _ensure_audit_persisted(session, AuditEvent(
             operation_id=operation_id,
             module="woocommerce_publish",
@@ -1039,7 +1501,15 @@ def publish_price_proposal_group(
             before_data=_json_safe(snapshot_data),
             after_data=_json_safe({
                 "published_count": len(published),
+                "direct_count": preflight.get("counts", {}).get("direct", 0),
+                "derived_count": preflight.get("counts", {}).get("derived", 0),
+                "woo_write_count": sum(bool(row.get("write_performed")) for row in published),
+                "applied_by_user_id": actor["user_id"],
+                "applied_by_user_name": actor["user_name"],
+                "applied_machine": settings.machine_name,
                 "proposal_ids": ids,
+                "line_results": line_results,
+                "exclusions": _json_safe(preflight.get("exclusions") or []),
             }),
             message="Propuesta logica publicada y verificada completamente en WooCommerce.",
         ), settings)
@@ -1049,15 +1519,23 @@ def publish_price_proposal_group(
             "rollback": [],
             "rollback_complete": False,
             "already_published": False,
+            "line_results": line_results,
+            "counts": {
+                "direct": preflight.get("counts", {}).get("direct", 0),
+                "derived": preflight.get("counts", {}).get("derived", 0),
+                "woo_writes": sum(bool(row.get("write_performed")) for row in published),
+            },
         }
     except Exception as exc:
+        if isinstance(exc, PriceProposalRevalidationRequired):
+            raise
         rollback_failures: list[str] = []
         for row in reversed(published):
+            if not row.get("write_performed", True):
+                rollback.append({"canonical_key": row["canonical_key"], "restored": True, "write_performed": False})
+                continue
             target = row["target"]
-            before_payload = {
-                "regular_price": str((row.get("woo_before") or {}).get("regular_price") or ""),
-                "sale_price": str((row.get("woo_before") or {}).get("sale_price") or ""),
-            }
+            before_payload = _pricing_restore_payload(row.get("woo_before") or {})
             try:
                 _write_remote_target(woo, target, before_payload)
                 restored = _fetch_remote_target(woo, target)
@@ -1067,6 +1545,9 @@ def publish_price_proposal_group(
                     raise CloudAuditError(
                         f"verificacion devolvio {restored_price!r}; esperado {expected!r}"
                     )
+                if not _pricing_payload_matches(before_payload, restored):
+                    raise CloudAuditError("el rollback no confirmo el payload Woo anterior exacto")
+                row["woo_after_rollback"] = restored
                 sync_woocommerce_price_inventory_state(
                     session,
                     operation_id=operation_id,
@@ -1096,6 +1577,20 @@ def publish_price_proposal_group(
             try:
                 current = next((row for row in rows_now if str(row.get("id")) == row_id), {})
                 source = current.get("source_row") if isinstance(current.get("source_row"), dict) else {}
+                published_row = next((row for row in published if str(row.get("proposal_id")) == row_id), {})
+                rollback_context = published_row.get("woo_after_rollback")
+                refreshed_context: dict[str, Any] = {}
+                if _proposal_entry_origin(current) == "DERIVED_COMBINATION" and isinstance(rollback_context, dict):
+                    target = published_row.get("target") or {}
+                    refreshed_context = {
+                        "woo_price_context_at_creation": {
+                            **_pricing_snapshot(rollback_context),
+                            "id": rollback_context.get("id"),
+                            "parent_id": target.get("parent_woo_id"),
+                            "date_modified": rollback_context.get("date_modified"),
+                            "date_modified_gmt": rollback_context.get("date_modified_gmt"),
+                        }
+                    }
                 session.client.table("price_change_proposals").update({
                     "status": final_status,
                     "error_message": error_message[:500],
@@ -1103,6 +1598,11 @@ def publish_price_proposal_group(
                         **source,
                         "publish_operation_id": operation_id,
                         "publish_failure": str(exc),
+                        "workflow_state": "PARTIAL_FAILURE" if published else "FAILED",
+                        "failed_by_user_id": actor["user_id"],
+                        "failed_by_user_name": actor["user_name"],
+                        "failed_at_utc": datetime.now(timezone.utc).isoformat(),
+                        **refreshed_context,
                         "rollback_complete": rollback_complete,
                         "rollback_failures": rollback_failures,
                     },
@@ -1119,7 +1619,14 @@ def publish_price_proposal_group(
                 entity_type="price_proposal_group",
                 entity_id=lock_digest,
                 before_data=_json_safe(preflight),
-                after_data=_json_safe({"published": published, "rollback": rollback}),
+                after_data=_json_safe({
+                    "published": published,
+                    "rollback": rollback,
+                    "exclusions": preflight.get("exclusions") or [],
+                    "failed_by_user_id": actor["user_id"],
+                    "failed_by_user_name": actor["user_name"],
+                    "failed_machine": settings.machine_name,
+                }),
                 message="Fallo la publicacion del lote; se ejecuto rollback compensatorio.",
                 error_detail=error_message,
             ), settings)
@@ -1244,8 +1751,6 @@ def preview_price_proposal_group_restore(
 ) -> dict[str, Any]:
     """Valida una restauracion completa sin escribir en WooCommerce."""
     settings = settings or load_settings()
-    if (session.role or "").lower() != "admin":
-        raise CloudAuditError("Solo admin puede preparar una restauracion WooCommerce.")
     rows = _fetch_price_proposal_rows(session, proposal_ids)
     if rows and all(
         bool((row.get("source_row") if isinstance(row.get("source_row"), dict) else {}).get("rolled_back"))
@@ -1376,15 +1881,14 @@ def restore_price_proposal_group(
     session,
     *,
     proposal_ids: list[str] | tuple[str, ...],
-    confirm: str,
+    confirm: str | None = None,
     settings: Settings | None = None,
     client: WooCommerceClient | None = None,
     progress=None,
 ) -> dict[str, Any]:
     """Restaura un lote publicado y compensa en orden inverso ante fallo parcial."""
     settings = settings or load_settings()
-    if confirm != "RESTAURAR":
-        raise CloudAuditError("Restauracion bloqueada. Escribe exactamente RESTAURAR.")
+    actor = _authenticated_actor(session)
     ids = list(dict.fromkeys(str(value).strip() for value in proposal_ids if str(value).strip()))
     current_rows = _fetch_price_proposal_rows(session, ids)
     if current_rows and all(
@@ -1474,10 +1978,7 @@ def restore_price_proposal_group(
                 progress(index, total, row["canonical_key"])
             target = row["target"]
             restore_snapshot_price = row.get("woo_restore_snapshot") or {}
-            payload = {
-                "regular_price": str(restore_snapshot_price.get("regular_price") or ""),
-                "sale_price": str(restore_snapshot_price.get("sale_price") or ""),
-            }
+            payload = _pricing_restore_payload(restore_snapshot_price)
             _write_remote_target(woo, target, payload)
             verified = _fetch_remote_target(woo, target)
             verified_price = _effective_woo_price(verified)
@@ -1485,6 +1986,10 @@ def restore_price_proposal_group(
                 raise CloudAuditError(
                     f"{row['canonical_key']} no confirmo el precio restaurado "
                     f"{row['restore_price']:.2f}."
+                )
+            if not _pricing_payload_matches(payload, verified):
+                raise CloudAuditError(
+                    f"{row['canonical_key']} no confirmo el payload historico exacto."
                 )
             inventory_sync = sync_woocommerce_price_inventory_state(
                 session,
@@ -1511,9 +2016,11 @@ def restore_price_proposal_group(
             })
 
         now = datetime.now(timezone.utc).isoformat()
+        restored_by_id = {str(row.get("proposal_id")): row for row in restored}
         for row in preview["rows"]:
             proposal = row["proposal"]
             source = proposal.get("source_row") if isinstance(proposal.get("source_row"), dict) else {}
+            restored_row = restored_by_id.get(str(row.get("proposal_id"))) or {}
             restored_source = {
                 **source,
                 "rolled_back": True,
@@ -1522,6 +2029,14 @@ def restore_price_proposal_group(
                 "restore_operation_id": operation_id,
                 "rolled_back_from_operation_id": publish_operation_id,
                 "restored_price": row["restore_price"],
+                "workflow_state": "ROLLED_BACK",
+                "rolled_back_by_user_id": actor["user_id"],
+                "rolled_back_by_user_name": actor["user_name"],
+                "rolled_back_at_utc": now,
+                "rolled_back_machine": settings.machine_name,
+                "rollback_snapshot_operation_id": operation_id,
+                "rollback_payload_sent": _json_safe(restored_row.get("restore_payload") or {}),
+                "rollback_woo_after_verified": _json_safe(restored_row.get("woo_after") or {}),
             }
             try:
                 response = (
@@ -1558,6 +2073,16 @@ def restore_price_proposal_group(
                     f"No se confirmo el estado rolled_back para {row['canonical_key']}."
                 )
 
+        rollback_line_results = [{
+            "proposal_id": row.get("proposal_id"),
+            "canonical_key": row.get("canonical_key"),
+            "woo_id": (row.get("target") or {}).get("woo_id"),
+            "parent_woo_id": (row.get("target") or {}).get("parent_woo_id"),
+            "published_price": row.get("published_price"),
+            "restored_price": row.get("restore_price"),
+            "restore_payload": row.get("restore_payload"),
+            "result": "ROLLED_BACK",
+        } for row in restored]
         _ensure_audit_persisted(session, AuditEvent(
             operation_id=operation_id,
             module="woocommerce_publish",
@@ -1571,6 +2096,10 @@ def restore_price_proposal_group(
                 "restored_count": len(restored),
                 "proposal_ids": ids,
                 "source_publish_operation_id": publish_operation_id,
+                "rolled_back_by_user_id": actor["user_id"],
+                "rolled_back_by_user_name": actor["user_name"],
+                "rolled_back_machine": settings.machine_name,
+                "line_results": rollback_line_results,
             }),
             message="Propuesta logica restaurada y verificada completamente en WooCommerce.",
         ), settings)
@@ -1581,16 +2110,14 @@ def restore_price_proposal_group(
             "compensation": [],
             "compensation_complete": False,
             "already_restored": False,
+            "line_results": rollback_line_results,
         }
     except Exception as exc:
         compensation_failures: list[str] = []
         for row in reversed(restored):
             target = row["target"]
             current_snapshot = row.get("woo_current_snapshot") or {}
-            payload = {
-                "regular_price": str(current_snapshot.get("regular_price") or ""),
-                "sale_price": str(current_snapshot.get("sale_price") or ""),
-            }
+            payload = _pricing_restore_payload(current_snapshot)
             try:
                 _write_remote_target(woo, target, payload)
                 verified = _fetch_remote_target(woo, target)
@@ -1600,6 +2127,8 @@ def restore_price_proposal_group(
                     raise CloudAuditError(
                         f"verificacion devolvio {verified_price!r}; esperado {expected!r}"
                     )
+                if not _pricing_payload_matches(payload, verified):
+                    raise CloudAuditError("la compensacion no confirmo el payload exacto")
                 sync_woocommerce_price_inventory_state(
                     session,
                     operation_id=operation_id,

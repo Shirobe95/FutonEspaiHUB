@@ -237,7 +237,9 @@ class PriceProposalRestoreAndSyncTests(unittest.TestCase):
 
     def test_publish_does_not_mutate_historical_old_price(self):
         source = inspect.getsource(woocommerce_publish.publish_price_proposal_group)
-        self.assertNotIn('"old_price":', source[source.index("now = datetime"):source.index("_ensure_audit_persisted")])
+        proposal_update = source[source.index("update = {"):source.index("update_response =")]
+        self.assertNotIn('"old_price":', proposal_update)
+        self.assertIn('"price_before_publish":', proposal_update)
 
     def test_sync_uses_one_injected_woo_client(self):
         row = proposal("p", "product", 10)
@@ -305,22 +307,27 @@ class PriceProposalRestoreAndSyncTests(unittest.TestCase):
                     Session(rows), proposal_ids=["v", "pack"], settings=settings(), client=woo
                 )
 
-    def test_entry_sync_has_required_overlay_and_recency_guard(self):
+    def test_entry_sync_is_replaced_by_read_only_direct_context(self):
         source = inspect.getsource(FutonHubErpPrototype._maybe_start_price_woo_sync)
-        worker = inspect.getsource(FutonHubErpPrototype._sync_price_module_prices)
-        self.assertIn("elapsed < 300", source)
-        self.assertIn("Sincronizando precios con WooCommerce...", worker)
+        worker = inspect.getsource(FutonHubErpPrototype._price_start_initial_live_sync)
+        self.assertIn("read-only direct price sync", source)
+        self.assertIn("build_woo_read_only_index", worker)
+        self.assertIn("reconcile_woo_contexts", worker)
+        self.assertIn("threading.Thread", worker)
 
-    def test_manual_refresh_syncs_before_reloading_proposals(self):
-        source = inspect.getsource(FutonHubErpPrototype._sync_price_module_prices)
-        sync_call = source.index("sync_price_proposal_inventory_prices")
-        refresh_after_sync = source.index("_refresh_price_proposals", sync_call)
-        self.assertLess(sync_call, refresh_after_sync)
+    def test_manual_refresh_reloads_proposals_without_replica_write(self):
+        source = inspect.getsource(FutonHubErpPrototype._refresh_price_module)
+        legacy = inspect.getsource(FutonHubErpPrototype._sync_price_module_prices)
+        self.assertIn("_refresh_price_proposals", source)
+        self.assertNotIn("sync_price_proposal_inventory_prices", source)
+        self.assertNotIn("sync_price_proposal_inventory_prices", legacy)
 
-    def test_sync_failure_is_controlled_and_overlay_closes(self):
-        source = inspect.getsource(FutonHubErpPrototype._sync_price_module_prices)
-        self.assertIn("_price_stop_working_overlay", source)
-        self.assertIn("No se pudieron sincronizar precios Woo", source)
+    def test_initial_sync_failure_is_controlled_without_replica_write(self):
+        source = inspect.getsource(FutonHubErpPrototype._finish_initial_live_sync)
+        self.assertIn("terminal_reconciliation_error", source)
+        self.assertIn("_price_update_live_sync_overlay", source)
+        self.assertIn("ERROR_SYNC", source)
+        self.assertNotIn("sync_price_proposal_inventory_prices", source)
 
     def test_cache_invalidation_clears_search_and_inventory_copies(self):
         source = inspect.getsource(FutonHubErpPrototype._invalidate_price_inventory_caches)
@@ -388,14 +395,10 @@ class PriceProposalRestoreAndSyncTests(unittest.TestCase):
             )
         self.assertEqual({row["status"] for row in result["rows"]}, {"DESTINO DUPLICADO"})
 
-    def test_restore_confirmation_requires_exact_token(self):
-        with self.assertRaises(CloudAuditError):
-            woocommerce_publish.restore_price_proposal_group(
-                Session([proposal("p", "product", 10)]),
-                proposal_ids=["p"],
-                confirm="restaurar",
-                settings=settings(),
-            )
+    def test_restore_does_not_require_text_confirmation(self):
+        source = inspect.getsource(woocommerce_publish.restore_price_proposal_group)
+        self.assertNotIn('confirm or ""', source)
+        self.assertNotIn('"RESTAURAR"', source)
 
     def test_blocked_restore_produces_zero_remote_writes(self):
         row = proposal("p", "product", 10)
@@ -435,10 +438,15 @@ class PriceProposalRestoreAndSyncTests(unittest.TestCase):
         session, result, sync = self._execute_restore(
             [row],
             [target("product", 10)],
-            Woo({"products/10": [{"price": "100", "regular_price": "100"}]}),
+            Woo({"products/10": [{"price": "100", "regular_price": "100", "sale_price": ""}]}),
         )
         self.assertEqual(len(result["restored"]), 1)
         self.assertEqual(session.tables["price_change_proposals"][0]["status"], "rolled_back")
+        source = session.tables["price_change_proposals"][0]["source_row"]
+        self.assertEqual(source["workflow_state"], "ROLLED_BACK")
+        self.assertEqual(source["rolled_back_by_user_id"], "user")
+        self.assertEqual(source["rolled_back_by_user_name"], "admin@example.invalid")
+        self.assertEqual(source["rollback_payload_sent"], {"regular_price": "100.0", "sale_price": ""})
         sync.assert_called_once()
 
     def test_product_variation_and_pack_restore_to_correct_targets(self):
@@ -449,9 +457,9 @@ class PriceProposalRestoreAndSyncTests(unittest.TestCase):
         ]
         targets = [target("product", 10), target("variation", 20, 7), target("pack", 30)]
         woo = Woo({
-            "products/10": [{"price": "100"}],
-            "products/7/variations/20": [{"price": "100"}],
-            "products/30": [{"price": "100"}],
+            "products/10": [{"price": "100", "regular_price": "100", "sale_price": ""}],
+            "products/7/variations/20": [{"price": "100", "regular_price": "100", "sale_price": ""}],
+            "products/30": [{"price": "100", "regular_price": "100", "sale_price": ""}],
         })
         _session, _result, _sync = self._execute_restore(rows, targets, woo)
         self.assertEqual([write[0] for write in woo.writes], ["product", "variation", "product"])
@@ -461,7 +469,7 @@ class PriceProposalRestoreAndSyncTests(unittest.TestCase):
         _session, _result, sync = self._execute_restore(
             [row],
             [target("product", 10)],
-            Woo({"products/10": [{"price": "100"}]}),
+            Woo({"products/10": [{"price": "100", "regular_price": "100", "sale_price": ""}]}),
         )
         self.assertEqual(
             sync.call_args.kwargs["metadata"]["source_publish_operation_id"],
@@ -480,7 +488,10 @@ class PriceProposalRestoreAndSyncTests(unittest.TestCase):
         rows = [proposal("a", "product", 10), proposal("b", "product", 11)]
         targets = [target("product", 10), target("product", 11)]
         woo = FailingWoo({
-            "products/10": [{"price": "100"}, {"price": "110"}],
+            "products/10": [
+                {"price": "100", "regular_price": "100", "sale_price": ""},
+                {"price": "110", "regular_price": "110", "sale_price": ""},
+            ],
             "products/11": [],
         }, fail_on_write=2)
         with self.assertRaisesRegex(CloudAuditError, "compensado"):
@@ -490,19 +501,24 @@ class PriceProposalRestoreAndSyncTests(unittest.TestCase):
     def test_incomplete_compensation_is_critical(self):
         rows = [proposal("a", "product", 10), proposal("b", "product", 11)]
         targets = [target("product", 10), target("product", 11)]
-        woo = FailingWoo({"products/10": [{"price": "100"}], "products/11": []}, fail_on_write=2, fail_compensation=True)
+        woo = FailingWoo({
+            "products/10": [{"price": "100", "regular_price": "100", "sale_price": ""}],
+            "products/11": [],
+        }, fail_on_write=2, fail_compensation=True)
         with self.assertRaisesRegex(CloudAuditError, "ERROR CRITICO"):
             self._execute_restore(rows, targets, woo)
 
-    def test_restore_action_is_visible_only_for_published_admin_snapshot(self):
+    def test_restore_action_is_visible_for_published_snapshot_without_role_gate(self):
         source = inspect.getsource(FutonHubErpPrototype._render_saved_proposal_detail)
         self.assertIn('raw_status == "published"', source)
-        self.assertIn('lower() == "admin"', source)
+        self.assertNotIn('lower() == "admin"', source)
         self.assertIn('proposal_source.get("publish_operation_id")', source)
 
-    def test_restore_dialog_requires_exact_restaura_token(self):
+    def test_restore_dialog_has_no_text_confirmation(self):
         source = inspect.getsource(FutonHubErpPrototype._render_price_restore_preview)
-        self.assertIn('if confirmation != "RESTAURAR":', source)
+        self.assertNotIn("RESTAURAR", source)
+        self.assertNotIn("confirm_var", source)
+        self.assertIn('"Restaurar precios"', source)
 
     def test_restore_preview_has_required_columns_and_scrollbars(self):
         source = inspect.getsource(FutonHubErpPrototype._render_price_restore_preview)

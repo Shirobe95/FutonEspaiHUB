@@ -45,6 +45,7 @@ class NavigationContractTests(unittest.TestCase):
                 ("woocommerce", "WooCommerce", "Gestion"),
                 ("precios_proveedor", "Precio Proveedores", "Gestion"),
                 ("informes", "Informes / Exportaciones", "Gestion"),
+                ("formulas", "Biblioteca de Fórmulas", "Sistema"),
                 ("seguridad", "Seguridad / Logs", "Sistema"),
                 ("configuracion", "Configuracion", "Sistema"),
             ],
@@ -61,6 +62,7 @@ class NavigationContractTests(unittest.TestCase):
             "woocommerce": "_build_woocommerce",
             "precios_proveedor": "_build_suppliers",
             "informes": "_build_reports",
+            "formulas": "_build_formula_library",
             "seguridad": "_build_security",
             "configuracion": "_build_settings",
         }
@@ -84,14 +86,14 @@ class NavigationContractTests(unittest.TestCase):
 
         self.assertEqual(shell._current_key, "inventario")
 
-    def test_global_search_is_hidden_only_for_price_changes(self) -> None:
+    def test_global_search_is_hidden_for_every_shell_destination(self) -> None:
         from futonhub.ui.erp.shell import ErpShellNavigationMixin
 
         shell = object.__new__(ErpShellNavigationMixin)
 
         self.assertFalse(shell._global_search_visible_for_view("precios"))
-        self.assertTrue(shell._global_search_visible_for_view("dashboard"))
-        self.assertTrue(shell._global_search_visible_for_view("inventario"))
+        self.assertFalse(shell._global_search_visible_for_view("dashboard"))
+        self.assertFalse(shell._global_search_visible_for_view("inventario"))
 
 
 if __name__ == "__main__":

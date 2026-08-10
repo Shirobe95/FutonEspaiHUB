@@ -18,7 +18,8 @@ def _json_safe(value: Any) -> Any:
 
 INVENTORY_SELECT_COLUMNS = (
     'item_id,name,family,subgroup,size,materials,cubic_meters,rotation_c,packages,store_stock,warehouse_stock,'
-    'hub_item_code,item_record_type,base_item_code,heca_reference,commercial_status,woo_item_kind,woo_id,woo_parent_id,woo_name,woo_sku,woo_price,woo_categories,woo_link_status,'
+    'hub_item_code,item_record_type,base_item_code,heca_reference,is_pack,commercial_status,woo_item_kind,woo_id,woo_parent_id,woo_name,woo_sku,woo_price,woo_categories,woo_link_status,'
+    'filter_family,filter_group,filter_size,filter_gama,brand,catalog_range,catalog_description,catalog_review_status,'
     'order_calculated_price,weighted_average_cost,primary_supplier_price,pascal_price,supplier_order_qty,supplier_order_provider,notes,updated_at'
 )
 
@@ -412,6 +413,82 @@ def list_cloud_inventory_items(session, limit: int = 100) -> list[dict[str, Any]
             .execute()
         )
     return list(getattr(response, 'data', None) or [])
+
+
+def list_all_cloud_inventory_items(session, *, page_size: int = 200) -> list[dict[str, Any]]:
+    """Read every current inventory item with deterministic paginated SELECTs.
+
+    Price candidate loading uses this explicit path instead of treating a display
+    limit as the complete commercial dataset. The stable `item_id` deduplicates
+    pages without ever falling back to a write or `select('*')` operation.
+    """
+    safe_page_size = max(25, min(int(page_size or 200), 500))
+    rows_by_id: dict[str, dict[str, Any]] = {}
+    offset = 0
+    while True:
+        response = (
+            session.client.table('inventory_items')
+            .select(INVENTORY_SELECT_COLUMNS)
+            .order('item_id', desc=False)
+            .range(offset, offset + safe_page_size - 1)
+            .execute()
+        )
+        page = [dict(row) for row in (getattr(response, 'data', None) or [])]
+        for row in page:
+            item_id = str(row.get('item_id') or '').strip()
+            if item_id:
+                rows_by_id.setdefault(item_id, row)
+        if len(page) < safe_page_size:
+            break
+        offset += safe_page_size
+
+    def sort_key(row: dict[str, Any]) -> tuple[int, str]:
+        item_id = str(row.get('item_id') or '').strip()
+        try:
+            return int(item_id), item_id
+        except ValueError:
+            return 2**63 - 1, item_id.casefold()
+
+    return sorted(rows_by_id.values(), key=sort_key)
+
+
+def list_cloud_inventory_items_by_ids(session, item_ids: list[object] | tuple[object, ...], *, chunk_size: int = 80) -> list[dict[str, Any]]:
+    """Read a bounded inventory subset by `item_id` without any write fallback.
+
+    The hierarchical physical catalog view uses a frozen allowlist. Fetching that
+    set directly avoids a broad list followed by an accidental fallback to all
+    inventory records when the snapshot or a page is incomplete.
+    """
+    normalized_ids: list[int] = []
+    seen: set[int] = set()
+    for value in item_ids:
+        try:
+            item_id = int(str(value).strip())
+        except (TypeError, ValueError):
+            continue
+        if item_id not in seen:
+            seen.add(item_id)
+            normalized_ids.append(item_id)
+    if not normalized_ids:
+        return []
+
+    safe_chunk_size = max(1, min(int(chunk_size or 80), 100))
+    rows_by_id: dict[str, dict[str, Any]] = {}
+    for start in range(0, len(normalized_ids), safe_chunk_size):
+        chunk = normalized_ids[start:start + safe_chunk_size]
+        response = (
+            session.client.table('inventory_items')
+            .select(INVENTORY_SELECT_COLUMNS)
+            .in_('item_id', chunk)
+            .limit(len(chunk))
+            .execute()
+        )
+        for row in getattr(response, 'data', None) or []:
+            row_dict = dict(row)
+            item_id = str(row_dict.get('item_id') or '').strip()
+            if item_id:
+                rows_by_id[item_id] = row_dict
+    return [rows_by_id[str(item_id)] for item_id in normalized_ids if str(item_id) in rows_by_id]
 
 
 def _safe_float(value: Any, default: float = 0.0) -> float:

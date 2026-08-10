@@ -1,0 +1,33 @@
+{
+  "schema": "futonhub.runtime.physical_catalog_snapshot.v1",
+  "source_cut": "INV-ORG-003B.3",
+  "source_snapshot": "physical catalog eligibility contract",
+  "snapshot_relative_path": "physical_catalog_snapshot.csv",
+  "expected_count": 254,
+  "snapshot_sha256": "5f64fbe82ca3d4136f2943570507d503cdc860d681f920ead115a11e28ced73e",
+  "approved_leading_zero_comparison_keys": [
+    "302018"
+  ],
+  "required_columns": [
+    "item_id",
+    "heca_reference",
+    "hub_item_code",
+    "base_item_code",
+    "item_record_type",
+    "is_pack",
+    "name",
+    "family",
+    "size",
+    "filter_family",
+    "filter_group",
+    "filter_size",
+    "filter_gama",
+    "physical_validation_source",
+    "canonical_resolution_status",
+    "ui_eligibility_status"
+  ],
+  "contains_prices": false,
+  "contains_stock": false,
+  "contains_credentials": false,
+  "fail_closed": true
+}

@@ -650,8 +650,8 @@ class PriceProposalPackCompositionTests(unittest.TestCase):
         self.assertIn("orient=tk.HORIZONTAL", source)
         self.assertIn('text="Subida %"', source)
         self.assertIn('text="Valor"', source)
-        self.assertIn('"Anadir"', source)
-        self.assertIn('"Anadir todos"', source)
+        self.assertIn('"Anadir seleccionados"', source)
+        self.assertIn('"Previsualizar seleccionados"', source)
         self.assertLess(source.index("tk.Canvas(viewport"), source.index("footer = tk.Frame(card"))
 
     def test_item_result_selection_double_click_and_add_preserve_original_row_values(self) -> None:
@@ -676,7 +676,7 @@ class PriceProposalPackCompositionTests(unittest.TestCase):
         self.assertNotIn('"Items"', source)
         self.assertNotIn("variations_host", source)
         self.assertNotIn("_render_price_variations_picker", source)
-        self.assertIn("self._price_items_pick_list(left, results)", source)
+        self.assertIn("self._price_items_pick_list(left, visible_results", source)
 
     def test_price_view_separates_saved_list_and_compact_editor_headings(self) -> None:
         source = inspect.getsource(FutonHubErpPrototype._build_prices)
@@ -857,7 +857,7 @@ class PriceProposalPackCompositionTests(unittest.TestCase):
 
         self.assertEqual(
             [row["key"] for row in results],
-            ["product:100", "variation:101", "pack:930000010533"],
+            ["physical:930000010533", "variation:101", "pack:930000010533"],
         )
 
     def test_pack_930000010533_keeps_type_through_model_validation_and_persistence(self) -> None:
@@ -1549,7 +1549,7 @@ class PriceProposalPackCompositionTests(unittest.TestCase):
         delete_source = inspect.getsource(FutonHubErpPrototype._open_delete_price_proposal_confirmation)
         self.assertIn("proposal_ids=member_ids", delete_source)
 
-    def test_save_has_logical_double_click_guard_unique_token_and_exact_edit_id(self) -> None:
+    def test_save_has_guard_unique_token_and_versioned_recalculation(self) -> None:
         source = inspect.getsource(FutonHubErpPrototype._save_price_edit)
         persist_source = inspect.getsource(FutonHubErpPrototype._price_validate_and_persist_entries)
 
@@ -1557,7 +1557,9 @@ class PriceProposalPackCompositionTests(unittest.TestCase):
         self.assertIn("self._price_save_in_progress = True", source)
         self.assertIn("self._price_save_token = uuid.uuid4().hex", source)
         self.assertIn('"ui_save_token": save_token', persist_source)
-        self.assertIn("proposal_id=str(source.get(\"proposal_id\"))", persist_source)
+        self.assertIn("force_insert=True", persist_source)
+        self.assertIn("recalculated_from_proposal_ids", persist_source)
+        self.assertIn("delete_real_price_proposal_group", persist_source)
         self.assertEqual(source.count("threading.Thread("), 1)
 
     def test_valid_save_plan_validates_all_variations_before_first_write(self) -> None:
@@ -1588,7 +1590,10 @@ class PriceProposalPackCompositionTests(unittest.TestCase):
 
         self.assertEqual(events, ["validate:101", "validate:102", "write:101", "write:102"])
         self.assertEqual(saved, ["id-101", "id-102"])
-        self.assertEqual(counts, {"up": 2, "down": 0, "flat": 0})
+        self.assertEqual(counts, {
+            "up": 2, "down": 0, "flat": 0,
+            "direct": 2, "derived": 0, "blocked": 0,
+        })
 
     def test_validation_error_on_later_line_persists_zero_rows(self) -> None:
         self.app._cloud_session = object()
@@ -1689,10 +1694,9 @@ class PriceProposalPackCompositionTests(unittest.TestCase):
         for source in (success, failure):
             self.assertIn("self._price_stop_working_overlay(overlay)", source)
             self.assertIn("self._price_save_in_progress = False", source)
-        self.assertIn("Items:", success)
-        self.assertIn("Suben:", success)
-        self.assertIn("Bajan:", success)
-        self.assertIn("Sin cambio:", success)
+        self.assertIn("Lineas directas:", success)
+        self.assertIn("Combinaciones derivadas:", success)
+        self.assertIn("Bloqueadas:", success)
 
     def test_delete_uses_only_exact_member_ids_and_has_double_click_guard(self) -> None:
         open_source = inspect.getsource(FutonHubErpPrototype._open_delete_price_proposal_confirmation)
@@ -1715,17 +1719,19 @@ class PriceProposalPackCompositionTests(unittest.TestCase):
 
     def test_price_operations_use_specific_non_overlapping_overlays(self) -> None:
         search = inspect.getsource(FutonHubErpPrototype._refresh_price_edit_items)
+        entry_sync = inspect.getsource(FutonHubErpPrototype._load_price_catalog_for_live_sync)
         add = inspect.getsource(FutonHubErpPrototype._price_add_rows_to_proposal)
         add_all = inspect.getsource(FutonHubErpPrototype._confirm_price_bulk_add)
         save = inspect.getsource(FutonHubErpPrototype._save_price_edit)
         delete = inspect.getsource(FutonHubErpPrototype._open_delete_price_proposal_confirmation)
         overlay = inspect.getsource(FutonHubErpPrototype._price_start_working_overlay)
 
-        self.assertIn("Buscando articulos, variaciones y packs", search)
+        self.assertIn("_price_catalog_items", search)
+        self.assertIn("_price_start_live_sync_overlay", entry_sync)
         self.assertIn("Anadiendo articulo a la propuesta", add)
         self.assertIn("Procesando", add_all)
         self.assertIn("Validando y registrando los cambios", save)
-        self.assertIn("Eliminando propuesta", delete)
+        self.assertIn("Cancelando borrador", delete)
         self.assertIn("if current.winfo_exists()", overlay)
         self.assertIn("return None", overlay)
 
@@ -2479,10 +2485,10 @@ class PriceProposalPackCompositionTests(unittest.TestCase):
         source = inspect.getsource(FutonHubErpPrototype._price_items_pick_list)
 
         self.assertIn('relief=tk.SOLID', source)
-        self.assertIn('"Anadir", primary=True', source)
-        self.assertIn('"Anadir todos"', source)
-        self.assertIn("results, percent_entry.get(), exact_entry.get()", source)
-        self.assertIn("state=tk.NORMAL if self._price_search_query.strip() and results else tk.DISABLED", source)
+        self.assertIn('"Anadir seleccionados", primary=True', source)
+        self.assertIn('"Previsualizar seleccionados"', source)
+        self.assertIn("selected, percent_entry.get(), exact_entry.get()", source)
+        self.assertIn("_price_selected_visible_results(results)", source)
 
     def test_proposal_detail_places_actions_below_component_text(self) -> None:
         source = inspect.getsource(FutonHubErpPrototype._proposal_edit_line)

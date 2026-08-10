@@ -255,11 +255,16 @@ class PriceProposalPublicationGroupTests(unittest.TestCase):
             )
         self.assertEqual(result["rows"][0]["status"], "NO PUBLICABLE")
 
-    def test_confirmation_requires_exact_publicar(self):
-        with self.assertRaises(CloudAuditError):
-            woocommerce_publish.publish_price_proposal_group(
-                Session([proposal("p", "product", 10)]), proposal_ids=["p"], confirm="publicar", settings=settings()
-            )
+    def test_group_publish_does_not_require_text_confirmation(self):
+        session = Session([proposal("p", "product", 10)])
+        with patch.object(woocommerce_publish, "preview_price_proposal_group_publish", return_value={
+            "blocking": True,
+            "rows": [{"canonical_key": "product:10", "status": "ERROR", "reason": "bad"}],
+        }):
+            with self.assertRaisesRegex(CloudAuditError, "bloqueada"):
+                woocommerce_publish.publish_price_proposal_group(
+                    session, proposal_ids=["p"], confirm="cualquier-texto", settings=settings()
+                )
 
     def test_already_published_is_idempotent(self):
         result = woocommerce_publish.publish_price_proposal_group(
@@ -280,6 +285,17 @@ class PriceProposalPublicationGroupTests(unittest.TestCase):
                 woocommerce_publish.publish_price_proposal_group(
                     session, proposal_ids=["p"], confirm="PUBLICAR", settings=settings()
                 )
+        self.assertEqual(session.updates, [])
+
+    def test_anonymous_apply_is_blocked_before_any_woo_write(self):
+        session = Session([proposal("p", "product", 10)])
+        session.user_id = ""
+        woo = Woo({})
+        with self.assertRaisesRegex(CloudAuditError, "sesion de usuario identificable"):
+            woocommerce_publish.publish_price_proposal_group(
+                session, proposal_ids=["p"], settings=settings(), client=woo
+            )
+        self.assertEqual(woo.writes, [])
         self.assertEqual(session.updates, [])
 
     def test_rejection_requires_reason(self):
@@ -315,9 +331,10 @@ class PriceProposalPublicationGroupTests(unittest.TestCase):
             for row in session.tables["price_change_proposals"]
         ))
 
-    def test_rejected_proposal_becomes_read_only_in_detail(self):
+    def test_applied_proposal_becomes_read_only_in_detail(self):
         source = inspect.getsource(FutonHubErpPrototype._render_saved_proposal_detail)
-        self.assertIn('can_review = self._proposal_raw_status(proposal) == "pending"', source)
+        self.assertIn('can_apply = self._proposal_raw_status(proposal) == "pending"', source)
+        self.assertIn("for button in top_actions.winfo_children()", source)
         self.assertIn("button.configure(state=tk.DISABLED)", source)
 
     def test_accept_uses_group_preview_not_single_publish(self):
@@ -325,9 +342,11 @@ class PriceProposalPublicationGroupTests(unittest.TestCase):
         self.assertIn("preview_price_proposal_group_publish", source)
         self.assertNotIn("publish_woocommerce_price(", source)
 
-    def test_publish_dialog_requires_exact_publicar(self):
+    def test_publish_dialog_has_no_text_confirmation(self):
         source = inspect.getsource(FutonHubErpPrototype._render_price_publish_preview)
-        self.assertIn('if confirmation != "PUBLICAR":', source)
+        self.assertNotIn("PUBLICAR", source)
+        self.assertNotIn("confirm_var", source)
+        self.assertIn("Aplicar {counts.get", source)
 
     def test_preview_has_required_states_and_columns(self):
         source = inspect.getsource(FutonHubErpPrototype._render_price_publish_preview)
@@ -365,7 +384,7 @@ class PriceProposalPublicationGroupTests(unittest.TestCase):
         self.assertIn("for row in reversed(published):", source)
         self.assertIn("admin_publish_price_proposal_group_rollback", source)
 
-    def test_valid_product_batch_publishes_verifies_and_marks_published(self):
+    def test_any_identified_user_role_can_apply_and_is_audited(self):
         row = proposal("p", "product", 10)
         target = {"remote_key": "product:10", "endpoint": "products/10", "cloud_item": {}, "woo_id": 10, "remote_kind": "product", "canonical_key": "product:10"}
         preflight = {"blocking": False, "rows": [{
@@ -376,7 +395,10 @@ class PriceProposalPublicationGroupTests(unittest.TestCase):
             "old_price_proposal": 100.0, "proposal": row,
         }]}
         session = Session([row])
-        woo = Woo({"products/10": [{"price": "110", "regular_price": "110", "sale_price": ""}]})
+        session.role = "catalog_operator"
+        session.user_id = "catalog-7"
+        session.email = "catalog7@example.invalid"
+        woo = Woo({"products/10": [{"price": "110", "regular_price": "110.00", "sale_price": ""}]})
         with (
             patch.object(woocommerce_publish, "preview_price_proposal_group_publish", return_value=preflight),
             patch.object(woocommerce_publish, "acquire_system_lock"),
@@ -390,7 +412,39 @@ class PriceProposalPublicationGroupTests(unittest.TestCase):
             )
         self.assertEqual(len(result["published"]), 1)
         self.assertEqual(session.tables["price_change_proposals"][0]["status"], "published")
+        source = session.tables["price_change_proposals"][0]["source_row"]
+        self.assertEqual(source["workflow_state"], "APPLIED")
+        self.assertEqual(source["applied_by_user_id"], "catalog-7")
+        self.assertEqual(source["applied_by_user_name"], "catalog7@example.invalid")
         self.assertEqual(woo.writes[0][0], "product")
+
+    def test_live_divergence_refreshes_draft_and_requires_new_review(self):
+        row = proposal("p", "product", 10, old_price=100, new_price=110)
+        target = {
+            "remote_key": "product:10", "endpoint": "products/10", "cloud_item": {},
+            "woo_id": 10, "remote_kind": "product", "canonical_key": "product:10",
+        }
+        woo = Woo({
+            "products/10": [
+                {"id": 10, "price": "105", "regular_price": "105", "sale_price": ""},
+                {"id": 10, "price": "105", "regular_price": "105", "sale_price": ""},
+            ],
+        })
+        session = Session([row])
+        with (
+            patch.object(woocommerce_publish, "_remote_target_for_proposal", return_value=target),
+            patch.object(woocommerce_publish, "write_snapshot"),
+            patch.object(woocommerce_publish, "write_audit_event"),
+        ):
+            with self.assertRaises(woocommerce_publish.PriceProposalRevalidationRequired) as caught:
+                woocommerce_publish.publish_price_proposal_group(
+                    session, proposal_ids=["p"], settings=settings(), client=woo
+                )
+        self.assertEqual(woo.writes, [])
+        self.assertEqual(session.tables["price_change_proposals"][0]["old_price"], 105.0)
+        self.assertEqual(session.tables["price_change_proposals"][0]["source_row"]["workflow_state"], "READY")
+        self.assertEqual(len(caught.exception.differences), 1)
+        self.assertEqual(len(caught.exception.preview["display_rows"]), 1)
 
     def test_mixed_product_and_variation_publish_to_correct_endpoints(self):
         product_row = proposal("p", "product", 10)
@@ -409,8 +463,8 @@ class PriceProposalPublicationGroupTests(unittest.TestCase):
                 "old_price_proposal": 100.0, "proposal": row,
             })
         woo = Woo({
-            "products/10": [{"price": "110"}],
-            "products/7/variations/20": [{"price": "110"}],
+            "products/10": [{"price": "110", "regular_price": "110.00", "sale_price": ""}],
+            "products/7/variations/20": [{"price": "110", "regular_price": "110.00", "sale_price": ""}],
         })
         with (
             patch.object(woocommerce_publish, "preview_price_proposal_group_publish", return_value={"blocking": False, "rows": preflight_rows}),
@@ -439,7 +493,10 @@ class PriceProposalPublicationGroupTests(unittest.TestCase):
             "old_price_proposal": 100.0, "proposal": row,
         } for row, target in zip(rows, targets)]
         woo = FailingWoo({
-            "products/10": [{"price": "110"}, {"price": "100"}],
+            "products/10": [
+                {"price": "110", "regular_price": "110.00", "sale_price": ""},
+                {"price": "100", "regular_price": "100", "sale_price": ""},
+            ],
             "products/11": [],
         }, fail_on_write=2)
         session = Session(rows)
@@ -471,7 +528,10 @@ class PriceProposalPublicationGroupTests(unittest.TestCase):
             "woo_current_price": 100.0, "new_price": 110.0,
             "old_price_proposal": 100.0, "proposal": row,
         } for row, target in zip(rows, targets)]
-        woo = FailingWoo({"products/10": [{"price": "110"}], "products/11": []}, fail_on_write=2, fail_rollback=True)
+        woo = FailingWoo({
+            "products/10": [{"price": "110", "regular_price": "110.00", "sale_price": ""}],
+            "products/11": [],
+        }, fail_on_write=2, fail_rollback=True)
         session = Session(rows)
         with (
             patch.object(woocommerce_publish, "preview_price_proposal_group_publish", return_value={"blocking": False, "rows": preflight_rows}),

@@ -24,6 +24,7 @@ NAV_ITEMS = [
     NavItem("woocommerce", "WooCommerce", "Gestion"),
     NavItem("precios_proveedor", "Precio Proveedores", "Gestion"),
     NavItem("informes", "Informes / Exportaciones", "Gestion"),
+    NavItem("formulas", "Biblioteca de Fórmulas", "Sistema"),
     NavItem("seguridad", "Seguridad / Logs", "Sistema"),
     NavItem("configuracion", "Configuracion", "Sistema"),
 ]
@@ -43,22 +44,24 @@ class ErpShellNavigationMixin:
 
         main = tk.Frame(shell, bg=BG)
         main.grid(row=0, column=1, sticky="nsew")
-        main.rowconfigure(1, weight=1)
+        main.rowconfigure(0, weight=1)
         main.columnconfigure(0, weight=1)
 
-        self._build_topbar(main)
+        # Search is intentionally owned by the views that need it. The shell
+        # does not render a shared global search surface.
+        self._global_search_area = None
+        self._status_area = None
         self._content = tk.Frame(main, bg=BG)
-        self._content.grid(row=1, column=0, sticky="nsew", padx=24, pady=22)
+        self._content.grid(row=0, column=0, sticky="nsew", padx=24, pady=22)
 
     def _build_sidebar(self, parent: tk.Frame) -> None:
         brand = tk.Frame(parent, bg=SIDEBAR)
-        brand.pack(fill=tk.X, padx=18, pady=(20, 28))
+        brand.pack(fill=tk.X, padx=18, pady=(20, 20))
         logo = tk.Label(brand, text="F", bg=INDIGO, fg="white", font=("Segoe UI", 18, "bold"), width=2, height=1)
         logo.pack(side=tk.LEFT)
         text = tk.Frame(brand, bg=SIDEBAR)
         text.pack(side=tk.LEFT, padx=(12, 0))
         tk.Label(text, text="FutonHUB", bg=SIDEBAR, fg=TEXT, font=("Segoe UI", 15, "bold")).pack(anchor=tk.W)
-        tk.Label(text, text="ERP privado - prototipo", bg=SIDEBAR, fg=MUTED, font=("Segoe UI", 9)).pack(anchor=tk.W)
 
         grouped: dict[str, list[NavItem]] = {}
         is_admin = self._cloud_session is not None and str(getattr(self._cloud_session, "role", "") or "").lower() == "admin"
@@ -91,39 +94,12 @@ class ErpShellNavigationMixin:
                 button.pack(fill=tk.X, padx=14, pady=2)
                 self._nav_buttons[item.key] = button
 
-    def _build_topbar(self, parent: tk.Frame) -> None:
-        topbar = tk.Frame(parent, bg=BG, highlightbackground=LINE, highlightthickness=1)
-        topbar.grid(row=0, column=0, sticky="ew")
-        topbar.columnconfigure(0, weight=1)
-
-        search = tk.Frame(topbar, bg=CARD, highlightbackground=LINE, highlightthickness=1)
-        search.grid(row=0, column=0, sticky="ew", padx=20, pady=14)
-        self._global_search_area = search
-        tk.Label(search, text="Buscar producto, proveedor, informe o incidencia...", bg=CARD, fg=MUTED, anchor=tk.W).pack(
-            fill=tk.X,
-            padx=14,
-            pady=10,
-        )
-
-        status = tk.Frame(topbar, bg=BG)
-        status.grid(row=0, column=1, padx=(0, 20), pady=14)
-        self._status_area = status
-        self._render_session_status()
-
     def _global_search_visible_for_view(self, key: str) -> bool:
-        return key != "precios"
+        return False
 
     def _sync_global_search_visibility(self, key: str) -> None:
-        search = getattr(self, "_global_search_area", None)
-        if search is None:
-            return
-        if self._global_search_visible_for_view(key):
-            search.grid()
-        else:
-            search.grid_remove()
-        status = getattr(self, "_status_area", None)
-        if status is not None:
-            status.grid_configure(pady=6 if key == "precios" else 14)
+        # Compatibility hook retained for navigation callers.
+        return
 
     def _render_session_status(self) -> None:
         if self._status_area is None:
@@ -158,6 +134,7 @@ class ErpShellNavigationMixin:
             "woocommerce": self._build_woocommerce,
             "precios_proveedor": self._build_supplier_prices,
             "informes": self._build_reports,
+            "formulas": self._build_formula_library,
             "configuracion": self._build_settings,
             "seguridad": self._build_security,
         }
@@ -169,8 +146,9 @@ class ErpShellNavigationMixin:
         header.columnconfigure(0, weight=1)
         left = tk.Frame(header, bg=BG)
         left.grid(row=0, column=0, sticky="ew")
-        tk.Label(left, text=tag, bg=INDIGO_SOFT, fg=INDIGO, font=("Segoe UI", 9, "bold"), padx=10, pady=4).pack(anchor=tk.W)
-        tk.Label(left, text=title, bg=BG, fg=TEXT, font=("Segoe UI", 24, "bold")).pack(anchor=tk.W, pady=(8, 2))
+        if tag:
+            tk.Label(left, text=tag, bg=INDIGO_SOFT, fg=INDIGO, font=("Segoe UI", 9, "bold"), padx=10, pady=4).pack(anchor=tk.W)
+        tk.Label(left, text=title, bg=BG, fg=TEXT, font=("Segoe UI", 24, "bold")).pack(anchor=tk.W, pady=(8 if tag else 0, 2))
         tk.Label(left, text=subtitle, bg=BG, fg=MUTED, font=("Segoe UI", 10)).pack(anchor=tk.W)
         if actions:
             right = tk.Frame(header, bg=BG)

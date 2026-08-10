@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.5.0-rc.1 - 2026-08-11
+
+- PRE-FIRE release candidate. Not a stable release.
+- Runtime: the physical catalog eligibility contract is now versioned below
+  `GestorWoo/src/futonhub/runtime_config` and no longer depends on
+  `auditoria/out`.
+- Distribution: `FutonHub-Launcher` tracks the commit HEAD of
+  `refactor/modularizacion-v1` through `DirectGitUpdater`; no ERP GitHub
+  Release asset is required.
+- Packaging: the executable builder includes the runtime catalog contract.
+- Price safety: terminal direct-price contexts explicitly set
+  `price_change_eligible = NO`.
+- Mapping: `0402014` remains quarantined without a direct Woo target, alias,
+  automatic Woo creation or access to Woo variation `3661`.
+
 ## v0.4.0-rc.2
 
 - Pedidos: P.V.P. desde WooCommerce con fallback por SKU exacto.

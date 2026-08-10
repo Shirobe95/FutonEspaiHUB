@@ -239,11 +239,13 @@ class ErpSharedUiMixin:
         card = tk.Frame(blocker, bg=CARD, highlightbackground=LINE, highlightthickness=1)
         card.pack(fill=tk.BOTH, expand=True, padx=16, pady=16)
         tk.Label(card, text=title, bg=CARD, fg=TEXT, font=("Segoe UI", 15, "bold")).pack(anchor=tk.W, padx=18, pady=(18, 6))
-        tk.Label(card, text=message, bg=CARD, fg=MUTED, font=("Segoe UI", 10), justify=tk.LEFT, wraplength=430).pack(anchor=tk.W, padx=18, pady=(0, 12))
+        message_var = tk.StringVar(value=message)
+        tk.Label(card, textvariable=message_var, bg=CARD, fg=MUTED, font=("Segoe UI", 10), justify=tk.LEFT, wraplength=430).pack(anchor=tk.W, padx=18, pady=(0, 12))
         tk.Label(card, text="Ventana bloqueada mientras termina la operacion.", bg=CARD, fg=INDIGO, font=("Segoe UI", 9, "bold")).pack(anchor=tk.W, padx=18, pady=(0, 8))
         progress = ttk.Progressbar(card, mode="indeterminate", length=420)
         progress.pack(fill=tk.X, padx=18, pady=(0, 18))
         progress.start(12)
+        overlay._working_message_var = message_var  # type: ignore[attr-defined]
 
         overlay.protocol("WM_DELETE_WINDOW", lambda: None)
         try:

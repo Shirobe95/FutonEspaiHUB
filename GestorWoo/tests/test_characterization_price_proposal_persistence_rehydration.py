@@ -151,6 +151,30 @@ class PriceProposalPersistenceRehydrationTests(unittest.TestCase):
         self.assertEqual(source["proposed_price"], row["new_price"])
         self.assertEqual(source["proposal_price_snapshot"]["price_at_creation"], 120)
 
+    def test_creation_records_authenticated_creator_and_draft_state(self):
+        session = Session({
+            "products": [{"woo_id": 10, "name": "Tatami", "type": "simple", "price": 100}],
+            "price_change_proposals": [],
+        })
+        session.role = "worker"
+        session.user_id = "worker-4"
+        session.email = "worker4@example.invalid"
+        with (
+            patch.object(price_proposals, "write_audit_event"),
+            patch.object(price_proposals, "write_snapshot"),
+        ):
+            row = price_proposals.create_real_price_proposal(
+                session, "product", 10, 110,
+                settings=settings(),
+                acknowledge_price_warning=True,
+                price_at_creation=100,
+            )["proposal"]
+        source = row["source_row"]
+        self.assertEqual(source["workflow_state"], "DRAFT")
+        self.assertEqual(source["created_by_user_id"], "worker-4")
+        self.assertEqual(source["created_by_user_name"], "worker4@example.invalid")
+        self.assertTrue(source["created_at_utc"])
+
     def test_creation_operation_snapshot_keeps_same_price(self):
         session = Session({
             "products": [{"woo_id": 10, "name": "Tatami", "type": "simple", "price": 100}],
@@ -372,24 +396,60 @@ class PriceProposalPersistenceRehydrationTests(unittest.TestCase):
         self.assertIn("generation != active_generation", source)
         self.assertIn("descartado_obsoleto", source)
 
-    def test_action_buttons_use_requested_colors_and_outlines(self):
+    def test_action_buttons_use_direct_apply_and_neutral_cancel(self):
         source = inspect.getsource(
             FutonHubErpPrototype._render_saved_proposal_detail
         )
         self.assertIn("bg=GREEN", source)
-        self.assertIn("bg=ROSE", source)
+        self.assertNotIn("bg=ROSE", source)
+        self.assertIn('"Cancelar borrador"', source)
         self.assertGreaterEqual(source.count("relief=tk.SOLID"), 2)
 
-    def test_action_button_logic_is_unchanged(self):
+    def test_action_button_logic_has_no_approval_step(self):
         source = inspect.getsource(
             FutonHubErpPrototype._render_saved_proposal_detail
         )
         self.assertIn("_open_price_publish_preview(proposal)", source)
-        self.assertIn("_open_price_reject_modal(proposal)", source)
+        self.assertNotIn("_open_price_reject_modal(proposal)", source)
         self.assertIn("_open_delete_price_proposal_confirmation(proposal)", source)
         self.assertIn("_open_price_restore_preview(proposal)", source)
         self.assertIn("accept.configure(state=tk.DISABLED)", source)
-        self.assertIn("reject.configure(state=tk.DISABLED)", source)
+        self.assertIn("for button in top_actions.winfo_children()", source)
+
+    def test_apply_from_editor_uses_saved_ids_before_opening_preview(self):
+        source = inspect.getsource(FutonHubErpPrototype._finish_price_edit_saved)
+        self.assertLess(source.index('raw={"id": saved[0]'), source.index("_open_price_publish_preview(proposal)"))
+        self.assertIn("ui_member_ids", source)
+
+    def test_draft_reopen_recalculates_direct_lines_and_skips_derived_lines(self):
+        source = inspect.getsource(FutonHubErpPrototype._prepare_price_edit_state)
+        self.assertIn('== "DERIVED_COMBINATION"', source)
+        self.assertIn("continue", source)
+        self.assertIn('"recalculated_group_ids": recalculated_group_ids', source)
+
+    def test_list_flow_keeps_error_rollback_and_cancel_history(self):
+        statuses = price_proposals.PRICE_PROPOSAL_STATUSES
+        self.assertTrue({"error", "rolled_back", "cancelled"}.issubset(statuses))
+        source = inspect.getsource(price_proposals.list_real_price_proposals)
+        self.assertNotIn('status") in {"error", "rolled_back", "cancelled"}', source)
+
+    def test_functional_workflow_states_match_direct_apply_contract(self):
+        self.assertEqual(
+            price_proposals.PRICE_PROPOSAL_WORKFLOW_STATES,
+            {
+                "DRAFT",
+                "READY",
+                "APPLYING",
+                "APPLIED",
+                "PARTIAL_FAILURE",
+                "FAILED",
+                "ROLLED_BACK",
+                "CANCELLED",
+            },
+        )
+        self.assertNotIn("PENDING_APPROVAL", price_proposals.PRICE_PROPOSAL_WORKFLOW_STATES)
+        self.assertNotIn("APPROVED", price_proposals.PRICE_PROPOSAL_WORKFLOW_STATES)
+        self.assertNotIn("REJECTED", price_proposals.PRICE_PROPOSAL_WORKFLOW_STATES)
 
     def test_no_schema_or_dependency_change_required(self):
         service_source = inspect.getsource(price_proposals.create_real_price_proposal)

@@ -27,6 +27,11 @@ class ErpInventoryDetailMixin:
             ("ID", item.code),
             ("Codigo HUB", self._inventory_pack_parent_code(item) or self._clean_inventory_value((item.raw or {}).get("hub_item_code"), "-")),
             ("Tipo item", self._clean_inventory_value((item.raw or {}).get("item_record_type") or (item.raw or {}).get("hub_search_record_type"), "simple")),
+            ("Estado operativo", self._clean_inventory_value((item.raw or {}).get("operational_status"), "Sin clasificar")),
+            ("Grupo cuarentena", self._clean_inventory_value((item.raw or {}).get("quarantine_group"), "-")),
+            ("Motivo cuarentena", self._clean_inventory_value((item.raw or {}).get("quarantine_reason"), "-")),
+            ("Propagacion combinaciones", "Permitida" if (item.raw or {}).get("can_participate_in_price_propagation") else "No permitida"),
+            ("Revision negocio", self._clean_inventory_value((item.raw or {}).get("business_review_status"), "-")),
             ("Nombre", item.name),
             ("Precio Woo", item.price),
             ("Stock tienda", item.store_stock),
@@ -148,8 +153,8 @@ class ErpInventoryDetailMixin:
         frame.pack(fill=tk.BOTH, expand=True)
         tk.Label(frame, text=title, bg=CARD, fg=TEXT, font=("Segoe UI", 14, "bold")).pack(anchor=tk.W, padx=16, pady=(16, 4))
         tk.Label(frame, text="Historial real guardado en Supabase / caja negra.", bg=CARD, fg=MUTED).pack(anchor=tk.W, padx=16, pady=(0, 10))
-        canvas = tk.Canvas(frame, height=145, bg="#FFFFFF", highlightbackground=SOFT, highlightthickness=1)
-        canvas.pack(fill=tk.X, padx=16, pady=(0, 8))
+        canvas = tk.Canvas(frame, height=185, bg="#FFFFFF", highlightbackground=SOFT, highlightthickness=1)
+        canvas.pack(fill=tk.X, padx=16, pady=(0, 10))
         for x in range(24, 560, 86):
             canvas.create_line(x, 18, x, 124, fill=SOFT)
         for y in range(24, 130, 34):
@@ -179,6 +184,13 @@ class ErpInventoryDetailMixin:
         else:
             canvas.create_text(290, 72, text=empty_text, fill=MUTED, font=("Segoe UI", 10, "bold"))
         footer = tk.Frame(frame, bg=CARD)
-        footer.pack(fill=tk.X, padx=16, pady=(0, 16))
+        footer.pack(fill=tk.X, padx=16, pady=(0, 5))
         tk.Label(footer, text=f"Eventos: {len(history)}", bg=CARD, fg=MUTED, font=("Segoe UI", 9)).pack(side=tk.LEFT)
-        tk.Label(footer, text=f"Valor actual: {current_value}", bg=CARD, fg=TEXT, font=("Segoe UI", 9, "bold")).pack(side=tk.RIGHT)
+        tk.Label(
+            frame,
+            text=f"Valor actual: {current_value}",
+            bg=CARD,
+            fg=TEXT,
+            font=("Segoe UI", 10, "bold"),
+            anchor=tk.W,
+        ).pack(fill=tk.X, padx=16, pady=(0, 16))

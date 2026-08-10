@@ -10,6 +10,7 @@ build/
 dist/
 *.spec
 *.exe
+*.egg-info/
 
 # IDE
 .vs/
@@ -26,3 +27,9 @@ GestorWoo/data/backups/
 # Temporales
 *.tmp
 ~$*.xlsx
+
+# Local audit and dependency artifacts are not release inputs.
+/auditoria/out/
+/auditoria/.codex_spreadsheet_work/
+/node_modules/
+/dat.zip

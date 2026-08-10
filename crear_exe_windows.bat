@@ -24,6 +24,7 @@ py -3.11 -m PyInstaller ^
     --windowed ^
     --name FutonEspai ^
     --paths "%CD%\src" ^
+    --add-data "src\futonhub\runtime_config;futonhub\runtime_config" ^
     --collect-submodules futonhub ^
     --collect-submodules gestorwoo ^
     --hidden-import futonhub.app.cli ^

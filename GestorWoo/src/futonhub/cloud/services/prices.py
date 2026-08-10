@@ -4,6 +4,17 @@ from typing import Any
 
 
 PRICE_PROPOSAL_STATUSES = {"pending", "approved", "publishing", "rejected", "published", "rolled_back", "error", "cancelled"}
+PRICE_PROPOSAL_WORKFLOW_STATES = frozenset({
+    "DRAFT",
+    "READY",
+    "APPLYING",
+    "APPLIED",
+    "PARTIAL_FAILURE",
+    "FAILED",
+    "ROLLED_BACK",
+    "CANCELLED",
+})
+PRICE_PROPOSAL_HISTORICAL_COMPATIBILITY_STATES = frozenset({"APPROVED", "REJECTED"})
 
 
 def short_row_value(row: dict[str, Any], *keys: str) -> Any:
@@ -69,7 +80,7 @@ def price_safety_preview(item: dict[str, Any], kind: str, proposed_price: float 
                 messages.append(f"ERROR: bajada de precio del {drop_percent:.2f}%, supera el bloqueo configurado ({settings.price_drop_block_percent:.2f}%).")
                 status = "ERROR"
             elif drop_percent >= settings.price_drop_warning_percent and status != "ERROR":
-                messages.append(f"WARNING: bajada de precio del {drop_percent:.2f}%, supera el aviso configurado ({settings.price_drop_warning_percent:.2f}%). Requiere confirmacion explicita.")
+                messages.append(f"WARNING: bajada de precio del {drop_percent:.2f}%, supera el aviso configurado ({settings.price_drop_warning_percent:.2f}%). Requiere revisar el preview antes de aplicar.")
                 status = "WARNING"
 
     if not messages:
