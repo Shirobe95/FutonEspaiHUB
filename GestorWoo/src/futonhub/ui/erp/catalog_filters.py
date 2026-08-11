@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import csv
-import hashlib
 import json
 import re
 import tkinter as tk
@@ -10,6 +9,8 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from tkinter import ttk
 from typing import Any, Callable, Iterable, Mapping
+
+from futonhub.core.runtime_integrity import CHECKSUM_MODE_UTF8_TEXT_LF_V1, canonical_text_sha256
 
 
 FILTER_FIELDS = ("filter_family", "filter_group", "filter_size", "filter_gama")
@@ -49,7 +50,7 @@ _RUNTIME_PHYSICAL_CATALOG_COLUMNS = {
     "name", "family", "size", "filter_family", "filter_group", "filter_size", "filter_gama",
     "physical_validation_source", "canonical_resolution_status", "ui_eligibility_status",
 }
-_TEXT_CHECKSUM_MODE_UTF8_TEXT_LF_V1 = "utf8_text_lf_v1"
+_TEXT_CHECKSUM_MODE_UTF8_TEXT_LF_V1 = CHECKSUM_MODE_UTF8_TEXT_LF_V1
 
 
 class CatalogFilterConfigurationError(RuntimeError):
@@ -170,18 +171,6 @@ def normalize_physical_code_comparison_key(value: object) -> str:
 def physical_catalog_snapshot_manifest_path() -> Path:
     """Return the versioned physical-catalog contract shipped with the ERP."""
     return Path(__file__).resolve().parents[2] / "runtime_config" / "physical_catalog_snapshot_manifest.json"
-
-
-def canonical_text_sha256(raw_bytes: bytes, checksum_mode: str) -> str:
-    """Hash the runtime snapshot independently of Windows line endings and BOM."""
-    if checksum_mode != _TEXT_CHECKSUM_MODE_UTF8_TEXT_LF_V1:
-        raise ValueError(f"unsupported snapshot checksum mode: {checksum_mode}")
-    try:
-        text = raw_bytes.decode("utf-8-sig")
-    except UnicodeDecodeError as exc:
-        raise ValueError("snapshot is not valid UTF-8 text") from exc
-    canonical_text = text.replace("\r\n", "\n").replace("\r", "\n")
-    return hashlib.sha256(canonical_text.encode("utf-8")).hexdigest()
 
 
 def _physical_catalog_snapshot_configuration() -> tuple[Path, int, frozenset[str], str, str, Path]:

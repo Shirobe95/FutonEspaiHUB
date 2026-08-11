@@ -12,6 +12,7 @@ sys.path.insert(0, str(ROOT / "src"))
 from futonhub.ui.erp.catalog_filters import CatalogFilterSelection, PhysicalCatalogSnapshot  # noqa: E402
 from futonhub.ui.erp.inventory_list import ErpInventoryListMixin  # noqa: E402
 from futonhub.ui.erp.shared_ui import InventoryItem  # noqa: E402
+from futonhub.services.catalog_operational_baseline import CatalogOperationalBaselineError  # noqa: E402
 
 
 class Parent:
@@ -117,6 +118,22 @@ class InventoryListRefreshTests(unittest.TestCase):
         self.assertEqual(len(app._inventory_items), snapshot.expected_count)
         self.assertEqual(len(app._inventory_catalog_source_rows), snapshot.expected_count)
         self.assertEqual(app._inventory_error, "")
+
+    def test_runtime_baseline_failure_is_not_reported_as_supabase_failure(self) -> None:
+        app = InventoryListCollector(Session())
+        row = self._eligible_row()
+        with (
+            patch("futonhub.ui.erp.inventory_list.threading.Thread", ImmediateThread),
+            patch("futonhub.ui.erp.inventory_list.list_cloud_inventory_items_by_ids", return_value=[row]),
+            patch.object(
+                InventoryListCollector,
+                "_inventory_operational_baseline",
+                side_effect=CatalogOperationalBaselineError("baseline runtime roto"),
+            ),
+        ):
+            app._refresh_inventory(Parent(), "", allow_empty=True)
+        self.assertIn("configuracion runtime de inventario", app._inventory_error)
+        self.assertNotIn("Supabase", app._inventory_error)
 
     def test_apply_catalog_filters_is_local_and_accent_insensitive(self) -> None:
         app = InventoryListCollector(Session())

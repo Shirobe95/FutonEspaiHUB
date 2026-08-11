@@ -5,7 +5,7 @@ import tkinter as tk
 from tkinter import ttk
 
 from futonhub.cloud.services.inventory import list_cloud_inventory_items_by_ids
-from futonhub.services.catalog_operational_baseline import CatalogOperationalBaseline
+from futonhub.services.catalog_operational_baseline import CatalogOperationalBaseline, CatalogOperationalBaselineError
 from futonhub.ui.erp.catalog_filters import (
     CatalogFilterConfigurationError,
     CatalogFilterSelection,
@@ -241,6 +241,10 @@ class ErpInventoryListMixin:
         def worker() -> None:
             try:
                 rows = list_cloud_inventory_items_by_ids(self._cloud_session, snapshot.item_ids)
+            except Exception as exc:
+                self.after(0, lambda exc=exc: self._finish_inventory_refresh([], f"No se pudo leer inventario fisico Supabase: {exc}", []))
+                return
+            try:
                 eligible_rows = snapshot.eligible_live_rows(rows)
                 eligible_rows = self._inventory_operational_baseline().enrich_rows(eligible_rows)
                 items = [self._inventory_item_from_cloud_row(row) for row in eligible_rows]
@@ -249,8 +253,10 @@ class ErpInventoryListMixin:
                 if missing_count:
                     warning = f"Aviso de catalogo: {missing_count} registros no cumplen el contrato operativo y no se muestran."
                 self.after(0, lambda: self._finish_inventory_refresh(items, warning, eligible_rows))
+            except (CatalogFilterConfigurationError, CatalogOperationalBaselineError) as exc:
+                self.after(0, lambda exc=exc: self._finish_inventory_refresh([], f"No se puede cargar la configuracion runtime de inventario: {exc}", []))
             except Exception as exc:
-                self.after(0, lambda exc=exc: self._finish_inventory_refresh([], f"No se pudo leer inventario fisico Supabase: {exc}", []))
+                self.after(0, lambda exc=exc: self._finish_inventory_refresh([], f"No se pudo preparar inventario fisico local: {exc}", []))
 
         threading.Thread(target=worker, daemon=True).start()
 

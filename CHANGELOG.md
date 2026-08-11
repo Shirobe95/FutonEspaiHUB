@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.5.0-rc.3 - 2026-08-11
+
+- Hotfix runtime de distribucion para Inventario.
+- `CatalogOperationalBaseline()` ya no depende de `auditoria/out/woo_map_001a_3`
+  en instalaciones distribuidas; carga un contrato operativo versionado bajo
+  `GestorWoo/src/futonhub/runtime_config`.
+- Nuevo contrato `catalog_operational_baseline.csv` con 254 filas: 188
+  operativas y 66 en cuarentena, sin precios, stock, credenciales ni rutas
+  locales.
+- El mensaje de Inventario separa fallos reales de lectura Supabase de fallos
+  de configuracion runtime local.
+- Macao `0402014` conserva cuarentena y no participa en propagacion de precios.
+
 ## v0.5.0-rc.2 - 2026-08-11
 
 - Hotfix de distribucion para el contrato runtime del catalogo fisico.

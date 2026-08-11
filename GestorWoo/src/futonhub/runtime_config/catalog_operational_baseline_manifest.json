@@ -1,0 +1,25 @@
+{
+  "schema": "futonhub.runtime.catalog_operational_baseline.v1",
+  "source_cut": "WOO-MAP-001A.3",
+  "source_snapshot": "catalog operational baseline contract",
+  "snapshot_relative_path": "catalog_operational_baseline.csv",
+  "expected_count": 254,
+  "operational_count": 188,
+  "quarantined_count": 66,
+  "checksum_mode": "utf8_text_lf_v1",
+  "snapshot_sha256": "72754ea170964af5d1af28b544ef65e3d3ffc70fc58e848b1143926a9f39aed2",
+  "required_columns": [
+    "item_id",
+    "operational_status",
+    "quarantine_group",
+    "quarantine_reason",
+    "can_participate_in_price_propagation",
+    "business_review_status",
+    "catalog_baseline_cut",
+    "catalog_baseline_map_status"
+  ],
+  "contains_prices": false,
+  "contains_stock": false,
+  "contains_credentials": false,
+  "fail_closed": true
+}
