@@ -49,6 +49,7 @@ _RUNTIME_PHYSICAL_CATALOG_COLUMNS = {
     "name", "family", "size", "filter_family", "filter_group", "filter_size", "filter_gama",
     "physical_validation_source", "canonical_resolution_status", "ui_eligibility_status",
 }
+_TEXT_CHECKSUM_MODE_UTF8_TEXT_LF_V1 = "utf8_text_lf_v1"
 
 
 class CatalogFilterConfigurationError(RuntimeError):
@@ -171,7 +172,19 @@ def physical_catalog_snapshot_manifest_path() -> Path:
     return Path(__file__).resolve().parents[2] / "runtime_config" / "physical_catalog_snapshot_manifest.json"
 
 
-def _physical_catalog_snapshot_configuration() -> tuple[Path, int, frozenset[str], str | None, Path | None]:
+def canonical_text_sha256(raw_bytes: bytes, checksum_mode: str) -> str:
+    """Hash the runtime snapshot independently of Windows line endings and BOM."""
+    if checksum_mode != _TEXT_CHECKSUM_MODE_UTF8_TEXT_LF_V1:
+        raise ValueError(f"unsupported snapshot checksum mode: {checksum_mode}")
+    try:
+        text = raw_bytes.decode("utf-8-sig")
+    except UnicodeDecodeError as exc:
+        raise ValueError("snapshot is not valid UTF-8 text") from exc
+    canonical_text = text.replace("\r\n", "\n").replace("\r", "\n")
+    return hashlib.sha256(canonical_text.encode("utf-8")).hexdigest()
+
+
+def _physical_catalog_snapshot_configuration() -> tuple[Path, int, frozenset[str], str, str, Path]:
     manifest_path = physical_catalog_snapshot_manifest_path()
     if not manifest_path.is_file():
         raise CatalogFilterConfigurationError(
@@ -182,10 +195,13 @@ def _physical_catalog_snapshot_configuration() -> tuple[Path, int, frozenset[str
         relative_snapshot = str(payload["snapshot_relative_path"])
         expected_count = int(payload["expected_count"])
         snapshot_sha256 = str(payload["snapshot_sha256"])
+        checksum_mode = str(payload["checksum_mode"])
         if not relative_snapshot or Path(relative_snapshot).is_absolute() or expected_count <= 0:
             raise ValueError("invalid snapshot manifest values")
         if not re.fullmatch(r"[0-9a-f]{64}", snapshot_sha256):
             raise ValueError("invalid snapshot checksum")
+        if checksum_mode != _TEXT_CHECKSUM_MODE_UTF8_TEXT_LF_V1:
+            raise ValueError(f"unsupported snapshot checksum mode: {checksum_mode}")
         source_path = (manifest_path.parent / relative_snapshot).resolve()
         root = manifest_path.parent.resolve()
         if root not in source_path.parents:
@@ -197,7 +213,7 @@ def _physical_catalog_snapshot_configuration() -> tuple[Path, int, frozenset[str
         )
     except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
         raise CatalogFilterConfigurationError(f"Manifest de allowlist fisica invalido: {manifest_path}: {exc}") from exc
-    return source_path, expected_count, approved_keys, snapshot_sha256, manifest_path
+    return source_path, expected_count, approved_keys, snapshot_sha256, checksum_mode, manifest_path
 
 
 @dataclass(frozen=True)
@@ -302,7 +318,7 @@ class PhysicalCatalogSnapshot:
 
     @classmethod
     def load(cls, path: Path | None = None) -> "PhysicalCatalogSnapshot":
-        configured_path, expected_count, approved_keys, expected_sha256, manifest_path = _physical_catalog_snapshot_configuration()
+        configured_path, expected_count, approved_keys, expected_sha256, checksum_mode, manifest_path = _physical_catalog_snapshot_configuration()
         source_path = path or configured_path
         if not source_path.is_file():
             raise CatalogFilterConfigurationError(
@@ -324,8 +340,13 @@ class PhysicalCatalogSnapshot:
         except OSError as exc:
             raise CatalogFilterConfigurationError(f"No se pudo leer la allowlist fisica 003A: {exc}") from exc
 
-        if path is None and expected_sha256 is not None:
-            digest = hashlib.sha256(source_path.read_bytes()).hexdigest()
+        if path is None:
+            try:
+                digest = canonical_text_sha256(source_path.read_bytes(), checksum_mode)
+            except (OSError, ValueError) as exc:
+                raise CatalogFilterConfigurationError(
+                    "No se pudo validar la huella SHA-256 de la allowlist fisica vigente."
+                ) from exc
             if digest != expected_sha256:
                 raise CatalogFilterConfigurationError(
                     "La allowlist fisica vigente no coincide con la huella SHA-256 del manifiesto."

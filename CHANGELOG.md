@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.5.0-rc.2 - 2026-08-11
+
+- Hotfix de distribucion para el contrato runtime del catalogo fisico.
+- El checksum de `physical_catalog_snapshot.csv` pasa a ser canonico de texto
+  UTF-8 con BOM opcional y saltos de linea normalizados a LF
+  (`utf8_text_lf_v1`), evitando divergencias entre working tree Windows, Git,
+  GitHub zipball y FutonHub-Launcher.
+- La validacion SHA sigue activa y fail-closed ante manifest invalido, modo no
+  soportado, CSV no UTF-8, checksum incorrecto o contenido manipulado.
+- No se modifica el contenido comercial del snapshot; Macao `0402014` sigue en
+  cuarentena hasta revision humana.
+
 ## v0.5.0-rc.1 - 2026-08-11
 
 - PRE-FIRE release candidate. Not a stable release.
