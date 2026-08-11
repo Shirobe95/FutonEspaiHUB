@@ -1,0 +1,96 @@
+{
+  "schema": "futonhub.runtime.combination_price_impact.v1",
+  "source_cuts": [
+    "WOO-MAP-001A.3",
+    "WOO-MAP-001A.4"
+  ],
+  "source_states": {
+    "WOO-MAP-001A.3": "PROVISIONAL_OPERATIONAL_BASELINE_WITH_QUARANTINE",
+    "WOO-MAP-001A.4": "PRICE_COMBINATION_INPUT_PREPARED_READ_ONLY"
+  },
+  "source_handoff_sha256": "8fdbc00f3edd9a6a51c14e84bf1f21f24ae9ab40346cb5b49acf7bea32d1431c",
+  "checksum_mode": "utf8_text_lf_v1",
+  "fail_closed": true,
+  "runtime_contract": "CombinationPriceImpactService runtime files for distributed FutonHUB.",
+  "contains_credentials": false,
+  "contains_stock": false,
+  "contains_write_payloads": false,
+  "expected_counts": {
+    "clean_graph_edges": 926,
+    "operational_combinations": 241,
+    "impact_matrix_rows": 640,
+    "excluded_combinations": 142,
+    "clean_physical_nodes": 188,
+    "operational_physical_nodes": 188,
+    "catalog_operational_baseline_total_physical_items": 254,
+    "catalog_operational_baseline_quarantined_physical_items": 66,
+    "reconciled_mappings": 178
+  },
+  "required_files": [
+    "WOO_MAP_001A_3_CLEAN_COMBINATIONS.csv",
+    "WOO_MAP_001A_3_CLEAN_GRAPH.csv",
+    "WOO_MAP_001A_3_CLEAN_GRAPH.json",
+    "WOO_MAP_001A_3_QUARANTINED_COMBINATIONS.csv",
+    "WOO_MAP_001A_3_QUARANTINED_EDGES.csv",
+    "WOO_MAP_001A_3_QUARANTINE_SCOPE.csv",
+    "WOO_MAP_001A_4_EXCLUSIONS.csv",
+    "WOO_MAP_001A_4_PRICE_COMBINATION_INPUT.csv",
+    "WOO_MAP_001A_4_WOO_IMPACT_MATRIX.csv"
+  ],
+  "files": [
+    {
+      "name": "WOO_MAP_001A_3_CLEAN_COMBINATIONS.csv",
+      "relative_path": "WOO_MAP_001A_3_CLEAN_COMBINATIONS.csv",
+      "sha256": "215cb290f7301e412f73f21c7906cf93129a649096c1b2218bbe73767882568a",
+      "bytes": 60551
+    },
+    {
+      "name": "WOO_MAP_001A_3_CLEAN_GRAPH.csv",
+      "relative_path": "WOO_MAP_001A_3_CLEAN_GRAPH.csv",
+      "sha256": "b0813fe87d7ac2368590eeffc09c4fa24a6c7065597eed413d71be22f1e4b894",
+      "bytes": 688106
+    },
+    {
+      "name": "WOO_MAP_001A_3_CLEAN_GRAPH.json",
+      "relative_path": "WOO_MAP_001A_3_CLEAN_GRAPH.json",
+      "sha256": "5de814f10af9419d110e4c923c63d046568f520e78b69cfe6ffd30c882dceb69",
+      "bytes": 3087464
+    },
+    {
+      "name": "WOO_MAP_001A_3_QUARANTINED_COMBINATIONS.csv",
+      "relative_path": "WOO_MAP_001A_3_QUARANTINED_COMBINATIONS.csv",
+      "sha256": "0fdf9ca5880899bceef73d982d6a099d163bf9bffa99191fa186e36cb2957a9d",
+      "bytes": 54202
+    },
+    {
+      "name": "WOO_MAP_001A_3_QUARANTINED_EDGES.csv",
+      "relative_path": "WOO_MAP_001A_3_QUARANTINED_EDGES.csv",
+      "sha256": "dd6012f732f900c352293ad11a386880ea71c62b8dd37f4e0bf8cfb1eaa6fafd",
+      "bytes": 573009
+    },
+    {
+      "name": "WOO_MAP_001A_3_QUARANTINE_SCOPE.csv",
+      "relative_path": "WOO_MAP_001A_3_QUARANTINE_SCOPE.csv",
+      "sha256": "e4aa4b2c9e8a2bde645ece888b63bb284d6575006a30571e2a70d79180ebe743",
+      "bytes": 76408
+    },
+    {
+      "name": "WOO_MAP_001A_4_EXCLUSIONS.csv",
+      "relative_path": "WOO_MAP_001A_4_EXCLUSIONS.csv",
+      "sha256": "47cd29b27c12c75c36fa2ea8cce1ebbae5a6b08443a8f17d7312ec9c2a65a1ec",
+      "bytes": 31397
+    },
+    {
+      "name": "WOO_MAP_001A_4_PRICE_COMBINATION_INPUT.csv",
+      "relative_path": "WOO_MAP_001A_4_PRICE_COMBINATION_INPUT.csv",
+      "sha256": "557ca5ccf05f48d10098a775052aaadf9b63e52d6dc046ae1f8343e01ae659cc",
+      "bytes": 73683
+    },
+    {
+      "name": "WOO_MAP_001A_4_WOO_IMPACT_MATRIX.csv",
+      "relative_path": "WOO_MAP_001A_4_WOO_IMPACT_MATRIX.csv",
+      "sha256": "4759993549163d3f90b7a7a9568a39824d580ce400926f3a5a77763440917175",
+      "bytes": 138074
+    }
+  ]
+}

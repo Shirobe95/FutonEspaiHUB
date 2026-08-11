@@ -1,6 +1,6 @@
 [project]
 name = "futonhub"
-version = "0.5.0rc3"
+version = "0.5.0rc4"
 description = "Mini ERP interno para Futon Espai."
 requires-python = ">=3.11"
 dependencies = [
@@ -23,4 +23,9 @@ where = ["src"]
 include = ["futonhub*", "gestorwoo*"]
 
 [tool.setuptools.package-data]
-futonhub = ["runtime_config/*.csv", "runtime_config/*.json"]
+futonhub = [
+    "runtime_config/*.csv",
+    "runtime_config/*.json",
+    "runtime_config/combination_price_impact/*.csv",
+    "runtime_config/combination_price_impact/*.json",
+]

@@ -93,6 +93,7 @@ from futonhub.core.guard import active_locks, stale_locks
 from futonhub.services.combination_price_impact import (
     CombinationPriceImpactError,
     CombinationPriceImpactService,
+    approved_woo_edges_runtime_path,
 )
 from futonhub.services.combination_proposal_integration import (
     NO_CHANGE as COMBINATION_NO_CHANGE,
@@ -4157,9 +4158,14 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         self.__dict__.setdefault("_price_filter_performance", {})["combobox_options_seconds"] = round(time.perf_counter() - started, 6)
         return {field: list(values) for field, values in cached.items()}
 
+    def _price_runtime_report_dir(self) -> Path:
+        local_app_data = os.environ.get("LOCALAPPDATA")
+        base = Path(local_app_data) if local_app_data else Path.home() / ".futonhub"
+        return base / "FutonHUB" / "runtime_reports" / "price_comb_001b"
+
     def _price_persist_filter_performance(self) -> None:
         try:
-            output_dir = Path(__file__).resolve().parents[5] / "auditoria" / "out" / "price_comb_001b"
+            output_dir = self._price_runtime_report_dir()
             write_filter_performance(dict(self.__dict__.get("_price_filter_performance") or {}), output_dir=output_dir)
         except OSError:
             return
@@ -4574,7 +4580,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             self._close_working_overlay(overlay)
 
     def _open_price_sync_report(self) -> None:
-        output_dir = Path(__file__).resolve().parents[5] / "auditoria" / "out" / "price_comb_001b"
+        output_dir = self._price_runtime_report_dir()
         candidates = (
             output_dir / "PRICE_COMB_001B_8_3_COUNT_SUMMARY.md",
             output_dir / "PRICE_COMB_001B_8_2_COUNT_SUMMARY.md",
@@ -4637,10 +4643,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 )
                 progress({"phase": "BUILDING_WOO_INDEX", "counts": {}})
                 woo_index = build_woo_read_only_index(woo, progress_callback=progress)
-                approved_edges = load_approved_woo_edges(
-                    Path(__file__).resolve().parents[5]
-                    / "auditoria" / "out" / "woo_map_001a_3" / "WOO_MAP_001A_3_CLEAN_GRAPH.json"
-                )
+                approved_edges = load_approved_woo_edges(approved_woo_edges_runtime_path())
                 result = reconcile_woo_contexts(
                     rows,
                     woo_index=woo_index,
@@ -4710,7 +4713,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             self._price_approved_woo_edges_by_item_id = dict(payload.get("approved_edges_by_item_id") or {})
             self._price_items_error = ""
         try:
-            output_dir = Path(__file__).resolve().parents[5] / "auditoria" / "out" / "price_comb_001b"
+            output_dir = self._price_runtime_report_dir()
             write_catalog_count_audit(
                 payload,
                 stage_counts=dict(self.__dict__.get("_price_catalog_stage_counts") or {}),

@@ -9,11 +9,14 @@ from html import escape
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
+from futonhub.core.runtime_integrity import CHECKSUM_MODE_UTF8_TEXT_LF_V1, canonical_text_sha256
+
 
 CUT_001A3 = "WOO-MAP-001A.3"
 CUT_001A4 = "WOO-MAP-001A.4"
 STATE_001A3 = "PROVISIONAL_OPERATIONAL_BASELINE_WITH_QUARANTINE"
 STATE_001A4 = "PRICE_COMBINATION_INPUT_PREPARED_READ_ONLY"
+RUNTIME_SCHEMA = "futonhub.runtime.combination_price_impact.v1"
 
 SPECIAL_LITERAL_SUFFIX_SKUS = frozenset({
     "0726007A",
@@ -24,6 +27,18 @@ SPECIAL_LITERAL_SUFFIX_SKUS = frozenset({
 
 _CENT = Decimal("0.01")
 _EMPTY_PRICE_MARKERS = frozenset({"", "none", "null", "nan", "-"})
+_RUNTIME_REQUIRED_FILES = frozenset({
+    "WOO_MAP_001A_3_CLEAN_GRAPH.csv",
+    "WOO_MAP_001A_3_CLEAN_GRAPH.json",
+    "WOO_MAP_001A_3_CLEAN_COMBINATIONS.csv",
+    "WOO_MAP_001A_3_QUARANTINE_SCOPE.csv",
+    "WOO_MAP_001A_3_QUARANTINED_EDGES.csv",
+    "WOO_MAP_001A_3_QUARANTINED_COMBINATIONS.csv",
+    "WOO_MAP_001A_4_PRICE_COMBINATION_INPUT.csv",
+    "WOO_MAP_001A_4_WOO_IMPACT_MATRIX.csv",
+    "WOO_MAP_001A_4_EXCLUSIONS.csv",
+})
+_HEX_DIGITS = frozenset("0123456789abcdef")
 
 
 class CombinationPriceImpactError(ValueError):
@@ -54,12 +69,12 @@ def _money_text(value: Decimal | None) -> str:
     return "" if value is None else f"{_money(value):.2f}"
 
 
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+def _is_sha256(value: str) -> bool:
+    return len(value) == 64 and all(char in _HEX_DIGITS for char in value.casefold())
+
+
+def _canonical_sha256(path: Path, checksum_mode: str) -> str:
+    return canonical_text_sha256(path.read_bytes(), checksum_mode)
 
 
 def _read_csv(path: Path) -> list[dict[str, str]]:
@@ -68,11 +83,23 @@ def _read_csv(path: Path) -> list[dict[str, str]]:
 
 
 def _read_json(path: Path) -> dict[str, Any]:
-    with path.open("r", encoding="utf-8") as handle:
+    with path.open("r", encoding="utf-8-sig") as handle:
         data = json.load(handle)
     if not isinstance(data, dict):
         raise CombinationPriceImpactError(f"Expected JSON object in {path.name}.")
     return data
+
+
+def combination_price_impact_runtime_dir() -> Path:
+    """Return the packaged runtime graph shipped with the ERP."""
+    return Path(__file__).resolve().parents[1] / "runtime_config" / "combination_price_impact"
+
+
+def approved_woo_edges_runtime_path() -> Path:
+    """Return the packaged clean graph path used by initial Woo reconciliation."""
+    root = combination_price_impact_runtime_dir().resolve()
+    CombinationPriceImpactService._load_and_validate_runtime_manifest(root)
+    return root / "WOO_MAP_001A_3_CLEAN_GRAPH.json"
 
 
 def effective_edge_status(row: Mapping[str, Any]) -> str:
@@ -109,22 +136,30 @@ class CombinationPriceImpactService:
     """Read-only adapter over the approved 001A.3/001A.4 local graph."""
 
     def __init__(self, artifact_root: str | Path | None = None) -> None:
-        self.artifact_root = self._resolve_artifact_root(artifact_root)
-        self.cut3_dir = self.artifact_root / "woo_map_001a_3"
-        self.cut4_dir = self.artifact_root / "woo_map_001a_4"
-
-        self.manifest_001a3 = self._load_and_validate_manifest(
-            self.cut3_dir / "WOO_MAP_001A_3_ARTIFACT_MANIFEST.json",
-            expected_cut=CUT_001A3,
-            expected_state=STATE_001A3,
-        )
-        self.manifest_001a4 = self._load_and_validate_manifest(
-            self.cut4_dir / "WOO_MAP_001A_4_ARTIFACT_MANIFEST.json",
-            expected_cut=CUT_001A4,
-            expected_state=STATE_001A4,
-        )
-        if self.manifest_001a3.get("source_handoff_sha256") != self.manifest_001a4.get("source_handoff_sha256"):
-            raise CombinationPriceImpactError("001A.3 and 001A.4 do not declare the same source handoff hash.")
+        self.runtime_manifest: dict[str, Any] | None = None
+        self.source_kind = "runtime_config" if artifact_root is None else "legacy_artifact_root"
+        if artifact_root is None:
+            self.artifact_root = combination_price_impact_runtime_dir().resolve()
+            self.cut3_dir = self.artifact_root
+            self.cut4_dir = self.artifact_root
+            self.runtime_manifest = self._load_and_validate_runtime_manifest(self.artifact_root)
+            self.manifest_001a3, self.manifest_001a4 = self._split_runtime_manifests(self.runtime_manifest)
+        else:
+            self.artifact_root = self._resolve_legacy_artifact_root(artifact_root)
+            self.cut3_dir = self.artifact_root / "woo_map_001a_3"
+            self.cut4_dir = self.artifact_root / "woo_map_001a_4"
+            self.manifest_001a3 = self._load_and_validate_legacy_manifest(
+                self.cut3_dir / "WOO_MAP_001A_3_ARTIFACT_MANIFEST.json",
+                expected_cut=CUT_001A3,
+                expected_state=STATE_001A3,
+            )
+            self.manifest_001a4 = self._load_and_validate_legacy_manifest(
+                self.cut4_dir / "WOO_MAP_001A_4_ARTIFACT_MANIFEST.json",
+                expected_cut=CUT_001A4,
+                expected_state=STATE_001A4,
+            )
+            if self.manifest_001a3.get("source_handoff_sha256") != self.manifest_001a4.get("source_handoff_sha256"):
+                raise CombinationPriceImpactError("001A.3 and 001A.4 do not declare the same source handoff hash.")
 
         self.clean_graph_rows = _read_csv(self.cut3_dir / "WOO_MAP_001A_3_CLEAN_GRAPH.csv")
         self.clean_graph_json = _read_json(self.cut3_dir / "WOO_MAP_001A_3_CLEAN_GRAPH.json")
@@ -139,22 +174,95 @@ class CombinationPriceImpactService:
         self.exclusions = _read_csv(self.cut4_dir / "WOO_MAP_001A_4_EXCLUSIONS.csv")
 
         self._validate_structures()
+        self._validate_runtime_expected_counts()
         self._build_indexes()
 
     @staticmethod
-    def _resolve_artifact_root(artifact_root: str | Path | None) -> Path:
-        if artifact_root is None:
-            project_root = Path(__file__).resolve().parents[4]
-            return project_root / "auditoria" / "out"
+    def _resolve_legacy_artifact_root(artifact_root: str | Path) -> Path:
         root = Path(artifact_root).resolve()
-        if (root / "woo_map_001a_3").is_dir():
+        if root.name == "woo_map_001a_3" and (root.parent / "woo_map_001a_4").is_dir():
+            return root.parent
+        if (root / "woo_map_001a_3").is_dir() and (root / "woo_map_001a_4").is_dir():
             return root
-        nested = root / "auditoria" / "out"
-        if (nested / "woo_map_001a_3").is_dir():
-            return nested
-        raise CombinationPriceImpactError(f"Cannot locate woo_map_001a_3 below {root}.")
+        raise CombinationPriceImpactError(f"Cannot locate explicit WOO-MAP artifact root below {root}.")
 
-    def _load_and_validate_manifest(
+    @staticmethod
+    def _load_and_validate_runtime_manifest(root: Path) -> dict[str, Any]:
+        manifest_path = root / "combination_price_impact_manifest.json"
+        try:
+            manifest = _read_json(manifest_path)
+            if manifest.get("schema") != RUNTIME_SCHEMA:
+                raise ValueError("unexpected combination price impact runtime schema")
+            if manifest.get("source_cuts") != [CUT_001A3, CUT_001A4]:
+                raise ValueError("unexpected combination price impact runtime cuts")
+            if manifest.get("fail_closed") is not True:
+                raise ValueError("combination price impact runtime must fail closed")
+            if manifest.get("contains_credentials") is not False:
+                raise ValueError("combination price impact runtime must not contain credentials")
+            if manifest.get("contains_stock") is not False:
+                raise ValueError("combination price impact runtime must not contain stock")
+            if manifest.get("contains_write_payloads") is not False:
+                raise ValueError("combination price impact runtime must not contain write payloads")
+            checksum_mode = _text(manifest.get("checksum_mode"))
+            if checksum_mode != CHECKSUM_MODE_UTF8_TEXT_LF_V1:
+                raise ValueError(f"unsupported runtime checksum mode: {checksum_mode}")
+            required = set(str(name) for name in manifest.get("required_files") or [])
+            if required != set(_RUNTIME_REQUIRED_FILES):
+                raise ValueError("runtime manifest required files do not match the service contract")
+            file_entries = manifest.get("files")
+            if not isinstance(file_entries, list):
+                raise ValueError("runtime manifest files must be a list")
+            seen: set[str] = set()
+            for entry in file_entries:
+                if not isinstance(entry, dict):
+                    raise ValueError("runtime manifest contains an invalid file entry")
+                name = _text(entry.get("name"))
+                relative_path = Path(_text(entry.get("relative_path") or name))
+                expected_hash = _text(entry.get("sha256")).casefold()
+                if not name or name in seen or name not in _RUNTIME_REQUIRED_FILES or not _is_sha256(expected_hash):
+                    raise ValueError(f"invalid runtime manifest file entry: {name!r}")
+                if relative_path.is_absolute() or ".." in relative_path.parts or relative_path.name != name:
+                    raise ValueError(f"invalid runtime relative path for {name}")
+                artifact_path = (root / relative_path).resolve()
+                if root.resolve() not in artifact_path.parents:
+                    raise ValueError(f"runtime artifact leaves runtime_config: {name}")
+                if not artifact_path.is_file():
+                    raise ValueError(f"missing runtime artifact: {name}")
+                actual_hash = _canonical_sha256(artifact_path, checksum_mode)
+                if actual_hash != expected_hash:
+                    raise ValueError(f"runtime checksum mismatch for {name}")
+                seen.add(name)
+            missing = sorted(_RUNTIME_REQUIRED_FILES - seen)
+            if missing:
+                raise ValueError("runtime manifest omits files: " + ", ".join(missing))
+        except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
+            raise CombinationPriceImpactError(
+                f"Invalid combination price impact runtime manifest: {manifest_path}: {exc}"
+            ) from exc
+        return manifest
+
+    @staticmethod
+    def _split_runtime_manifests(manifest: Mapping[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+        handoff = _text(manifest.get("source_handoff_sha256"))
+        files = [dict(entry) for entry in manifest.get("files") or []]
+        cut3 = [entry for entry in files if _text(entry.get("name")).startswith("WOO_MAP_001A_3_")]
+        cut4 = [entry for entry in files if _text(entry.get("name")).startswith("WOO_MAP_001A_4_")]
+        return (
+            {
+                "cut": CUT_001A3,
+                "state": STATE_001A3,
+                "source_handoff_sha256": handoff,
+                "artifacts": cut3,
+            },
+            {
+                "cut": CUT_001A4,
+                "state": STATE_001A4,
+                "source_handoff_sha256": handoff,
+                "artifacts": cut4,
+            },
+        )
+
+    def _load_and_validate_legacy_manifest(
         self,
         path: Path,
         *,
@@ -185,7 +293,7 @@ class CombinationPriceImpactService:
             artifact_path = path.parent / name
             if not artifact_path.is_file():
                 raise CombinationPriceImpactError(f"Missing declared artifact {artifact_path}.")
-            actual_hash = _sha256(artifact_path)
+            actual_hash = hashlib.sha256(artifact_path.read_bytes()).hexdigest()
             if actual_hash != expected_hash:
                 raise CombinationPriceImpactError(
                     f"SHA-256 mismatch for {artifact_path.name}: expected {expected_hash}, got {actual_hash}."
@@ -202,6 +310,23 @@ class CombinationPriceImpactService:
         missing = required.difference(rows[0])
         if missing:
             raise CombinationPriceImpactError(f"{label} is missing columns: {sorted(missing)}.")
+
+    def _validate_runtime_expected_counts(self) -> None:
+        if not self.runtime_manifest:
+            return
+        expected = self.runtime_manifest.get("expected_counts") or {}
+        actual = {
+            "clean_graph_edges": len(self.clean_graph_rows),
+            "operational_combinations": len(self.price_combinations),
+            "impact_matrix_rows": len(self.impact_matrix),
+            "excluded_combinations": len(self.exclusions),
+            "clean_physical_nodes": len(self.clean_graph_json.get("physical_nodes") or []),
+        }
+        for key, value in actual.items():
+            if key in expected and int(expected[key]) != value:
+                raise CombinationPriceImpactError(
+                    f"Runtime combination baseline count mismatch for {key}: expected {expected[key]}, got {value}."
+                )
 
     def _validate_structures(self) -> None:
         if self.clean_graph_json.get("cut") != CUT_001A3 or self.clean_graph_json.get("state") != STATE_001A3:
@@ -789,9 +914,11 @@ class CombinationPriceImpactService:
         return {
             "status": "READY_READ_ONLY",
             "graph_version": self.graph_version,
+            "source_kind": self.source_kind,
             "artifact_root": str(self.artifact_root),
             "cuts": [CUT_001A3, CUT_001A4],
             "source_handoff_sha256": self.source_handoff_sha256,
+            "artifact_hashes": self.artifact_hashes,
             "clean_graph_edges": len(self.clean_graph_rows),
             "operational_combinations": len(self.price_combinations),
             "impact_matrix_rows": len(self.impact_matrix),

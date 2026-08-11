@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.5.0-rc.4 - 2026-08-11
+
+- Hotfix final de distribucion runtime para Cambio de Precios.
+- `CombinationPriceImpactService()` carga el baseline de combinaciones desde
+  `runtime_config/combination_price_impact` y ya no depende de artefactos
+  locales de auditoria.
+- La sincronizacion inicial Woo usa el grafo aprobado empaquetado y validado
+  con checksum canonico `utf8_text_lf_v1`.
+- El runtime distribuido sin carpeta de auditoria cubre Inventario y Cambio de
+  Precios con baseline operacional y combinaciones en modo lectura.
+
 ## v0.5.0-rc.3 - 2026-08-11
 
 - Hotfix runtime de distribucion para Inventario.

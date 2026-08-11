@@ -30,13 +30,19 @@ class CombinationPriceImpactServiceTests(unittest.TestCase):
 
     def test_adapter_load_is_deterministic_and_has_expected_counts(self) -> None:
         first = self.service.describe()
-        second = CombinationPriceImpactService(ROOT).describe()
+        second = CombinationPriceImpactService().describe()
 
-        self.assertEqual(first, second)
+        self.assertEqual(first["source_handoff_sha256"], second["source_handoff_sha256"])
+        self.assertEqual(first["source_kind"], "legacy_artifact_root")
+        self.assertEqual(second["source_kind"], "runtime_config")
         self.assertEqual(first["clean_graph_edges"], 926)
         self.assertEqual(first["operational_combinations"], 241)
         self.assertEqual(first["impact_matrix_rows"], 640)
         self.assertEqual(first["excluded_combinations"], 142)
+        self.assertEqual(second["clean_graph_edges"], 926)
+        self.assertEqual(second["operational_combinations"], 241)
+        self.assertEqual(second["impact_matrix_rows"], 640)
+        self.assertEqual(second["excluded_combinations"], 142)
 
     def test_manifest_hash_mismatch_is_rejected_before_consumption(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
