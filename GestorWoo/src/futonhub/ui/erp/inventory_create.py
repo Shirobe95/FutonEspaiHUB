@@ -5,6 +5,7 @@ from tkinter import messagebox, ttk
 from typing import Any
 
 from futonhub.cloud.services.inventory import create_cloud_inventory_item, preview_create_cloud_inventory_item
+from futonhub.ui.erp.responsive import center_window_safely, modal_dimensions_for_viewport, set_minsize_safely, widget_screen_size
 from futonhub.ui.erp.shared_ui import BG, CARD, INDIGO_SOFT, LINE, MUTED, TEXT
 
 
@@ -17,9 +18,19 @@ class ErpInventoryCreateMixin:
         win = tk.Toplevel(self)
         win.title("Crear nuevo articulo")
         win.configure(bg=BG)
-        win.geometry("820x720")
         win.transient(self)
         win.grab_set()
+        screen_width, screen_height = widget_screen_size(win)
+        width, height, min_width, min_height = modal_dimensions_for_viewport(
+            screen_width,
+            screen_height,
+            820,
+            720,
+            min_width=720,
+            min_height=560,
+        )
+        center_window_safely(win, width, height)
+        set_minsize_safely(win, min_width, min_height)
 
         shell = tk.Frame(win, bg=BG)
         shell.pack(fill=tk.BOTH, expand=True, padx=18, pady=18)

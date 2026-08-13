@@ -14,6 +14,7 @@ from futonhub.ui.erp.shared_ui import (
     SOFT,
     TEXT,
 )
+from futonhub.ui.erp.responsive import shell_layout_metrics
 
 
 NAV_ITEMS = [
@@ -32,12 +33,16 @@ NAV_ITEMS = [
 
 class ErpShellNavigationMixin:
     def _build_shell(self) -> None:
+        try:
+            metrics = shell_layout_metrics(self.winfo_screenwidth())
+        except Exception:
+            metrics = shell_layout_metrics(1366)
         shell = tk.Frame(self, bg=BG)
         shell.pack(fill=tk.BOTH, expand=True)
         shell.columnconfigure(1, weight=1)
         shell.rowconfigure(0, weight=1)
 
-        sidebar = tk.Frame(shell, bg=SIDEBAR, width=270, highlightbackground=LINE, highlightthickness=1)
+        sidebar = tk.Frame(shell, bg=SIDEBAR, width=metrics.sidebar_width, highlightbackground=LINE, highlightthickness=1)
         sidebar.grid(row=0, column=0, sticky="ns")
         sidebar.grid_propagate(False)
         self._build_sidebar(sidebar)
@@ -52,7 +57,7 @@ class ErpShellNavigationMixin:
         self._global_search_area = None
         self._status_area = None
         self._content = tk.Frame(main, bg=BG)
-        self._content.grid(row=0, column=0, sticky="nsew", padx=24, pady=22)
+        self._content.grid(row=0, column=0, sticky="nsew", padx=metrics.content_pad_x, pady=metrics.content_pad_y)
 
     def _build_sidebar(self, parent: tk.Frame) -> None:
         brand = tk.Frame(parent, bg=SIDEBAR)

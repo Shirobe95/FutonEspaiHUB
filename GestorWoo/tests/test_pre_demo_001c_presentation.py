@@ -66,7 +66,8 @@ class PreDemo001CPresentationTests(unittest.TestCase):
         self.assertIn("height=185", history)
         self.assertIn("price_host", detail)
         self.assertIn("stock_host", detail)
-        self.assertIn("win.minsize(1040, 720)", detail)
+        self.assertIn("modal_dimensions_for_viewport", detail)
+        self.assertIn("set_minsize_safely(win, min_width, min_height)", detail)
 
 
 if __name__ == "__main__":

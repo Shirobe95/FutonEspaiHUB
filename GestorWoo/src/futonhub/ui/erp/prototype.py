@@ -143,6 +143,7 @@ from futonhub.ui.erp.catalog_filters import (
     ranked_catalog_search_rows,
     row_matches_catalog_filters,
 )
+from futonhub.ui.erp.responsive import center_window_safely, modal_dimensions_for_viewport, set_minsize_safely, widget_screen_size
 from futonhub.ui.erp.inventory_create import ErpInventoryCreateMixin
 from futonhub.ui.erp.inventory_detail import ErpInventoryDetailMixin
 from futonhub.ui.erp.inventory_edit import ErpInventoryEditMixin
@@ -531,7 +532,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         super().__init__()
         self.title("FutonHUB - UI ERP Prototype")
         center_window(self, 1280, 760)
-        self.minsize(1100, 680)
+        self.minsize(1000, 620)
         self.configure(bg=BG)
         apply_theme(self)
         self._configure_erp_table_style()
@@ -1618,8 +1619,17 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         win.configure(bg=BG)
         win.transient(self)
         win.grab_set()
-        center_window(win, 1200, 840)
-        win.minsize(1040, 720)
+        screen_width, screen_height = widget_screen_size(win)
+        width, height, min_width, min_height = modal_dimensions_for_viewport(
+            screen_width,
+            screen_height,
+            1200,
+            840,
+            min_width=960,
+            min_height=600,
+        )
+        center_window_safely(win, width, height)
+        set_minsize_safely(win, min_width, min_height)
         win.columnconfigure(0, weight=1)
         win.rowconfigure(1, weight=1)
 
@@ -4895,23 +4905,26 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
 
         footer = tk.Frame(panel, bg=CARD, highlightbackground=SOFT, highlightthickness=1)
         footer.pack(fill=tk.X, side=tk.BOTTOM, padx=16, pady=16)
-        self._status_chip(footer, f"{len(model_entries)} items en propuesta", "Info").pack(side=tk.LEFT, padx=12, pady=12)
+        footer.columnconfigure(0, weight=1)
+        self._status_chip(footer, f"{len(model_entries)} items en propuesta", "Info").grid(row=0, column=0, sticky="w", padx=12, pady=(10, 4))
+        footer_actions = tk.Frame(footer, bg=CARD)
+        footer_actions.grid(row=1, column=0, sticky="e", padx=12, pady=(4, 10))
         apply_button = self._button(
-            footer,
+            footer_actions,
             f"Aplicar {len(model_entries)} cambios de precio",
             primary=True,
             command=lambda: self._save_price_edit(apply_after_save=True),
         )
         apply_button.configure(state=tk.NORMAL if proposal_actions_enabled and not self._price_save_in_progress else tk.DISABLED)
-        apply_button.pack(side=tk.RIGHT, padx=(6, 12), pady=12)
+        apply_button.pack(side=tk.RIGHT, padx=(6, 0))
         save_button = self._button(
-            footer,
+            footer_actions,
             "Guardar borrador",
             command=lambda: self._save_price_edit(apply_after_save=False),
         )
         save_button.configure(state=tk.NORMAL if proposal_actions_enabled and not self._price_save_in_progress else tk.DISABLED)
-        save_button.pack(side=tk.RIGHT, padx=6, pady=12)
-        self._button(footer, "Cancelar", command=self._cancel_price_edit).pack(side=tk.RIGHT, padx=6, pady=12)
+        save_button.pack(side=tk.RIGHT, padx=6)
+        self._button(footer_actions, "Cancelar", command=self._cancel_price_edit).pack(side=tk.RIGHT, padx=6)
 
     def _refresh_price_edit_items(self, parent: tk.Frame, query: str = "", allow_empty: bool = True) -> None:
         query = (query or "").strip()
@@ -5564,14 +5577,22 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
 
         footer = tk.Frame(card, bg=CARD)
         footer.pack(fill=tk.X, padx=16, pady=(10, 16))
-        tk.Label(footer, text="Subida %", bg=CARD, fg=MUTED, font=("Segoe UI", 8, "bold")).pack(side=tk.LEFT, padx=(0, 6))
-        percent_entry = tk.Entry(footer, width=8, bg=CARD, fg=TEXT, relief=tk.SOLID, borderwidth=1, highlightbackground=LINE, highlightcolor=INDIGO, highlightthickness=1)
+        footer.columnconfigure(0, weight=1)
+        adjustment_row = tk.Frame(footer, bg=CARD)
+        adjustment_row.grid(row=0, column=0, sticky="ew")
+        tk.Label(adjustment_row, text="Subida %", bg=CARD, fg=MUTED, font=("Segoe UI", 8, "bold")).pack(side=tk.LEFT, padx=(0, 6))
+        percent_entry = tk.Entry(adjustment_row, width=8, bg=CARD, fg=TEXT, relief=tk.SOLID, borderwidth=1, highlightbackground=LINE, highlightcolor=INDIGO, highlightthickness=1)
         percent_entry.pack(side=tk.LEFT, ipady=7, padx=(0, 12))
-        tk.Label(footer, text="Valor", bg=CARD, fg=MUTED, font=("Segoe UI", 8, "bold")).pack(side=tk.LEFT, padx=(0, 6))
-        exact_entry = tk.Entry(footer, width=10, bg=CARD, fg=TEXT, relief=tk.SOLID, borderwidth=1, highlightbackground=LINE, highlightcolor=INDIGO, highlightthickness=1)
+        tk.Label(adjustment_row, text="Valor", bg=CARD, fg=MUTED, font=("Segoe UI", 8, "bold")).pack(side=tk.LEFT, padx=(0, 6))
+        exact_entry = tk.Entry(adjustment_row, width=10, bg=CARD, fg=TEXT, relief=tk.SOLID, borderwidth=1, highlightbackground=LINE, highlightcolor=INDIGO, highlightthickness=1)
         exact_entry.pack(side=tk.LEFT, ipady=7, padx=(0, 12))
-        tk.Label(footer, textvariable=selected_count_var, bg=CARD, fg=MUTED, font=("Segoe UI", 8, "bold")).pack(side=tk.LEFT, padx=(0, 12))
-        tk.Frame(footer, bg=CARD).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        tk.Label(adjustment_row, textvariable=selected_count_var, bg=CARD, fg=MUTED, font=("Segoe UI", 8, "bold")).pack(side=tk.LEFT, padx=(0, 12))
+        tk.Frame(adjustment_row, bg=CARD).pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        pagination_row = tk.Frame(footer, bg=CARD)
+        pagination_row.grid(row=1, column=0, sticky="w", pady=(8, 0))
+        action_row = tk.Frame(footer, bg=CARD)
+        action_row.grid(row=2, column=0, sticky="e", pady=(8, 0))
 
         def change_page(delta: int) -> None:
             self._price_change_candidate_page(page + delta)
@@ -5602,33 +5623,33 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 return
             self._open_price_bulk_add_preview(selected, percent_entry.get(), exact_entry.get())
 
-        previous_button = self._button(footer, "<", command=lambda: change_page(-1))
+        previous_button = self._button(pagination_row, "<", command=lambda: change_page(-1))
         previous_button.configure(state=tk.NORMAL if page > 0 else tk.DISABLED, disabledforeground="#CBD5E1")
         previous_button.pack(side=tk.LEFT, padx=(0, 4))
         tk.Label(
-            footer,
+            pagination_row,
             text=f"Pagina {page + 1} de {total_pages} ({total_results} candidatos)",
             bg=CARD,
             fg=MUTED,
             font=("Segoe UI", 8),
         ).pack(side=tk.LEFT, padx=(0, 4))
-        next_button = self._button(footer, ">", command=lambda: change_page(1))
+        next_button = self._button(pagination_row, ">", command=lambda: change_page(1))
         next_button.configure(state=tk.NORMAL if page + 1 < total_pages else tk.DISABLED, disabledforeground="#CBD5E1")
         next_button.pack(side=tk.LEFT, padx=(0, 12))
-        tk.Label(footer, text="Mostrar", bg=CARD, fg=MUTED, font=("Segoe UI", 8, "bold")).pack(side=tk.LEFT, padx=(0, 4))
+        tk.Label(pagination_row, text="Mostrar", bg=CARD, fg=MUTED, font=("Segoe UI", 8, "bold")).pack(side=tk.LEFT, padx=(0, 4))
         page_size_var = tk.StringVar(value=str(getattr(self, "_price_candidate_page_size", 50)))
-        page_size_picker = ttk.Combobox(footer, textvariable=page_size_var, values=(25, 50, 100), width=4, state="readonly")
+        page_size_picker = ttk.Combobox(pagination_row, textvariable=page_size_var, values=(25, 50, 100), width=4, state="readonly")
         page_size_picker.pack(side=tk.LEFT, padx=(0, 12))
         page_size_picker.bind("<<ComboboxSelected>>", lambda _event: self._price_set_candidate_page_size(page_size_var.get()))
 
         preview_button = self._button(
-            footer,
+            action_row,
             "Previsualizar seleccionados",
             command=preview_selected,
         )
         preview_button.configure(disabledforeground="#CBD5E1")
         preview_button.pack(side=tk.RIGHT, padx=(6, 0), ipadx=8)
-        add_button = self._button(footer, "Anadir seleccionados", primary=True, command=add_selected)
+        add_button = self._button(action_row, "Anadir seleccionados", primary=True, command=add_selected)
         add_button.configure(disabledforeground="#CBD5E1")
         add_button.pack(side=tk.RIGHT, padx=(6, 0))
         refresh_selection_controls()

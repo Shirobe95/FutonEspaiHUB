@@ -7,6 +7,7 @@ from futonhub.core.codes import is_inventory_pack_row
 from futonhub.core.config import load_settings
 from futonhub.ui.theme import C_BG, apply_theme
 from futonhub.ui.windowing import center_window
+from futonhub.ui.erp.responsive import center_window_safely, modal_dimensions_for_viewport, set_minsize_safely, widget_screen_size
 from futonhub.cloud.operational import (
     format_internal_inventory_preview,
     preview_internal_inventory_update,
@@ -26,8 +27,17 @@ class CloudInventoryBoardMixin:
 
         win = tk.Toplevel(self)
         win.title("Inventario interno Supabase")
-        center_window(win, 1380, 820)
-        win.minsize(1120, 720)
+        screen_width, screen_height = widget_screen_size(win)
+        width, height, min_width, min_height = modal_dimensions_for_viewport(
+            screen_width,
+            screen_height,
+            1380,
+            820,
+            min_width=960,
+            min_height=600,
+        )
+        center_window_safely(win, width, height)
+        set_minsize_safely(win, min_width, min_height)
         win.configure(bg=C_BG)
         apply_theme(win)
 

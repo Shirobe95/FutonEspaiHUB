@@ -11,6 +11,7 @@ from tkinter import ttk
 from typing import Any, Callable, Iterable, Mapping
 
 from futonhub.core.runtime_integrity import CHECKSUM_MODE_UTF8_TEXT_LF_V1, canonical_text_sha256
+from futonhub.ui.erp.responsive import catalog_filter_bar_layout
 
 
 FILTER_FIELDS = ("filter_family", "filter_group", "filter_size", "filter_gama")
@@ -469,6 +470,7 @@ def build_catalog_filter_bar(
     active_selection = selection
     combo_by_field: dict[str, ttk.Combobox] = {}
     value_var_by_field: dict[str, tk.StringVar] = {}
+    filter_hosts: list[tk.Frame] = []
 
     def update_dependent_options(updated: CatalogFilterSelection, changed_field: str) -> None:
         if options_for_selection is None:
@@ -488,7 +490,7 @@ def build_catalog_filter_bar(
 
     for index, field in enumerate(FILTER_FIELDS):
         host = tk.Frame(inner, bg=colors["card"])
-        host.grid(row=0, column=index, sticky="ew", padx=(0, 8))
+        filter_hosts.append(host)
         tk.Label(host, text=labels[field], bg=colors["card"], fg=colors["text"], font=("Segoe UI", 8, "bold")).pack(anchor=tk.W)
         current = getattr(selection, field)
         values = ["Todos", *(options.get(field) or [])]
@@ -500,7 +502,6 @@ def build_catalog_filter_bar(
         combo.bind("<<ComboboxSelected>>", lambda _event, field=field, value_var=value_var: selection_changed(field, value_var))
 
     search_host = tk.Frame(inner, bg=colors["card"])
-    search_host.grid(row=0, column=4, sticky="ew", padx=(2, 8))
     tk.Label(search_host, text="Buscar código o nombre", bg=colors["card"], fg=colors["text"], font=("Segoe UI", 8, "bold")).pack(anchor=tk.W)
     query_var = tk.StringVar(value=selection.query)
     query_entry = tk.Entry(
@@ -519,7 +520,53 @@ def build_catalog_filter_bar(
     query_entry.bind("<Return>", lambda _event: on_apply(active_selection.with_query(query_var.get())))
 
     button_host = tk.Frame(inner, bg=colors["card"])
-    button_host.grid(row=0, column=5, sticky="se", padx=(0, 0))
     button_factory(button_host, "Aplicar filtros", primary=True, command=lambda: on_apply(active_selection.with_query(query_var.get()))).pack(side=tk.LEFT, padx=(0, 6))
     button_factory(button_host, "Limpiar", command=on_clear).pack(side=tk.LEFT)
+
+    layout_state = {"key": None}
+
+    def apply_responsive_layout(width: int) -> None:
+        layout = catalog_filter_bar_layout(width)
+        key = (
+            layout.filter_columns,
+            layout.search_row,
+            layout.search_column,
+            layout.search_columnspan,
+            layout.button_row,
+            layout.button_column,
+            layout.button_columnspan,
+        )
+        if key == layout_state["key"]:
+            return
+        layout_state["key"] = key
+        for column in range(6):
+            inner.columnconfigure(column, weight=0)
+        for child in (*filter_hosts, search_host, button_host):
+            child.grid_forget()
+        for index, host in enumerate(filter_hosts):
+            row = index // layout.filter_columns
+            column = index % layout.filter_columns
+            inner.columnconfigure(column, weight=1)
+            host.grid(row=row, column=column, sticky="ew", padx=(0, 8), pady=(0, 8))
+        for column in range(layout.search_column, layout.search_column + layout.search_columnspan):
+            inner.columnconfigure(column, weight=2 if column == layout.search_column else 1)
+        search_host.grid(
+            row=layout.search_row,
+            column=layout.search_column,
+            columnspan=layout.search_columnspan,
+            sticky="ew",
+            padx=(0, 8),
+            pady=(0, 8),
+        )
+        button_host.grid(
+            row=layout.button_row,
+            column=layout.button_column,
+            columnspan=layout.button_columnspan,
+            sticky="e",
+            padx=(0, 0),
+            pady=(0, 8),
+        )
+
+    apply_responsive_layout(0)
+    inner.bind("<Configure>", lambda event: apply_responsive_layout(event.width))
     return card

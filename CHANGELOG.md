@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.5.0-rc.5 - 2026-08-13
+
+- Responsive global acotado para portatiles: ventana principal con minsize
+  menor, centrado/clamping contra viewport real y layout adaptable de filtros
+  jerarquicos.
+- Cambio de Precios: la seleccion de productos separa controles, paginacion y
+  acciones para que `Anadir seleccionados` siga visible/accesible en
+  resoluciones pequenas.
+- Inventario y ventanas auxiliares: modales principales ajustan tamano y minimo
+  al viewport sin cambiar reglas de negocio.
+- Distribucion: nuevo smoke estructural de runtime sin `auditoria/`, sin rutas
+  locales de desarrollo y con combinaciones de precio cargadas desde
+  `runtime_config`.
+- Sin cambios de precios, stock, WooCommerce, Supabase, catalogo comercial ni
+  Macao `0402014`.
+
 ## v0.5.0-rc.4 - 2026-08-11
 
 - Hotfix final de distribucion runtime para Cambio de Precios.

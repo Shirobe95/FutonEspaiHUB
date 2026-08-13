@@ -5,7 +5,7 @@ from tkinter import messagebox, simpledialog, ttk
 
 from futonhub.core.config import load_settings
 from futonhub.ui.theme import C_BG, apply_theme
-from futonhub.ui.windowing import center_window
+from futonhub.ui.erp.responsive import center_window_safely, modal_dimensions_for_viewport, set_minsize_safely, widget_screen_size
 from futonhub.cloud.operational import (
     create_real_price_proposal,
     format_existing_price_proposal_preview,
@@ -36,8 +36,17 @@ class CloudPriceBoardMixin:
 
         win = tk.Toplevel(self)
         win.title("Buscar producto / variacion")
-        center_window(win, 1050, 620)
-        win.minsize(900, 520)
+        screen_width, screen_height = widget_screen_size(win)
+        width, height, min_width, min_height = modal_dimensions_for_viewport(
+            screen_width,
+            screen_height,
+            1050,
+            620,
+            min_width=820,
+            min_height=500,
+        )
+        center_window_safely(win, width, height)
+        set_minsize_safely(win, min_width, min_height)
         win.configure(bg=C_BG)
         apply_theme(win)
 
@@ -253,8 +262,17 @@ class CloudPriceBoardMixin:
 
         win = tk.Toplevel(self)
         win.title("Propuestas de precio")
-        center_window(win, 1100, 650)
-        win.minsize(960, 560)
+        screen_width, screen_height = widget_screen_size(win)
+        width, height, min_width, min_height = modal_dimensions_for_viewport(
+            screen_width,
+            screen_height,
+            1100,
+            650,
+            min_width=860,
+            min_height=520,
+        )
+        center_window_safely(win, width, height)
+        set_minsize_safely(win, min_width, min_height)
         win.configure(bg=C_BG)
         apply_theme(win)
 
