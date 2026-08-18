@@ -1,0 +1,31 @@
+{
+  "schema": "futonhub.runtime.inventory_visibility_overrides.v1",
+  "source_cut": "AFK-WORKDAY-002",
+  "source_snapshot": "inventory visibility overrides approved by Futon Espai review",
+  "snapshot_relative_path": "inventory_visibility_overrides.csv",
+  "expected_count": 13,
+  "included_count": 10,
+  "excluded_count": 3,
+  "expected_effective_delta": 3,
+  "physical_runtime_count": 254,
+  "inventory_visible_count": 257,
+  "checksum_mode": "utf8_text_lf_v1",
+  "snapshot_sha256": "a083b85af21a3a93537b173530317a5dc38f1e7d61c5bd4b4b0651b138ab4cee",
+  "required_columns": [
+    "item_id",
+    "inventory_visible",
+    "visibility_reason",
+    "filter_family_override",
+    "filter_group_override",
+    "filter_size_override",
+    "filter_gama_override",
+    "name_override",
+    "family_override",
+    "business_usage",
+    "price_policy_override"
+  ],
+  "contains_prices": false,
+  "contains_stock": false,
+  "contains_credentials": false,
+  "fail_closed": true
+}

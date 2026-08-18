@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.5.0-rc.6 - 2026-08-18
+
+- Pedidos: se incorpora PED_CALC_005A; Cipta y Hemei usan la ruta import
+  USD/EUR, mientras Ekomat y Pascal conservan la formula general.
+- Catalogo: correcciones confirmadas de identidad/nombre, Toppers como familia
+  propia, `0619008` preservando `item_id=619011`, y Macao operativo en
+  `0302009`.
+- Inventario: nuevo contrato runtime fail-closed de visibilidad para incluir
+  solo seis packs comerciales aprobados y excluir tres Duo Latex historicos.
+- Cambio de Precios: la visibilidad extra de Inventario no amplía por si sola
+  la elegibilidad de precios; componentes de proveedor quedan fuera de
+  propagacion automatica.
+- Biblioteca de Formulas: filtro secundario por proveedor en Pedidos sin
+  duplicar formulas.
+
 ## v0.5.0-rc.5 - 2026-08-13
 
 - Responsive global acotado para portatiles: ventana principal con minsize

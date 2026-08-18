@@ -36,6 +36,7 @@ class FormulaRecord:
     module: str
     source_path: str
     source_symbol: str
+    providers: tuple[str, ...] = ()
     conditions: str = "Validaciones y casos límite definidos por el método fuente."
     notes: str = ""
 
@@ -55,6 +56,7 @@ def _formula(
     status: str = "ACTIVA",
     conditions: str = "Validaciones y casos límite definidos por el método fuente.",
     notes: str = "",
+    providers: tuple[str, ...] = (),
 ) -> FormulaRecord:
     return FormulaRecord(
         key=key,
@@ -70,6 +72,7 @@ def _formula(
         source_symbol=source_symbol,
         conditions=conditions,
         notes=notes,
+        providers=providers,
     )
 
 
@@ -92,6 +95,7 @@ FORMULA_LIBRARY: tuple[FormulaRecord, ...] = (
         PROTOTYPE_SOURCE,
         "_calculate_supplier_order_in_memory",
         purpose="Obtiene el volumen total de una linea cuando el pedido aporta M3 por unidad.",
+        providers=("Comunes",),
     ),
     _formula(
         "pedido_coste_total_linea",
@@ -104,6 +108,7 @@ FORMULA_LIBRARY: tuple[FormulaRecord, ...] = (
         PROTOTYPE_SOURCE,
         "_calculate_supplier_order_in_memory",
         purpose="Calcula el coste total de una linea ya validada.",
+        providers=("Comunes",),
     ),
     _formula(
         "transporte_coste_m3",
@@ -117,6 +122,7 @@ FORMULA_LIBRARY: tuple[FormulaRecord, ...] = (
         "_calculate_supplier_order_in_memory",
         purpose="Reparte el transporte total del pedido sobre el volumen total.",
         notes="El calculo se bloquea cuando el M3 total no es positivo.",
+        providers=("Ekomat", "Pascal"),
     ),
     _formula(
         "transporte_coste_producto",
@@ -129,6 +135,7 @@ FORMULA_LIBRARY: tuple[FormulaRecord, ...] = (
         PROTOTYPE_SOURCE,
         "_calculate_supplier_order_in_memory",
         purpose="Asigna a cada unidad el transporte correspondiente a su volumen.",
+        providers=("Ekomat", "Pascal"),
     ),
     _formula(
         "descarga_coste_producto",
@@ -142,18 +149,20 @@ FORMULA_LIBRARY: tuple[FormulaRecord, ...] = (
         "_calculate_supplier_order_in_memory",
         purpose="Reparte la descarga solo entre lineas marcadas para participar en ese reparto.",
         notes="Las lineas excluidas reciben descarga_unidad = 0.",
+        providers=("Ekomat", "Pascal"),
     ),
     _formula(
         "heimei_tasa_cambio",
         "Pedidos",
-        "Tasa de cambio Heimei",
+        "Tasa de cambio Hemei",
         "tasa_cambio = round(precio_dolares / precio_euros_pagados, 6)",
         ("precio_dolares", "precio_euros_pagados"),
         "USD/EUR",
-        "Pedidos Heimei / Tatamis",
+        "Pedidos import USD/EUR (Hemei/Cipta)",
         PROTOTYPE_SOURCE,
         "_calculate_supplier_order_in_memory",
-        purpose="Deriva la tasa aplicada a los precios de articulo del pedido Heimei.",
+        purpose="Deriva la tasa aplicada a los precios de articulo del pedido Hemei.",
+        providers=("Hemei", "Cipta"),
     ),
     _formula(
         "heimei_importe_transporte",
@@ -162,34 +171,37 @@ FORMULA_LIBRARY: tuple[FormulaRecord, ...] = (
         "importe_transporte = factura_transporte + derechos_aranceles",
         ("factura_transporte", "derechos_aranceles"),
         "EUR",
-        "Pedidos Heimei / Tatamis",
+        "Pedidos import USD/EUR (Hemei/Cipta)",
         PROTOTYPE_SOURCE,
         "_calculate_supplier_order_in_memory",
         purpose="Agrupa los dos importes que alimentan el porcentaje de transporte.",
+        providers=("Hemei", "Cipta"),
     ),
     _formula(
         "heimei_pc_transporte",
         "Pedidos",
-        "Porcentaje de transporte Heimei",
+        "Porcentaje de transporte Hemei",
         "pc_transporte = round((importe_transporte / precio_euros_pagados) * 100, 2)",
         ("importe_transporte", "precio_euros_pagados"),
         "%",
-        "Pedidos Heimei / Tatamis",
+        "Pedidos import USD/EUR (Hemei/Cipta)",
         PROTOTYPE_SOURCE,
         "_calculate_supplier_order_in_memory",
         purpose="Expresa transporte y aranceles como porcentaje de la factura pagada.",
+        providers=("Hemei", "Cipta"),
     ),
     _formula(
         "heimei_pc_descarga",
         "Pedidos",
-        "Porcentaje de descarga Heimei",
+        "Porcentaje de descarga Hemei",
         "pc_descarga = round((importe_descarga * 100) / precio_euros_pagados, 2)",
         ("importe_descarga", "precio_euros_pagados"),
         "%",
-        "Pedidos Heimei / Tatamis",
+        "Pedidos import USD/EUR (Hemei/Cipta)",
         PROTOTYPE_SOURCE,
         "_calculate_supplier_order_in_memory",
         purpose="Convierte el importe fijo de descarga en porcentaje de la factura.",
+        providers=("Hemei", "Cipta"),
     ),
     _formula(
         "iva_recargo_equivalencia",
@@ -203,6 +215,7 @@ FORMULA_LIBRARY: tuple[FormulaRecord, ...] = (
         "_calculate_supplier_order_in_memory",
         purpose="Calcula el importe fiscal agregado al precio de proveedor.",
         notes="La configuracion 26,2 se normaliza a factor 0,262 antes de usarla.",
+        providers=("Ekomat", "Pascal"),
     ),
     _formula(
         "precio_compra_iva_re",
@@ -215,6 +228,7 @@ FORMULA_LIBRARY: tuple[FormulaRecord, ...] = (
         PROTOTYPE_SOURCE,
         "_calculate_supplier_order_in_memory",
         purpose="Suma al precio de proveedor el importe fiscal calculado.",
+        providers=("Ekomat", "Pascal"),
     ),
     _formula(
         "coste_almacenaje_iva",
@@ -227,6 +241,7 @@ FORMULA_LIBRARY: tuple[FormulaRecord, ...] = (
         PROTOTYPE_SOURCE,
         "_calculate_supplier_order_in_memory",
         purpose="Valora el almacenaje previsto e incorpora el multiplicador IVA 1,21.",
+        providers=("Comunes",),
     ),
     _formula(
         "coste_picking_iva",
@@ -239,6 +254,7 @@ FORMULA_LIBRARY: tuple[FormulaRecord, ...] = (
         PROTOTYPE_SOURCE,
         "_calculate_supplier_order_in_memory",
         purpose="Calcula el picking segun bultos e incorpora el multiplicador IVA 1,21.",
+        providers=("Comunes",),
     ),
     _formula(
         "coste_descarga_general",
@@ -251,6 +267,7 @@ FORMULA_LIBRARY: tuple[FormulaRecord, ...] = (
         PROTOTYPE_SOURCE,
         "_calculate_supplier_order_in_memory",
         purpose="Agrupa compra fiscalizada, transporte y descarga antes de costes operativos.",
+        providers=("Ekomat", "Pascal"),
     ),
     _formula(
         "coste_final_general",
@@ -262,32 +279,35 @@ FORMULA_LIBRARY: tuple[FormulaRecord, ...] = (
         "Pedidos generales",
         PROTOTYPE_SOURCE,
         "_calculate_supplier_order_in_memory",
-        purpose="Obtiene el coste final unitario de Ekomat, Pascal y Cipta.",
+        purpose="Obtiene el coste final unitario de Ekomat y Pascal.",
         notes=f"Formula espejo verificada en {LEGACY_ORDER_SOURCE}: calcular_coste_unitario_pedido.",
+        providers=("Ekomat", "Pascal"),
     ),
     _formula(
         "heimei_pc_varios",
         "Pedidos",
-        "Porcentaje de varios Heimei",
+        "Porcentaje de varios Hemei",
         "pc_varios = round((importe_varios / precio_euros_pagados) * 100, 2)",
         ("importe_varios", "precio_euros_pagados"),
         "%",
-        "Pedidos Heimei / Tatamis",
+        "Pedidos import USD/EUR (Hemei/Cipta)",
         PROTOTYPE_SOURCE,
         "_calculate_supplier_order_in_memory",
         purpose="Convierte el importe fijo de varios en porcentaje de la factura.",
+        providers=("Hemei", "Cipta"),
     ),
     _formula(
         "heimei_pc_suma",
         "Pedidos",
-        "Porcentaje total de gastos Heimei",
+        "Porcentaje total de gastos Hemei",
         "pc_suma = round(pc_transporte + pc_descarga + pc_financiacion + pc_manipulacion + pc_varios, 2)",
         ("pc_transporte", "pc_descarga", "pc_financiacion", "pc_manipulacion", "pc_varios"),
         "%",
-        "Pedidos Heimei / Tatamis",
+        "Pedidos import USD/EUR (Hemei/Cipta)",
         PROTOTYPE_SOURCE,
         "_calculate_supplier_order_in_memory",
         purpose="Consolida los porcentajes aplicables al precio del articulo.",
+        providers=("Hemei", "Cipta"),
     ),
     _formula(
         "heimei_precio_articulo_eur",
@@ -296,47 +316,51 @@ FORMULA_LIBRARY: tuple[FormulaRecord, ...] = (
         "precio_articulo_eur = round(precio_articulo_usd / tasa_cambio, 2)",
         ("precio_articulo_usd", "tasa_cambio"),
         "EUR/unidad",
-        "Pedidos Heimei / Tatamis",
+        "Pedidos import USD/EUR (Hemei/Cipta)",
         PROTOTYPE_SOURCE,
         "_calculate_supplier_order_in_memory",
         purpose="Convierte el precio de proveedor del articulo a euros.",
+        providers=("Hemei", "Cipta"),
     ),
     _formula(
         "heimei_gastos_aplicables",
         "Pedidos",
-        "Gastos aplicables Heimei",
+        "Gastos aplicables Hemei",
         "gastos = round(precio_articulo_eur * pc_suma / 100, 2)",
         ("precio_articulo_eur", "pc_suma"),
         "EUR/unidad",
-        "Pedidos Heimei / Tatamis",
+        "Pedidos import USD/EUR (Hemei/Cipta)",
         PROTOTYPE_SOURCE,
         "_calculate_supplier_order_in_memory",
         purpose="Aplica el porcentaje consolidado de gastos al articulo.",
+        providers=("Hemei", "Cipta"),
     ),
     _formula(
         "heimei_coste_sin_almacenaje",
         "Pedidos",
-        "Coste Heimei antes de almacenaje",
+        "Coste Hemei antes de almacenaje",
         "coste_sin_almacenaje = round(precio_articulo_eur + gastos, 2)",
         ("precio_articulo_eur", "gastos"),
         "EUR/unidad",
-        "Pedidos Heimei / Tatamis",
+        "Pedidos import USD/EUR (Hemei/Cipta)",
         PROTOTYPE_SOURCE,
         "_calculate_supplier_order_in_memory",
         purpose="Suma precio convertido y gastos antes de almacenaje y picking.",
+        providers=("Hemei", "Cipta"),
     ),
     _formula(
         "heimei_coste_final",
         "Pedidos",
-        "Coste final unitario Heimei",
+        "Coste final unitario Hemei",
         "coste_final = round(coste_sin_almacenaje + almacenaje_iva + picking_iva, 2)",
         ("coste_sin_almacenaje", "almacenaje_iva", "picking_iva"),
         "EUR/unidad",
-        "Pedidos Heimei / Tatamis",
+        "Pedidos import USD/EUR (Hemei/Cipta)",
         PROTOTYPE_SOURCE,
         "_calculate_supplier_order_in_memory",
-        purpose="Obtiene el coste final unitario de la formula Heimei/Tatamis.",
+        purpose="Obtiene el coste final unitario de la formula import USD/EUR usada por Hemei y Cipta.",
         notes=f"Formula espejo verificada en {LEGACY_ORDER_SOURCE}: calcular_coste_unitario_tatamis_pedido.",
+        providers=("Hemei", "Cipta"),
     ),
     _formula(
         "pvp_margen_venta",
@@ -351,6 +375,7 @@ FORMULA_LIBRARY: tuple[FormulaRecord, ...] = (
         purpose="Calcula el P.V.P. con margen sobre precio de venta, redondeado a 0,01 EUR con ROUND_HALF_UP.",
         conditions="coste_base > 0 y margen_percent < 100.",
         notes="El margen debe ser menor que 100; el coste base no positivo devuelve 0,00.",
+        providers=("Comunes",),
     ),
     _formula(
         "margen_desde_pvp",
@@ -365,6 +390,7 @@ FORMULA_LIBRARY: tuple[FormulaRecord, ...] = (
         purpose="Recupera el margen cuando el usuario aporta un P.V.P. unitario.",
         conditions="coste_base >= 0 y pvp_unitario > 0.",
         notes="Redondeo a 0,01 con ROUND_HALF_UP; P.V.P. debe ser positivo.",
+        providers=("Comunes",),
     ),
     _formula(
         "pvp_total_linea",
@@ -377,6 +403,7 @@ FORMULA_LIBRARY: tuple[FormulaRecord, ...] = (
         PROTOTYPE_SOURCE,
         "_calculate_supplier_order_in_memory",
         purpose="Extiende el P.V.P. unitario a la cantidad de la linea.",
+        providers=("Comunes",),
     ),
     _formula(
         "inventario_coste_ponderado",
@@ -485,10 +512,39 @@ FORMULA_CATEGORIES = (
 )
 
 
-def formula_records(category: str = "Todas") -> tuple[FormulaRecord, ...]:
+FORMULA_PROVIDER_FILTERS = (
+    "Todos",
+    "Comunes",
+    "Ekomat",
+    "Pascal",
+    "Hemei",
+    "Cipta",
+)
+
+
+def normalize_formula_provider(value: str) -> str:
+    text = str(value or "").strip()
+    return "Hemei" if text.casefold() == "heimei" else text
+
+
+def _formula_matches_provider(record: FormulaRecord, provider: str) -> bool:
+    normalized = normalize_formula_provider(provider)
+    if normalized in {"", "Todos"}:
+        return True
+    providers = tuple(normalize_formula_provider(value) for value in record.providers)
+    if normalized == "Comunes":
+        return "Comunes" in providers
+    return normalized in providers or "Comunes" in providers
+
+
+def formula_records(category: str = "Todas", provider: str = "Todos") -> tuple[FormulaRecord, ...]:
     if category == "Todas":
-        return FORMULA_LIBRARY
-    return tuple(record for record in FORMULA_LIBRARY if record.category == category)
+        records = FORMULA_LIBRARY
+    else:
+        records = tuple(record for record in FORMULA_LIBRARY if record.category == category)
+    if category == "Pedidos":
+        records = tuple(record for record in records if _formula_matches_provider(record, provider))
+    return records
 
 
 def formula_summary(records: Iterable[FormulaRecord] = FORMULA_LIBRARY) -> dict[str, int]:
@@ -595,6 +651,7 @@ def render_formula_library_html(records: Iterable[FormulaRecord] = FORMULA_LIBRA
 
 class ErpFormulaLibraryMixin:
     _formula_library_category = "Todas"
+    _formula_library_provider = "Todos"
 
     def _build_formula_library(self, parent: tk.Frame) -> None:
         self._page_header(
@@ -617,6 +674,8 @@ class ErpFormulaLibraryMixin:
 
         categories = tk.Frame(parent, bg=BG)
         categories.pack(fill=tk.X, pady=(0, 10))
+        providers = tk.Frame(parent, bg=BG)
+        providers.pack(fill=tk.X, pady=(0, 10))
 
         canvas = tk.Canvas(parent, bg=BG, highlightthickness=0)
         scrollbar = tk.Scrollbar(parent, orient=tk.VERTICAL, command=canvas.yview)
@@ -629,9 +688,36 @@ class ErpFormulaLibraryMixin:
 
         def render(category: str) -> None:
             self._formula_library_category = category
+            if category != "Pedidos":
+                self._formula_library_provider = "Todos"
+            provider = normalize_formula_provider(getattr(self, "_formula_library_provider", "Todos"))
             for child in body.winfo_children():
                 child.destroy()
-            for record in formula_records(category):
+            for child in providers.winfo_children():
+                child.destroy()
+            if category == "Pedidos":
+                tk.Label(
+                    providers,
+                    text="Proveedor",
+                    bg=BG,
+                    fg=MUTED,
+                    font=("Segoe UI", 9, "bold"),
+                ).pack(side=tk.LEFT, padx=(0, 8))
+                for value in FORMULA_PROVIDER_FILTERS:
+                    selected = normalize_formula_provider(value) == provider
+                    self._button(
+                        providers,
+                        value,
+                        command=lambda selected_provider=value: set_provider(selected_provider),
+                    ).pack(side=tk.LEFT, padx=(0, 7))
+                    button = providers.winfo_children()[-1]
+                    button.configure(
+                        bg=INDIGO if selected else CARD,
+                        fg="white" if selected else "#334155",
+                        activebackground="#4338CA" if selected else SOFT,
+                        activeforeground="white" if selected else TEXT,
+                    )
+            for record in formula_records(category, provider):
                 self._formula_library_card(body, record).pack(fill=tk.X, pady=(0, 10))
             for button in categories.winfo_children():
                 selected = str(button.cget("text")) == category
@@ -642,6 +728,10 @@ class ErpFormulaLibraryMixin:
                     activeforeground="white" if selected else TEXT,
                 )
             canvas.yview_moveto(0)
+
+        def set_provider(provider: str) -> None:
+            self._formula_library_provider = normalize_formula_provider(provider)
+            render("Pedidos")
 
         for category in FORMULA_CATEGORIES:
             self._button(categories, category, command=lambda value=category: render(value)).pack(side=tk.LEFT, padx=(0, 7))

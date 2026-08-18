@@ -13,9 +13,11 @@ sys.path.insert(0, str(ROOT / "src"))
 from futonhub.ui.erp.formula_library import (  # noqa: E402
     FORMULA_CATEGORIES,
     FORMULA_LIBRARY,
+    FORMULA_PROVIDER_FILTERS,
     FormulaRecord,
     formula_records,
     formula_summary,
+    normalize_formula_provider,
     render_formula_library_html,
 )
 
@@ -56,6 +58,31 @@ class FormulaLibraryContractTests(unittest.TestCase):
         self.assertEqual(summary["total"], len(FORMULA_LIBRARY))
         self.assertEqual(summary["total"], summary["active"] + summary["auxiliary"] + summary["future"])
         self.assertTrue(all(record.category == "Inventario" for record in formula_records("Inventario")))
+
+    def test_supplier_order_formulas_are_filterable_by_provider_without_duplication(self) -> None:
+        self.assertEqual(FORMULA_PROVIDER_FILTERS, ("Todos", "Comunes", "Ekomat", "Pascal", "Hemei", "Cipta"))
+
+        pedidos = formula_records("Pedidos")
+        self.assertTrue(pedidos)
+        self.assertTrue(all(record.providers for record in pedidos))
+        self.assertEqual(len({record.key for record in pedidos}), len(pedidos))
+
+        comunes = {record.key for record in formula_records("Pedidos", "Comunes")}
+        ekomat = {record.key for record in formula_records("Pedidos", "Ekomat")}
+        pascal = {record.key for record in formula_records("Pedidos", "Pascal")}
+        hemei = {record.key for record in formula_records("Pedidos", "Hemei")}
+        cipta = {record.key for record in formula_records("Pedidos", "Cipta")}
+        heimei_alias = {record.key for record in formula_records("Pedidos", "Heimei")}
+
+        self.assertIn("pvp_margen_venta", comunes)
+        self.assertIn("coste_final_general", ekomat)
+        self.assertIn("coste_final_general", pascal)
+        self.assertIn("heimei_coste_final", hemei)
+        self.assertIn("heimei_coste_final", cipta)
+        self.assertNotIn("heimei_coste_final", ekomat)
+        self.assertNotIn("coste_final_general", hemei)
+        self.assertEqual(heimei_alias, hemei)
+        self.assertEqual(normalize_formula_provider("Heimei"), "Hemei")
 
     def test_erp_view_contains_no_editable_text_controls_or_write_services(self) -> None:
         source = (ROOT / "src" / "futonhub" / "ui" / "erp" / "formula_library.py").read_text(encoding="utf-8")

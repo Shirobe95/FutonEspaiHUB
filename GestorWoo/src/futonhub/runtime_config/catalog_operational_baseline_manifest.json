@@ -7,7 +7,7 @@
   "operational_count": 188,
   "quarantined_count": 66,
   "checksum_mode": "utf8_text_lf_v1",
-  "snapshot_sha256": "72754ea170964af5d1af28b544ef65e3d3ffc70fc58e848b1143926a9f39aed2",
+  "snapshot_sha256": "22d701181d91999cb310e7036a5c27953571186a64c84472c6cb4335ca5334b1",
   "required_columns": [
     "item_id",
     "operational_status",

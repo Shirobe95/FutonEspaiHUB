@@ -6,6 +6,7 @@ from tkinter import ttk
 
 from futonhub.cloud.services.inventory import list_cloud_inventory_items_by_ids
 from futonhub.services.catalog_operational_baseline import CatalogOperationalBaseline, CatalogOperationalBaselineError
+from futonhub.services.inventory_visibility import InventoryVisibilityConfigurationError, InventoryVisibilityOverrides
 from futonhub.ui.erp.catalog_filters import (
     CatalogFilterConfigurationError,
     CatalogFilterSelection,
@@ -171,6 +172,14 @@ class ErpInventoryListMixin:
         self._inventory_catalog_snapshot_cache = snapshot
         return snapshot
 
+    def _inventory_visibility_overrides(self) -> InventoryVisibilityOverrides:
+        visibility = getattr(self, "_inventory_visibility_overrides_cache", None)
+        if isinstance(visibility, InventoryVisibilityOverrides):
+            return visibility
+        visibility = InventoryVisibilityOverrides.load()
+        self._inventory_visibility_overrides_cache = visibility
+        return visibility
+
     def _inventory_catalog_filter_selection_changed(self, selection: CatalogFilterSelection) -> None:
         self._inventory_catalog_filter_selection_state = selection
         if self._current_key == "inventario":
@@ -225,7 +234,8 @@ class ErpInventoryListMixin:
             return
         try:
             snapshot = self._inventory_catalog_snapshot()
-        except CatalogFilterConfigurationError as exc:
+            visibility = self._inventory_visibility_overrides()
+        except (CatalogFilterConfigurationError, InventoryVisibilityConfigurationError) as exc:
             self._inventory_catalog_source_rows = []
             self._finish_inventory_refresh([], f"No se puede cargar el catalogo fisico: {exc}")
             return
@@ -240,15 +250,16 @@ class ErpInventoryListMixin:
 
         def worker() -> None:
             try:
-                rows = list_cloud_inventory_items_by_ids(self._cloud_session, snapshot.item_ids)
+                requested_item_ids = visibility.requested_item_ids(snapshot.item_ids)
+                rows = list_cloud_inventory_items_by_ids(self._cloud_session, requested_item_ids)
             except Exception as exc:
                 self.after(0, lambda exc=exc: self._finish_inventory_refresh([], f"No se pudo leer inventario fisico Supabase: {exc}", []))
                 return
             try:
-                eligible_rows = snapshot.eligible_live_rows(rows)
+                eligible_rows = visibility.apply_to_live_rows(snapshot, rows)
                 eligible_rows = self._inventory_operational_baseline().enrich_rows(eligible_rows)
                 items = [self._inventory_item_from_cloud_row(row) for row in eligible_rows]
-                missing_count = len(snapshot.item_ids) - len(eligible_rows)
+                missing_count = visibility.expected_visible_count(len(snapshot.item_ids)) - len(eligible_rows)
                 warning = ""
                 if missing_count:
                     warning = f"Aviso de catalogo: {missing_count} registros no cumplen el contrato operativo y no se muestran."

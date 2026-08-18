@@ -13,6 +13,7 @@ from futonhub.ui.erp.catalog_filters import CatalogFilterSelection, PhysicalCata
 from futonhub.ui.erp.inventory_list import ErpInventoryListMixin  # noqa: E402
 from futonhub.ui.erp.shared_ui import InventoryItem  # noqa: E402
 from futonhub.services.catalog_operational_baseline import CatalogOperationalBaselineError  # noqa: E402
+from futonhub.services.inventory_visibility import InventoryVisibilityOverrides  # noqa: E402
 
 
 class Parent:
@@ -100,7 +101,25 @@ class InventoryListRefreshTests(unittest.TestCase):
     def test_refresh_reads_allowlisted_ids_and_excludes_nonphysical_live_rows(self) -> None:
         app = InventoryListCollector(Session())
         snapshot = PhysicalCatalogSnapshot.load()
+        visibility = InventoryVisibilityOverrides.load()
         eligible_rows = [dict(row) for row in snapshot.rows_by_item_id.values()]
+        approved_pack_rows = [
+            {
+                "item_id": item_id,
+                "heca_reference": item_id,
+                "hub_item_code": item_id,
+                "name": f"Pack aprobado {item_id}",
+                "family": "Futones",
+                "filter_family": "Futones",
+                "filter_group": "",
+                "filter_size": "",
+                "filter_gama": "",
+                "item_record_type": "simple",
+                "is_pack": True,
+            }
+            for item_id in visibility.included_item_ids
+            if item_id not in snapshot.rows_by_item_id
+        ]
         eligible = eligible_rows[0]
         pack = {**eligible, "is_pack": True}
         incomplete = {**eligible, "filter_group": ""}
@@ -109,14 +128,16 @@ class InventoryListRefreshTests(unittest.TestCase):
             patch("futonhub.ui.erp.inventory_list.threading.Thread", ImmediateThread),
             patch(
                 "futonhub.ui.erp.inventory_list.list_cloud_inventory_items_by_ids",
-                return_value=[pack, incomplete, unlisted, *eligible_rows],
+                return_value=[pack, incomplete, unlisted, *eligible_rows, *approved_pack_rows],
             ) as list_items,
         ):
             app._refresh_inventory(Parent(), "", allow_empty=True)
         requested_ids = list_items.call_args.args[1]
-        self.assertEqual(len(requested_ids), snapshot.expected_count)
-        self.assertEqual(len(app._inventory_items), snapshot.expected_count)
-        self.assertEqual(len(app._inventory_catalog_source_rows), snapshot.expected_count)
+        self.assertEqual(len(requested_ids), len(set(snapshot.item_ids).union(visibility.included_item_ids)))
+        self.assertEqual(len(app._inventory_items), 257)
+        self.assertEqual(len(app._inventory_catalog_source_rows), 257)
+        self.assertNotIn("78009", {str(row["item_id"]) for row in app._inventory_catalog_source_rows})
+        self.assertIn("1020007", {str(row["item_id"]) for row in app._inventory_catalog_source_rows})
         self.assertEqual(app._inventory_error, "")
 
     def test_runtime_baseline_failure_is_not_reported_as_supabase_failure(self) -> None:

@@ -528,6 +528,31 @@ EXPORT_RECORDS = [
 
 
 class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpInventoryEditMixin, ErpInventoryDetailMixin, ErpInventoryListMixin, ErpFormulaLibraryMixin, ErpDashboardMixin, ErpShellNavigationMixin, ErpSharedUiMixin, tk.Tk):
+    SUPPLIER_ORDER_CALC_GENERAL = "general"
+    SUPPLIER_ORDER_CALC_IMPORT_USD_EUR = "import_usd_eur"
+
+    @classmethod
+    def _supplier_order_calculation_mode(cls, provider: str | None) -> str:
+        provider_key = cls._normalize_supplier_key(provider)
+        if provider_key in {"hemei", "heimei", "cipta"}:
+            return cls.SUPPLIER_ORDER_CALC_IMPORT_USD_EUR
+        return cls.SUPPLIER_ORDER_CALC_GENERAL
+
+    @staticmethod
+    def _normalize_supplier_key(provider: str | None) -> str:
+        text = str(provider or "").strip().lower()
+        replacements = str.maketrans({"á": "a", "à": "a", "ä": "a", "é": "e", "è": "e", "ë": "e", "í": "i", "ï": "i", "ó": "o", "ö": "o", "ú": "u", "ü": "u"})
+        return re.sub(r"[^a-z0-9]+", "", text.translate(replacements))
+
+    @classmethod
+    def _supplier_order_requires_import_inputs(cls, provider: str | None) -> bool:
+        return cls._supplier_order_calculation_mode(provider) == cls.SUPPLIER_ORDER_CALC_IMPORT_USD_EUR
+
+    @staticmethod
+    def _supplier_order_display_provider(provider: str | None) -> str:
+        text = str(provider or "").strip()
+        return text or "este proveedor"
+
     def __init__(self) -> None:
         super().__init__()
         self.title("FutonHUB - UI ERP Prototype")
@@ -8243,6 +8268,12 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 m3_und = self._m3_from_measure_text(measure)
             if m3_total <= 0 and m3_und > 0:
                 m3_total = round(m3_und * qty, 6)
+            if provider_key.startswith("cipta"):
+                component_text = self._normalize_search_text(name)
+                if m3_und <= 0 and m3_total <= 0:
+                    continue
+                if any(token in component_text for token in ("bed leg", "leg", "slat", "slats", "lamas", "patas")):
+                    continue
             product = " - ".join(x for x in (name, measure) if x) or str(ref)
             raw = {
                 "referencia": str(ref).strip(),
@@ -8310,6 +8341,32 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         if not items:
             raise ValueError("No se encontraron lineas de pedido en el PDF. Usa Excel o revisa el formato del PDF.")
         return tuple(items), raw_lines
+
+    def _supplier_order_input_fields(
+        self,
+        provider: str,
+        order_inputs: dict[str, Any],
+        order: SupplierOrder | None = None,
+    ) -> list[tuple[str, str]]:
+        base_order_name = (order_inputs.get("Nombre del pedido") or order.order_id) if order else f"PED-{provider[:3].upper()}-BORRADOR"
+        base_order_date = (order_inputs.get("Fecha") or order.date) if order else ""
+        field_data = [
+            ("Nombre del pedido", str(base_order_name)),
+            ("Fecha", str(base_order_date)),
+            ("Margen de Venta %", str(order_inputs.get("Margen de Venta %") or order_inputs.get("Rentabilidad %") or "")),
+        ]
+        if self._supplier_order_requires_import_inputs(provider):
+            field_data.extend(
+                [
+                    ("Precio en Dolares", str(order_inputs.get("Precio en Dolares") or "")),
+                    ("Precio pagado en Euros", str(order_inputs.get("Precio pagado en Euros") or "")),
+                    ("Factura transporte", str(order_inputs.get("Factura transporte") or "")),
+                    ("Derechos aranceles", str(order_inputs.get("Derechos aranceles") or "")),
+                ]
+            )
+        else:
+            field_data.append(("Coste transporte + IVA", str(order_inputs.get("Coste transporte + IVA") or "")))
+        return field_data
 
     def _open_order_calc_flow(self, provider: str, order: SupplierOrder | None = None) -> None:
         self._supplier_order_runtime_fingerprint()
@@ -8384,23 +8441,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         fields.pack(fill=tk.X)
         for column in range(2):
             fields.columnconfigure(column, weight=1)
-        is_heimei = provider.lower().startswith("hei")
-        field_data = [
-            ("Nombre del pedido", str(order_inputs.get("Nombre del pedido") or order.order_id if order else f"PED-{provider[:3].upper()}-BORRADOR")),
-            ("Fecha", str(order_inputs.get("Fecha") or order.date if order else "")),
-            ("Margen de Venta %", str(order_inputs.get("Margen de Venta %") or order_inputs.get("Rentabilidad %") or "")),
-        ]
-        if is_heimei:
-            field_data.extend(
-                [
-                    ("Precio en Dolares", str(order_inputs.get("Precio en Dolares") or "")),
-                    ("Precio pagado en Euros", str(order_inputs.get("Precio pagado en Euros") or "")),
-                    ("Factura transporte", str(order_inputs.get("Factura transporte") or "")),
-                    ("Derechos aranceles", str(order_inputs.get("Derechos aranceles") or "")),
-                ]
-            )
-        else:
-            field_data.append(("Coste transporte + IVA", str(order_inputs.get("Coste transporte + IVA") or "")))
+        field_data = self._supplier_order_input_fields(provider, order_inputs, order)
         order_entries: dict[str, tk.Entry] = {}
         for index, (label, value) in enumerate(field_data):
             field_box = self._input_box(fields, label, value)
@@ -9114,11 +9155,11 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
     def _calculate_supplier_order_in_memory(self, provider: str, values: dict[str, str], items: tuple[OrderItem, ...], raw_lines: list[dict[str, Any]]) -> tuple[tuple[OrderItem, ...], list[dict[str, Any]], dict[str, Any]]:
         """Calcula el pedido en memoria usando formulas legacy de coste_pedido.py.
 
-        Formula general Ekomat/Pascal/Cipta = calcular_coste_unitario_pedido.
-        Formula Heimei/Tatamis = calcular_coste_unitario_tatamis_pedido.
+        Formula general Ekomat/Pascal = calcular_coste_unitario_pedido.
+        Formula import_usd_eur Hemei/Heimei/Cipta = calcular_coste_unitario_tatamis_pedido.
         """
-        provider_key = str(provider or "").strip().lower()
-        is_heimei = provider_key.startswith("hei")
+        calculation_mode = self._supplier_order_calculation_mode(provider)
+        uses_import_formula = calculation_mode == self.SUPPLIER_ORDER_CALC_IMPORT_USD_EUR
         items = self._fill_supplier_prices_for_order_items(provider, items)
         raw_lines = [
             item.raw.get("source_row") if isinstance(getattr(item, "raw", None), dict) and isinstance(item.raw.get("source_row"), dict) else {}
@@ -9136,13 +9177,13 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             if self._order_line_counts_for_download(item, raw_lines[index] if index < len(raw_lines) else None)
         )
 
-        if is_heimei:
+        if uses_import_formula:
             precio_dolares = self._money_float(values.get("Precio en Dolares"))
             precio_euros = self._money_float(values.get("Precio pagado en Euros"))
             factura_transporte = self._money_float(values.get("Factura transporte"))
             derechos_aranceles = self._money_float(values.get("Derechos aranceles"))
             if precio_dolares <= 0 or precio_euros <= 0:
-                raise ValueError("Para Heimei debes indicar Precio en Dolares y Precio pagado en Euros antes de calcular.")
+                raise ValueError(f"Para {self._supplier_order_display_provider(provider)} debes indicar Precio en Dolares y Precio pagado en Euros antes de calcular.")
             tasa_cambio = round(precio_dolares / precio_euros, 6)
             importe_transporte = factura_transporte + derechos_aranceles
             pc_transporte = round((importe_transporte / precio_euros) * 100, 2) if precio_euros else 0
@@ -9151,6 +9192,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             pc_suma = round(pc_transporte + pc_descarga + constants["PC_GASTOS_FINANCIACION"] + constants["PC_GASTOS_MANIPULACION"] + pc_varios, 2)
             calc_inputs = {
                 "formula": "calcular_coste_unitario_tatamis_pedido",
+                "calculation_mode": calculation_mode,
                 "precio_dolares": precio_dolares,
                 "precio_euros": precio_euros,
                 "factura_transporte": factura_transporte,
@@ -9178,6 +9220,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             cd_prod_iva = round(constants["COSTE_TOTAL_DESCARGA_FUTONES_IVA"] / cantidad_total_productos, 2) if cantidad_total_productos else 0
             calc_inputs = {
                 "formula": "calcular_coste_unitario_pedido",
+                "calculation_mode": calculation_mode,
                 "coste_transporte_iva": coste_transporte,
                 "coste_total_descarga_iva": constants["COSTE_TOTAL_DESCARGA_FUTONES_IVA"],
                 "m3_total_camion": total_m3,
@@ -9232,7 +9275,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 pvp_line = None
                 pending += 1
             else:
-                if is_heimei:
+                if uses_import_formula:
                     precio_euros_art = round(price_provider / calc_inputs["tasa_cambio"], 2) if calc_inputs["tasa_cambio"] else price_provider
                     gastos_aplicables = round(precio_euros_art * calc_inputs["pc_suma"] / 100, 2)
                     coste_sin_almacenaje = round(precio_euros_art + gastos_aplicables, 2)
@@ -9389,6 +9432,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             "download_qty": cantidad_total_productos,
             "excluded_download_qty": excluded_qty,
             "formula": calc_inputs.get("formula"),
+            "calculation_mode": calc_inputs.get("calculation_mode"),
         }
 
     def _save_supplier_order_draft_from_calc(self, win: tk.Toplevel, provider: str, order_entries: dict[str, tk.Entry], loaded_order_state: dict[str, Any] | None = None, existing_order: SupplierOrder | None = None) -> None:
@@ -9535,14 +9579,18 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
 
     def _calculation_mode_for_items(self, items: tuple[OrderItem, ...], provider: str | None = None) -> str:
         """Return the supplier calculation mode used to draw the calculation table."""
-        if str(provider or "").strip().lower().startswith("hei"):
-            return "heimei"
+        provider_mode = self._supplier_order_calculation_mode(provider)
+        if provider_mode == self.SUPPLIER_ORDER_CALC_IMPORT_USD_EUR:
+            return self.SUPPLIER_ORDER_CALC_IMPORT_USD_EUR
         for item in items or tuple():
             source = item.raw.get("source_row") if isinstance(getattr(item, "raw", None), dict) and isinstance(item.raw.get("source_row"), dict) else {}
             calc_inputs = source.get("calculation_inputs") if isinstance(source.get("calculation_inputs"), dict) else {}
-            if calc_inputs.get("formula") == "calcular_coste_unitario_tatamis_pedido":
-                return "heimei"
-        return "general"
+            if (
+                calc_inputs.get("calculation_mode") == self.SUPPLIER_ORDER_CALC_IMPORT_USD_EUR
+                or calc_inputs.get("formula") == "calcular_coste_unitario_tatamis_pedido"
+            ):
+                return self.SUPPLIER_ORDER_CALC_IMPORT_USD_EUR
+        return self.SUPPLIER_ORDER_CALC_GENERAL
 
     def _supplier_order_visible_metrics(self, items: tuple[OrderItem, ...] | list[OrderItem]) -> dict[str, float | int]:
         """Return header metrics for the visible supplier order table.
@@ -9588,7 +9636,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         frame.columnconfigure(0, weight=1)
 
         mode = self._calculation_mode_for_items(items, provider)
-        if mode == "heimei":
+        if mode == self.SUPPLIER_ORDER_CALC_IMPORT_USD_EUR:
             columns = [
                 "ID",
                 "Nombre",
@@ -10208,10 +10256,10 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
     def _calculation_rows(self, items: tuple[OrderItem, ...], provider: str | None = None) -> list[tuple[str, ...]]:
         """Return calculation rows using supplier-specific formulas and labels.
 
-        General suppliers (Ekomat/Pascal/Cipta) no longer show the Heimei USD
-        fields. Heimei keeps the order USD/EUR totals and exchange-rate columns
-        because that formula actually needs them. This keeps the visible table
-        aligned with the calculation path that leads to Coste Final Articulo.
+        General suppliers (Ekomat/Pascal) do not show the import USD/EUR
+        fields. Hemei/Heimei/Cipta keep order USD/EUR totals and exchange-rate
+        columns because that formula actually needs them. This keeps the visible
+        table aligned with the calculation path that leads to Coste Final Articulo.
         """
         rows = []
         mode = self._calculation_mode_for_items(items, provider)
@@ -10254,7 +10302,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 num(source.get("m3_total") or item.m3),
                 estado,
             )
-            if mode == "heimei":
+            if mode == self.SUPPLIER_ORDER_CALC_IMPORT_USD_EUR:
                 rows.append(
                     leading
                     + common
@@ -10302,7 +10350,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             if isinstance(candidate, dict) and candidate:
                 calc_inputs = candidate
                 break
-        if order.provider.lower().startswith("hei"):
+        if self._calculation_mode_for_items(tuple(order.items), order.provider) == self.SUPPLIER_ORDER_CALC_IMPORT_USD_EUR:
             return [
                 ("Precio en Euros", self._format_eur(calc_inputs.get("precio_euros")) if calc_inputs else "Pendiente", "Info"),
                 ("Precio en Dolares", self._format_eur(calc_inputs.get("precio_dolares")) if calc_inputs else "Pendiente", "Info"),

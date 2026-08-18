@@ -11,7 +11,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from openpyxl import load_workbook
+from openpyxl import Workbook, load_workbook
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -381,6 +381,251 @@ class SupplierOrderCostTests(unittest.TestCase):
         self.assertEqual(summary["total_cost"], 100.0)
         self.assertEqual(source["pvp_unit"], 142.86)
         self.assertEqual(source["pvp_line"], 142.86)
+
+    def test_supplier_order_calculation_modes_are_centralized(self) -> None:
+        ui = app()
+
+        self.assertEqual(ui._supplier_order_calculation_mode("Ekomat"), "general")
+        self.assertEqual(ui._supplier_order_calculation_mode("Pascal"), "general")
+        self.assertEqual(ui._supplier_order_calculation_mode("Hemei"), "import_usd_eur")
+        self.assertEqual(ui._supplier_order_calculation_mode("Heimei"), "import_usd_eur")
+        self.assertEqual(ui._supplier_order_calculation_mode("Cipta"), "import_usd_eur")
+
+    def test_cipta_uses_import_inputs_and_not_general_transport_input(self) -> None:
+        ui = app()
+
+        labels = [label for label, _value in ui._supplier_order_input_fields("Cipta", {})]
+
+        self.assertIn("Precio en Dolares", labels)
+        self.assertIn("Precio pagado en Euros", labels)
+        self.assertIn("Factura transporte", labels)
+        self.assertIn("Derechos aranceles", labels)
+        self.assertNotIn("Coste transporte + IVA", labels)
+
+    def test_cipta_and_hemei_import_formula_have_economic_parity(self) -> None:
+        ui = app()
+        values = {
+            "Rentabilidad %": "30",
+            "Precio en Dolares": "1200",
+            "Precio pagado en Euros": "1000",
+            "Factura transporte": "80",
+            "Derechos aranceles": "20",
+        }
+
+        hemei_items, _hemei_raw, hemei_summary = ui._calculate_supplier_order_in_memory("Hemei", values, (heimei_item(),), [])
+        cipta_items, _cipta_raw, cipta_summary = ui._calculate_supplier_order_in_memory("Cipta", values, (heimei_item(),), [])
+
+        hemei_source = hemei_items[0].raw["source_row"]
+        cipta_source = cipta_items[0].raw["source_row"]
+        hemei_inputs = hemei_source["calculation_inputs"]
+        cipta_inputs = cipta_source["calculation_inputs"]
+        hemei_details = hemei_source["calculation_details"]
+        cipta_details = cipta_source["calculation_details"]
+
+        self.assertEqual(cipta_summary["calculation_mode"], "import_usd_eur")
+        self.assertEqual(cipta_inputs["formula"], "calcular_coste_unitario_tatamis_pedido")
+        for field in (
+            "tasa_cambio",
+            "importe_transporte",
+            "pc_transporte",
+            "pc_descarga",
+            "pc_varios",
+            "pc_suma",
+        ):
+            self.assertEqual(cipta_inputs[field], hemei_inputs[field])
+        for field in (
+            "precio_euros_art",
+            "gastos_aplicables",
+            "coste_sin_almacenaje",
+            "coste_almacenaje_iva",
+            "coste_picking_iva",
+        ):
+            self.assertEqual(cipta_details[field], hemei_details[field])
+        for field in ("precio_coste_final", "unit_cost", "line_cost"):
+            self.assertEqual(cipta_source[field], hemei_source[field])
+        self.assertEqual(cipta_summary["total_cost"], hemei_summary["total_cost"])
+
+    def test_cipta_requires_import_totals_with_provider_specific_message(self) -> None:
+        ui = app()
+
+        with self.assertRaisesRegex(ValueError, "Para Cipta debes indicar Precio en Dolares"):
+            ui._calculate_supplier_order_in_memory(
+                "Cipta",
+                {"Rentabilidad %": "30", "Precio en Dolares": "0", "Precio pagado en Euros": "100"},
+                (heimei_item(),),
+                [],
+            )
+
+    def test_cipta_table_and_detail_use_import_mode_metrics(self) -> None:
+        ui = app()
+        values = {
+            "Rentabilidad %": "30",
+            "Precio en Dolares": "100",
+            "Precio pagado en Euros": "100",
+            "Factura transporte": "0",
+            "Derechos aranceles": "0",
+        }
+
+        items, _raw, _summary = ui._calculate_supplier_order_in_memory("Cipta", values, (heimei_item(),), [])
+        row = ui._calculation_rows(items, provider="Cipta")[0]
+        order = prototype_module.SupplierOrder("PED-CIPTA", "Cipta", "2026-08-13", 1, "1", "Calculado", "100.00 EUR", "", items)
+        detail_labels = [label for label, _value, _status in ui._order_detail_value_cards(order)]
+
+        self.assertEqual(ui._calculation_mode_for_items(items, provider="Cipta"), "import_usd_eur")
+        self.assertEqual(len(row), 27)
+        self.assertEqual(row[13], "100.00 $")
+        self.assertEqual(row[14], "100.00 EUR")
+        self.assertEqual(row[15], "1")
+        self.assertIn("Precio en Euros", detail_labels)
+        self.assertIn("Precio en Dolares", detail_labels)
+        self.assertIn("Factura transporte", detail_labels)
+        self.assertNotIn("Coste transporte + IVA", detail_labels)
+
+    def test_cipta_reopen_input_fields_preserve_import_values(self) -> None:
+        ui = app()
+        inputs = {
+            "Nombre del pedido": "PED-CIPTA",
+            "Fecha": "2026-08-13",
+            "Margen de Venta %": "30",
+            "Precio en Dolares": "1200",
+            "Precio pagado en Euros": "1000",
+            "Factura transporte": "80",
+            "Derechos aranceles": "20",
+        }
+        order = prototype_module.SupplierOrder(
+            "PED-CIPTA",
+            "Cipta",
+            "2026-08-13",
+            0,
+            "0",
+            "Borrador",
+            "0.00 EUR",
+            "",
+            tuple(),
+            raw={"source_row": {"inputs": inputs}},
+        )
+
+        fields = dict(ui._supplier_order_input_fields("Cipta", inputs, order))
+
+        self.assertEqual(fields["Precio en Dolares"], "1200")
+        self.assertEqual(fields["Precio pagado en Euros"], "1000")
+        self.assertEqual(fields["Factura transporte"], "80")
+        self.assertEqual(fields["Derechos aranceles"], "20")
+        self.assertNotIn("Coste transporte + IVA", fields)
+
+    def test_cipta_save_payload_preserves_import_inputs(self) -> None:
+        ui = app()
+        ui._cloud_session = Session()
+        entries = {
+            "Nombre del pedido": Entry("PED-CIPTA"),
+            "Margen de Venta %": Entry("30"),
+            "Precio en Dolares": Entry("1200"),
+            "Precio pagado en Euros": Entry("1000"),
+            "Factura transporte": Entry("80"),
+            "Derechos aranceles": Entry("20"),
+        }
+
+        with (
+            patch.object(prototype_module, "create_supplier_order_draft", return_value={"order_id": "ORDER-CIPTA"}) as create_draft,
+            patch.object(prototype_module.messagebox, "showinfo"),
+        ):
+            ui._save_supplier_order_draft_from_calc(Window(), "Cipta", entries, {"items": tuple(), "raw_lines": [], "calculated": False})
+
+        saved_inputs = create_draft.call_args.kwargs["inputs"]
+        self.assertEqual(saved_inputs["Precio en Dolares"], "1200")
+        self.assertEqual(saved_inputs["Precio pagado en Euros"], "1000")
+        self.assertEqual(saved_inputs["Factura transporte"], "80")
+        self.assertEqual(saved_inputs["Derechos aranceles"], "20")
+        self.assertNotIn("Coste transporte + IVA", saved_inputs)
+
+    def test_cipta_parser_preserves_literal_excel_columns_and_values(self) -> None:
+        ui = app()
+        wb = Workbook()
+        ws = wb.active
+        ws.append(
+            [
+                "CodigoArticulo (Item Code)",
+                "Modelo (Model)",
+                "Medida (Size)",
+                "Color (Color)",
+                "Cantidad (Quantity)",
+                "Precio Compra unidad",
+                "m3/unit",
+                "m3/total",
+            ]
+        )
+        ws.append(["00123", "Cama Cipta", "90x200x20", "Natural", 2, 12.34, 0.36, 0.72])
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "cipta.xlsx"
+            wb.save(path)
+
+            items, raw_lines = ui._load_supplier_order_from_excel(str(path), "Cipta")
+
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0].code, "00123")
+        self.assertEqual(raw_lines[0]["codigo"], "00123")
+        self.assertEqual(raw_lines[0]["unidades"], 2)
+        self.assertEqual(raw_lines[0]["precio_excel"], 12.34)
+        self.assertEqual(raw_lines[0]["m3_und"], 0.36)
+        self.assertEqual(raw_lines[0]["m3_total"], 0.72)
+
+    def test_cipta_component_rows_are_filtered_before_calculation(self) -> None:
+        ui = app()
+        wb = Workbook()
+        ws = wb.active
+        ws.append(
+            [
+                "CodigoArticulo (Item Code)",
+                "Modelo (Model)",
+                "Medida (Size)",
+                "Color (Color)",
+                "Cantidad (Quantity)",
+                "Precio Compra unidad",
+                "m3/unit",
+                "m3/total",
+            ]
+        )
+        ws.append(["CIPTA-BASE", "Cama Cipta", "90x200x20", "Natural", 1, 100, 0.36, 0.36])
+        ws.append(["CIPTA-BASE", "Bed leg", "10x10x10", "Natural", 4, 5, 0.001, 0.004])
+        ws.append(["CIPTA-BASE", "Lamas soporte", "10x80x2", "Natural", 8, 2, 0.0016, 0.0128])
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "cipta_components.xlsx"
+            wb.save(path)
+
+            items, raw_lines = ui._load_supplier_order_from_excel(str(path), "Cipta")
+
+        self.assertEqual(len(items), 1)
+        self.assertEqual(len(raw_lines), 1)
+        self.assertEqual(items[0].name, "Cama Cipta - 90x200x20")
+
+    def test_cipta_export_uses_import_formula_fields(self) -> None:
+        ui = app()
+        values = {
+            "Nombre del pedido": "PED-CIPTA",
+            "Rentabilidad %": "30",
+            "Precio en Dolares": "100",
+            "Precio pagado en Euros": "100",
+            "Factura transporte": "0",
+            "Derechos aranceles": "0",
+        }
+        items, _raw, _summary = ui._calculate_supplier_order_in_memory("Cipta", values, (heimei_item(),), [])
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "cipta_export.xlsx"
+            with patch.object(prototype_module.messagebox, "showinfo"):
+                ui._export_supplier_order_audit_excel(None, provider="Cipta", values=values, items=items, path=str(path))
+            wb = load_workbook(path, data_only=True)
+
+        self.assertEqual(wb["Resumen"]["H5"].value, "calcular_coste_unitario_tatamis_pedido")
+        input_labels = [wb["Resumen"].cell(row=row, column=4).value for row in range(9, wb["Resumen"].max_row + 1)]
+        self.assertIn("Precio en Dolares", input_labels)
+        self.assertIn("Precio pagado en Euros", input_labels)
+        self.assertNotIn("Coste transporte + IVA", input_labels)
+        headers = [cell.value for cell in wb["Lineas calculadas"][1]]
+        self.assertIn("Precio en Dolares", headers)
+        self.assertIn("Tasa cambio", headers)
+        line = wb["Lineas calculadas"][2]
+        self.assertEqual(line[headers.index("Precio en Dolares")].value, 100)
+        self.assertEqual(line[headers.index("Tasa cambio")].value, 1)
 
     def test_sales_margin_formula_is_used_in_order_calculation(self) -> None:
         source = inspect.getsource(FutonHubErpPrototype._calculate_supplier_order_in_memory)
