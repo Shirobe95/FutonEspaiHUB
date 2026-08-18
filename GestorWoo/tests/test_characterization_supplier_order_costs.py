@@ -19,6 +19,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from futonhub.cloud.services import orders as orders_service  # noqa: E402
 from futonhub.cloud.services import supplier_prices as supplier_prices_module  # noqa: E402
+from futonhub.cloud.services.business_constants import DEFAULT_BUSINESS_CONSTANTS  # noqa: E402
 from futonhub.cloud.services.inventory import search_cloud_inventory_items  # noqa: E402
 from futonhub.cloud.services.supplier_prices import (  # noqa: E402
     SupplierOrderCodeAmbiguityError,
@@ -178,7 +179,6 @@ def app() -> FutonHubErpPrototype:
         "PC_GASTOS_FINANCIACION": 0.0,
         "IMPORTES_VARIOS": 0.0,
         "COSTE_TOTAL_DESCARGA_FUTONES_IVA": 0.0,
-        "COSTE_DESCARGA_FUTONES_UNIDAD": 0.0,
         "IVA_RECARGO_EQUIVALENCIA": 0.0,
         "IVA_RECARGO_EQUIVALENCIA_FACTOR": 0.0,
         "COSTE_DIARIO_ALMACENAJE_M3": 0.0,
@@ -269,6 +269,32 @@ def inventory_row(
 
 
 class SupplierOrderCostTests(unittest.TestCase):
+    def download_constants(self, total_download_cost: float = 302.50) -> dict[str, float]:
+        return {
+            "IMPORTE_DESCARGA_MT": 0.0,
+            "PC_GASTOS_MANIPULACION": 0.0,
+            "PC_GASTOS_FINANCIACION": 0.0,
+            "IMPORTES_VARIOS": 0.0,
+            "COSTE_TOTAL_DESCARGA_FUTONES_IVA": total_download_cost,
+            "IVA_RECARGO_EQUIVALENCIA": 26.2,
+            "IVA_RECARGO_EQUIVALENCIA_FACTOR": 0.262,
+            "COSTE_DIARIO_ALMACENAJE_M3": 0.0,
+            "PRICE_DROP_BLOCK_PERCENT": 30.0,
+        }
+
+    def download_item(self, code: str, quantity: int, *, counts_for_download: bool = True) -> OrderItem:
+        source = {
+            "m3_total": quantity,
+            "m3_und": 1,
+            "precio_proveedor": 10,
+            "rotation_c": 1,
+            "packages": 1,
+            "cuenta_reparto_descarga": counts_for_download,
+            "price_input_source": "global_margin",
+            "use_global_rentability": True,
+        }
+        return OrderItem(code, f"Linea {code}", quantity, str(quantity), "Pendiente", "OK", raw={"source_row": source})
+
     def woo_item(
         self,
         *,
@@ -316,6 +342,149 @@ class SupplierOrderCostTests(unittest.TestCase):
         self.assertEqual(source["rentabilidad_percent"], 30.0)
         self.assertEqual(source["pvp_unit"], 142.86)
         self.assertEqual(source["pvp_line"], 142.86)
+
+    def test_download_unit_cost_uses_excel_30250_over_179_units(self) -> None:
+        ui = app()
+        ui._current_business_constant_values = lambda: self.download_constants(302.50)
+        items = (
+            self.download_item("LINE-4", 4),
+            self.download_item("LINE-12", 12),
+            self.download_item("LINE-10", 10),
+            self.download_item("LINE-153", 153),
+        )
+
+        calculated, _raw, summary = ui._calculate_supplier_order_in_memory(
+            "ekomat",
+            {"Margen de Venta %": "0", "Coste transporte + IVA": "1"},
+            items,
+            [],
+        )
+
+        self.assertEqual(summary["download_qty"], 179)
+        self.assertEqual(calculated[0].raw["source_row"]["calculation_inputs"]["cd_prod_iva"], 1.69)
+        self.assertEqual(calculated[0].raw["source_row"]["calculation_details"]["cd_total_ref"], 6.76)
+        self.assertEqual(calculated[1].raw["source_row"]["calculation_details"]["cd_total_ref"], 20.28)
+        self.assertEqual(calculated[2].raw["source_row"]["calculation_details"]["cd_total_ref"], 16.9)
+
+    def test_download_unit_cost_recalculates_for_100_units(self) -> None:
+        ui = app()
+        ui._current_business_constant_values = lambda: self.download_constants(302.50)
+
+        calculated, _raw, summary = ui._calculate_supplier_order_in_memory(
+            "ekomat",
+            {"Margen de Venta %": "0", "Coste transporte + IVA": "1"},
+            (self.download_item("LINE-100", 100),),
+            [],
+        )
+
+        self.assertEqual(summary["download_qty"], 100)
+        self.assertEqual(calculated[0].raw["source_row"]["calculation_inputs"]["cd_prod_iva"], 3.03)
+
+    def test_download_unit_cost_recalculates_for_50_units(self) -> None:
+        ui = app()
+        ui._current_business_constant_values = lambda: self.download_constants(302.50)
+
+        calculated, _raw, summary = ui._calculate_supplier_order_in_memory(
+            "ekomat",
+            {"Margen de Venta %": "0", "Coste transporte + IVA": "1"},
+            (self.download_item("LINE-50", 50),),
+            [],
+        )
+
+        self.assertEqual(summary["download_qty"], 50)
+        self.assertEqual(calculated[0].raw["source_row"]["calculation_inputs"]["cd_prod_iva"], 6.05)
+
+    def test_download_excluded_line_does_not_enter_denominator_or_receive_download_cost(self) -> None:
+        ui = app()
+        ui._current_business_constant_values = lambda: self.download_constants(302.50)
+        items = (
+            self.download_item("LINE-YES", 100),
+            self.download_item("LINE-NO", 20, counts_for_download=False),
+        )
+
+        calculated, _raw, summary = ui._calculate_supplier_order_in_memory(
+            "ekomat",
+            {"Margen de Venta %": "0", "Coste transporte + IVA": "1"},
+            items,
+            [],
+        )
+
+        included = calculated[0].raw["source_row"]
+        excluded = calculated[1].raw["source_row"]
+        self.assertEqual(summary["download_qty"], 100)
+        self.assertEqual(summary["excluded_download_qty"], 20)
+        self.assertEqual(included["calculation_inputs"]["cd_prod_iva"], 3.03)
+        self.assertEqual(excluded["calculation_details"]["cd_prod_iva"], 0)
+        self.assertEqual(excluded["calculation_details"]["cd_total_ref"], 0)
+
+    def test_toggling_download_flag_recalculates_denominator_for_all_lines(self) -> None:
+        ui = app()
+        ui._current_business_constant_values = lambda: self.download_constants(302.50)
+        first, _raw, first_summary = ui._calculate_supplier_order_in_memory(
+            "ekomat",
+            {"Margen de Venta %": "0", "Coste transporte + IVA": "1"},
+            (self.download_item("LINE-100", 100), self.download_item("LINE-50", 50)),
+            [],
+        )
+        second, _raw, second_summary = ui._calculate_supplier_order_in_memory(
+            "ekomat",
+            {"Margen de Venta %": "0", "Coste transporte + IVA": "1"},
+            (self.download_item("LINE-100", 100), self.download_item("LINE-50", 50, counts_for_download=False)),
+            [],
+        )
+
+        self.assertEqual(first_summary["download_qty"], 150)
+        self.assertEqual(first[0].raw["source_row"]["calculation_inputs"]["cd_prod_iva"], 2.02)
+        self.assertEqual(second_summary["download_qty"], 100)
+        self.assertEqual(second[0].raw["source_row"]["calculation_inputs"]["cd_prod_iva"], 3.03)
+        self.assertEqual(second[1].raw["source_row"]["calculation_details"]["cd_prod_iva"], 0)
+
+    def test_changing_download_quantity_recalculates_whole_order(self) -> None:
+        ui = app()
+        ui._current_business_constant_values = lambda: self.download_constants(302.50)
+        first, _raw, first_summary = ui._calculate_supplier_order_in_memory(
+            "ekomat",
+            {"Margen de Venta %": "0", "Coste transporte + IVA": "1"},
+            (self.download_item("LINE-A", 100), self.download_item("LINE-B", 50)),
+            [],
+        )
+        second, _raw, second_summary = ui._calculate_supplier_order_in_memory(
+            "ekomat",
+            {"Margen de Venta %": "0", "Coste transporte + IVA": "1"},
+            (self.download_item("LINE-A", 50), self.download_item("LINE-B", 50)),
+            [],
+        )
+
+        self.assertEqual(first_summary["download_qty"], 150)
+        self.assertEqual(first[0].raw["source_row"]["calculation_inputs"]["cd_prod_iva"], 2.02)
+        self.assertEqual(second_summary["download_qty"], 100)
+        self.assertEqual(second[0].raw["source_row"]["calculation_inputs"]["cd_prod_iva"], 3.03)
+        self.assertEqual(second[1].raw["source_row"]["calculation_inputs"]["cd_prod_iva"], 3.03)
+
+    def test_legacy_download_unit_constant_is_not_an_operational_default_or_calculation_source(self) -> None:
+        self.assertNotIn("COSTE_DESCARGA_FUTONES_UNIDAD", DEFAULT_BUSINESS_CONSTANTS)
+        source = inspect.getsource(FutonHubErpPrototype._calculate_supplier_order_in_memory)
+        self.assertNotIn("COSTE_DESCARGA_FUTONES_UNIDAD", source)
+        self.assertIn("COSTE_TOTAL_DESCARGA_FUTONES_IVA", source)
+
+    def test_business_constants_are_cached_until_explicit_refresh_or_save(self) -> None:
+        ui = FutonHubErpPrototype.__new__(FutonHubErpPrototype)
+        session = MemorySession()
+        session.client.tables["business_constants"] = [
+            {"key": "COSTE_TOTAL_DESCARGA_FUTONES_IVA", "value": 302.50},
+            {"key": "IVA_RECARGO_EQUIVALENCIA", "value": 26.2},
+        ]
+        ui._cloud_session = session
+        ui._business_constants = {key: dict(value) for key, value in DEFAULT_BUSINESS_CONSTANTS.items()}
+        ui._business_constants_cloud_loaded = False
+
+        first = ui._current_business_constant_values()
+        second = ui._current_business_constant_values()
+
+        self.assertEqual(first["COSTE_TOTAL_DESCARGA_FUTONES_IVA"], 302.50)
+        self.assertEqual(first["IVA_RECARGO_EQUIVALENCIA_FACTOR"], 0.262)
+        self.assertEqual(second["COSTE_TOTAL_DESCARGA_FUTONES_IVA"], 302.50)
+        self.assertEqual(session.client.execute_counts["business_constants"], 1)
 
     def test_sales_margin_example_5268_and_40_produces_8780(self) -> None:
         ui = app()

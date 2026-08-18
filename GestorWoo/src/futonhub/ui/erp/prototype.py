@@ -672,6 +672,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         self._selected_export_record = EXPORT_RECORDS[0]
         self._settings_tab = "Generales"
         self._business_constants: dict[str, dict[str, Any]] = {key: dict(value) for key, value in DEFAULT_BUSINESS_CONSTANTS.items()}
+        self._business_constants_cloud_loaded = False
         self._security_events: list[SecurityEvent] = []
         self._security_log_rows: list[dict[str, Any]] = []
         self._security_visible_rows: list[dict[str, Any]] = []
@@ -4056,7 +4057,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         snapshot = getattr(self, "_inventory_catalog_snapshot_cache", None)
         if isinstance(snapshot, PhysicalCatalogSnapshot):
             return snapshot
-        snapshot = PhysicalCatalogSnapshot.load()
+        snapshot = PhysicalCatalogSnapshot.load_runtime_cached()
         self._inventory_catalog_snapshot_cache = snapshot
         return snapshot
 
@@ -8081,6 +8082,8 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         return ("funda", "cover", "topper", "pillow", "pillows", "almohada", "almohadas")
 
     def _order_normalize_yes_no(self, value: Any, default: bool | None = None) -> bool | None:
+        if isinstance(value, bool):
+            return value
         text = self._normalize_search_text(value)
         if not text:
             return default
@@ -8652,6 +8655,12 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             except Exception:
                 return default
 
+    def _money_round_half_up(self, value: Any, places: str = "0.01") -> float:
+        try:
+            return float(Decimal(str(value).replace(",", ".")).quantize(Decimal(places), rounding=ROUND_HALF_UP))
+        except Exception:
+            return 0.0
+
     def _inventory_row_value(self, row: dict[str, Any], key: str) -> Any:
         value = row.get(key)
         if value not in (None, ""):
@@ -9102,10 +9111,11 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
     def _current_business_constant_values(self) -> dict[str, float]:
         """Return calculation constants from Supabase/cache/defaults as numbers."""
         constants = getattr(self, "_business_constants", None) or {key: dict(value) for key, value in DEFAULT_BUSINESS_CONSTANTS.items()}
-        if self._cloud_session is not None:
+        if self._cloud_session is not None and not getattr(self, "_business_constants_cloud_loaded", False):
             try:
                 constants = list_business_constants(self._cloud_session)
                 self._business_constants = constants
+                self._business_constants_cloud_loaded = True
             except Exception:
                 pass
         result: dict[str, float] = {}
@@ -9217,7 +9227,14 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             if cantidad_total_productos <= 0:
                 raise ValueError("El pedido no tiene cantidad total valida para descarga. Revisa las lineas con 'Cuenta para descarga'.")
             ct_m3 = round(coste_transporte / total_m3, 2) if total_m3 else 0
-            cd_prod_iva = round(constants["COSTE_TOTAL_DESCARGA_FUTONES_IVA"] / cantidad_total_productos, 2) if cantidad_total_productos else 0
+            cd_prod_iva = (
+                self._money_round_half_up(
+                    Decimal(str(constants["COSTE_TOTAL_DESCARGA_FUTONES_IVA"]).replace(",", "."))
+                    / Decimal(str(cantidad_total_productos))
+                )
+                if cantidad_total_productos
+                else 0
+            )
             calc_inputs = {
                 "formula": "calcular_coste_unitario_pedido",
                 "calculation_mode": calculation_mode,
@@ -12509,6 +12526,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         if self._cloud_session is not None:
             try:
                 self._business_constants = list_business_constants(self._cloud_session)
+                self._business_constants_cloud_loaded = True
             except Exception:
                 if not getattr(self, "_business_constants", None):
                     self._business_constants = {key: dict(value) for key, value in DEFAULT_BUSINESS_CONSTANTS.items()}
@@ -12540,6 +12558,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 return
             try:
                 self._business_constants = list_business_constants(self._cloud_session)
+                self._business_constants_cloud_loaded = True
             except Exception as exc:
                 messagebox.showerror("Configuracion", f"No se pudieron leer las constantes.\n\n{exc}")
                 return
@@ -12565,6 +12584,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             try:
                 result = save_business_constants(self._cloud_session, values)
                 self._business_constants = list_business_constants(self._cloud_session)
+                self._business_constants_cloud_loaded = True
             except Exception as exc:
                 messagebox.showerror("Configuracion", f"No se pudieron guardar las constantes.\n\n{exc}")
                 return

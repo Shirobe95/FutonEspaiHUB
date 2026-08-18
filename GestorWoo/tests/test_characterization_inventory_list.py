@@ -12,7 +12,7 @@ sys.path.insert(0, str(ROOT / "src"))
 from futonhub.ui.erp.catalog_filters import CatalogFilterSelection, PhysicalCatalogSnapshot  # noqa: E402
 from futonhub.ui.erp.inventory_list import ErpInventoryListMixin  # noqa: E402
 from futonhub.ui.erp.shared_ui import InventoryItem  # noqa: E402
-from futonhub.services.catalog_operational_baseline import CatalogOperationalBaselineError  # noqa: E402
+from futonhub.services.catalog_operational_baseline import CatalogOperationalBaseline, CatalogOperationalBaselineError  # noqa: E402
 from futonhub.services.inventory_visibility import InventoryVisibilityOverrides  # noqa: E402
 
 
@@ -165,6 +165,15 @@ class InventoryListRefreshTests(unittest.TestCase):
         app._apply_inventory_catalog_filters(CatalogFilterSelection(filter_family=row["filter_family"], query="futon"))
         self.assertEqual([item.code for item in app._inventory_filtered_items()], [str(row["item_id"])])
         self.assertEqual(app._inventory_query, "futon")
+
+    def test_runtime_config_loaders_are_cached_for_default_erp_paths(self) -> None:
+        PhysicalCatalogSnapshot.load_runtime_cached.cache_clear()
+        CatalogOperationalBaseline.load_runtime.cache_clear()
+        InventoryVisibilityOverrides.load_runtime_cached.cache_clear()
+
+        self.assertIs(PhysicalCatalogSnapshot.load_runtime_cached(), PhysicalCatalogSnapshot.load_runtime_cached())
+        self.assertIs(CatalogOperationalBaseline.load_runtime(), CatalogOperationalBaseline.load_runtime())
+        self.assertIs(InventoryVisibilityOverrides.load_runtime_cached(), InventoryVisibilityOverrides.load_runtime_cached())
 
 
 if __name__ == "__main__":

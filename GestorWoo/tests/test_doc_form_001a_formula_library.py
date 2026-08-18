@@ -84,6 +84,16 @@ class FormulaLibraryContractTests(unittest.TestCase):
         self.assertEqual(heimei_alias, hemei)
         self.assertEqual(normalize_formula_provider("Heimei"), "Hemei")
 
+    def test_download_formula_is_dynamic_and_separate_from_iva_re(self) -> None:
+        descarga = next(record for record in FORMULA_LIBRARY if record.key == "descarga_coste_producto")
+        iva_re = next(record for record in FORMULA_LIBRARY if record.key == "iva_recargo_equivalencia")
+
+        self.assertEqual(descarga.expression, "descarga_unidad = round(coste_descarga_iva / unidades_que_reparten_descarga, 2)")
+        self.assertIn("Se recalcula para cada pedido", descarga.notes)
+        self.assertNotIn("COSTE_DESCARGA_FUTONES_UNIDAD", descarga.expression + descarga.notes)
+        self.assertEqual(iva_re.expression, "iva_re = round(precio_proveedor * factor_iva_re, 2)")
+        self.assertIn("factor fiscal independiente", iva_re.notes)
+
     def test_erp_view_contains_no_editable_text_controls_or_write_services(self) -> None:
         source = (ROOT / "src" / "futonhub" / "ui" / "erp" / "formula_library.py").read_text(encoding="utf-8")
 

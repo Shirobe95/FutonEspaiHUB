@@ -12,7 +12,6 @@ DEFAULT_BUSINESS_CONSTANTS: dict[str, dict[str, Any]] = {
     "PC_GASTOS_FINANCIACION": {"value": 2.5, "unit": "%", "description": "Porcentaje financiacion"},
     "IMPORTES_VARIOS": {"value": 1.0, "unit": "%", "description": "Importes varios"},
     "COSTE_TOTAL_DESCARGA_FUTONES_IVA": {"value": 326.0, "unit": "EUR", "description": "Descarga futones con IVA"},
-    "COSTE_DESCARGA_FUTONES_UNIDAD": {"value": 3.0, "unit": "EUR/ud", "description": "Descarga por unidad"},
     "IVA_RECARGO_EQUIVALENCIA": {"value": 26.2, "unit": "%", "description": "IVA + recargo equivalencia"},
     "COSTE_DIARIO_ALMACENAJE_M3": {"value": 0.15, "unit": "EUR/m3", "description": "Almacenaje diario por M3"},
     "PRICE_DROP_BLOCK_PERCENT": {"value": 30.0, "unit": "%", "description": "Bajada maxima de precio antes de bloquear"},

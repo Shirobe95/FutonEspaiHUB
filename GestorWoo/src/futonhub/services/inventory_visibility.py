@@ -4,6 +4,7 @@ import csv
 import json
 import re
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
@@ -62,6 +63,11 @@ class InventoryVisibilityOverrides:
     manifest_path: Path
     expected_count: int
     expected_effective_delta: int
+
+    @classmethod
+    @lru_cache(maxsize=1)
+    def load_runtime_cached(cls) -> "InventoryVisibilityOverrides":
+        return cls.load()
 
     @classmethod
     def load(cls, path: Path | None = None) -> "InventoryVisibilityOverrides":

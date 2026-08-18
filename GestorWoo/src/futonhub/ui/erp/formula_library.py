@@ -148,7 +148,7 @@ FORMULA_LIBRARY: tuple[FormulaRecord, ...] = (
         PROTOTYPE_SOURCE,
         "_calculate_supplier_order_in_memory",
         purpose="Reparte la descarga solo entre lineas marcadas para participar en ese reparto.",
-        notes="Las lineas excluidas reciben descarga_unidad = 0.",
+        notes="Se recalcula para cada pedido segun las unidades marcadas Cuenta para descarga. Las lineas excluidas reciben descarga_unidad = 0.",
         providers=("Ekomat", "Pascal"),
     ),
     _formula(
@@ -214,7 +214,7 @@ FORMULA_LIBRARY: tuple[FormulaRecord, ...] = (
         PROTOTYPE_SOURCE,
         "_calculate_supplier_order_in_memory",
         purpose="Calcula el importe fiscal agregado al precio de proveedor.",
-        notes="La configuracion 26,2 se normaliza a factor 0,262 antes de usarla.",
+        notes="Es un factor fiscal independiente de la cantidad de articulos. La configuracion 26,2 se normaliza a factor 0,262 antes de usarla.",
         providers=("Ekomat", "Pascal"),
     ),
     _formula(

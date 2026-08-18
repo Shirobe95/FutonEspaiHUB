@@ -33,7 +33,7 @@ class ErpInventoryListMixin:
         baseline = self.__dict__.get("_inventory_operational_baseline_cache")
         if isinstance(baseline, CatalogOperationalBaseline):
             return baseline
-        baseline = CatalogOperationalBaseline()
+        baseline = CatalogOperationalBaseline.load_runtime()
         self._inventory_operational_baseline_cache = baseline
         return baseline
 
@@ -168,7 +168,7 @@ class ErpInventoryListMixin:
         if isinstance(snapshot, PhysicalCatalogSnapshot):
             return snapshot
         path = getattr(self, "_inventory_catalog_snapshot_path", None)
-        snapshot = PhysicalCatalogSnapshot.load(path)
+        snapshot = PhysicalCatalogSnapshot.load(path) if path else PhysicalCatalogSnapshot.load_runtime_cached()
         self._inventory_catalog_snapshot_cache = snapshot
         return snapshot
 
@@ -176,7 +176,7 @@ class ErpInventoryListMixin:
         visibility = getattr(self, "_inventory_visibility_overrides_cache", None)
         if isinstance(visibility, InventoryVisibilityOverrides):
             return visibility
-        visibility = InventoryVisibilityOverrides.load()
+        visibility = InventoryVisibilityOverrides.load_runtime_cached()
         self._inventory_visibility_overrides_cache = visibility
         return visibility
 

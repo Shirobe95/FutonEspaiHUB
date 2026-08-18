@@ -4,6 +4,7 @@ import csv
 import hashlib
 import json
 import re
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
@@ -90,6 +91,7 @@ class CatalogOperationalBaseline:
         self._load_final_rows(rows)
 
     @classmethod
+    @lru_cache(maxsize=1)
     def load_runtime(cls) -> "CatalogOperationalBaseline":
         return cls()
 

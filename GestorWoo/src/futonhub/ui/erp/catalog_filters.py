@@ -6,6 +6,7 @@ import re
 import tkinter as tk
 import unicodedata
 from dataclasses import dataclass, replace
+from functools import lru_cache
 from pathlib import Path
 from tkinter import ttk
 from typing import Any, Callable, Iterable, Mapping
@@ -305,6 +306,11 @@ class PhysicalCatalogSnapshot:
     @property
     def item_ids(self) -> tuple[str, ...]:
         return tuple(sorted(self.rows_by_item_id, key=natural_catalog_sort_key))
+
+    @classmethod
+    @lru_cache(maxsize=1)
+    def load_runtime_cached(cls) -> "PhysicalCatalogSnapshot":
+        return cls.load()
 
     @classmethod
     def load(cls, path: Path | None = None) -> "PhysicalCatalogSnapshot":
