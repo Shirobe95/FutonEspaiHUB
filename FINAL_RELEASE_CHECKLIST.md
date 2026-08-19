@@ -1,0 +1,32 @@
+# Final Release Checklist
+
+- [ ] HUMAN_SMOKE
+- [ ] Responsive laptop
+- [ ] Clean install
+- [ ] Update rc.4 -> candidate
+- [ ] Update rc.5 -> candidate
+- [ ] Update rc.6 -> candidate
+- [ ] Launcher rollback
+- [ ] ERP startup
+- [ ] Inventory 257
+- [ ] 0619008
+- [ ] 0758087
+- [ ] 1020007
+- [ ] Toppers
+- [ ] Pedidos Ekomat
+- [ ] Pedidos Pascal
+- [ ] Pedidos Hemei
+- [ ] Pedidos Cipta
+- [ ] Descarga dinamica
+- [ ] Price Change preview
+- [ ] Formula Library
+- [ ] Runtime checksums
+- [ ] Runtime without auditoria
+- [ ] Supabase integrity
+- [ ] Woo read-only
+- [ ] Performance regression gate
+- [ ] Full tests
+- [ ] Version
+- [ ] Tag
+- [ ] main
+- [ ] Launcher detection

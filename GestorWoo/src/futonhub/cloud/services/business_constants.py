@@ -43,7 +43,7 @@ def _value_from_row(row: dict[str, Any]) -> Any:
     return None
 
 
-def list_business_constants(session) -> dict[str, dict[str, Any]]:
+def list_business_constants(session, *, raise_on_error: bool = False) -> dict[str, dict[str, Any]]:
     """Lee business_constants de Supabase.
 
     Tolera varios esquemas: value/numeric_value/constant_value/source_row.
@@ -54,6 +54,8 @@ def list_business_constants(session) -> dict[str, dict[str, Any]]:
         response = session.client.table("business_constants").select("*").execute()
         rows = getattr(response, "data", None) or []
     except Exception:
+        if raise_on_error:
+            raise
         return result
 
     for row in rows:

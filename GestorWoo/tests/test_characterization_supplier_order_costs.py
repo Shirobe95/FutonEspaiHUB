@@ -183,7 +183,7 @@ def app() -> FutonHubErpPrototype:
         "IVA_RECARGO_EQUIVALENCIA_FACTOR": 0.0,
         "COSTE_DIARIO_ALMACENAJE_M3": 0.0,
     }
-    instance._current_business_constant_values = lambda: constants
+    instance._current_business_constant_values = lambda **_kwargs: constants
     instance._fill_supplier_prices_for_order_items = lambda _provider, items: items
     instance._show_view = lambda _key: None
     return instance
@@ -345,7 +345,7 @@ class SupplierOrderCostTests(unittest.TestCase):
 
     def test_download_unit_cost_uses_excel_30250_over_179_units(self) -> None:
         ui = app()
-        ui._current_business_constant_values = lambda: self.download_constants(302.50)
+        ui._current_business_constant_values = lambda **_kwargs: self.download_constants(302.50)
         items = (
             self.download_item("LINE-4", 4),
             self.download_item("LINE-12", 12),
@@ -368,7 +368,7 @@ class SupplierOrderCostTests(unittest.TestCase):
 
     def test_download_unit_cost_recalculates_for_100_units(self) -> None:
         ui = app()
-        ui._current_business_constant_values = lambda: self.download_constants(302.50)
+        ui._current_business_constant_values = lambda **_kwargs: self.download_constants(302.50)
 
         calculated, _raw, summary = ui._calculate_supplier_order_in_memory(
             "ekomat",
@@ -382,7 +382,7 @@ class SupplierOrderCostTests(unittest.TestCase):
 
     def test_download_unit_cost_recalculates_for_50_units(self) -> None:
         ui = app()
-        ui._current_business_constant_values = lambda: self.download_constants(302.50)
+        ui._current_business_constant_values = lambda **_kwargs: self.download_constants(302.50)
 
         calculated, _raw, summary = ui._calculate_supplier_order_in_memory(
             "ekomat",
@@ -396,7 +396,7 @@ class SupplierOrderCostTests(unittest.TestCase):
 
     def test_download_excluded_line_does_not_enter_denominator_or_receive_download_cost(self) -> None:
         ui = app()
-        ui._current_business_constant_values = lambda: self.download_constants(302.50)
+        ui._current_business_constant_values = lambda **_kwargs: self.download_constants(302.50)
         items = (
             self.download_item("LINE-YES", 100),
             self.download_item("LINE-NO", 20, counts_for_download=False),
@@ -419,7 +419,7 @@ class SupplierOrderCostTests(unittest.TestCase):
 
     def test_toggling_download_flag_recalculates_denominator_for_all_lines(self) -> None:
         ui = app()
-        ui._current_business_constant_values = lambda: self.download_constants(302.50)
+        ui._current_business_constant_values = lambda **_kwargs: self.download_constants(302.50)
         first, _raw, first_summary = ui._calculate_supplier_order_in_memory(
             "ekomat",
             {"Margen de Venta %": "0", "Coste transporte + IVA": "1"},
@@ -441,7 +441,7 @@ class SupplierOrderCostTests(unittest.TestCase):
 
     def test_changing_download_quantity_recalculates_whole_order(self) -> None:
         ui = app()
-        ui._current_business_constant_values = lambda: self.download_constants(302.50)
+        ui._current_business_constant_values = lambda **_kwargs: self.download_constants(302.50)
         first, _raw, first_summary = ui._calculate_supplier_order_in_memory(
             "ekomat",
             {"Margen de Venta %": "0", "Coste transporte + IVA": "1"},
@@ -467,24 +467,95 @@ class SupplierOrderCostTests(unittest.TestCase):
         self.assertNotIn("COSTE_DESCARGA_FUTONES_UNIDAD", source)
         self.assertIn("COSTE_TOTAL_DESCARGA_FUTONES_IVA", source)
 
-    def test_business_constants_are_cached_until_explicit_refresh_or_save(self) -> None:
+    def cloud_constants_app(self, rows: list[dict[str, object]]) -> tuple[FutonHubErpPrototype, MemorySession]:
         ui = FutonHubErpPrototype.__new__(FutonHubErpPrototype)
         session = MemorySession()
-        session.client.tables["business_constants"] = [
-            {"key": "COSTE_TOTAL_DESCARGA_FUTONES_IVA", "value": 302.50},
-            {"key": "IVA_RECARGO_EQUIVALENCIA", "value": 26.2},
-        ]
+        session.client.tables["business_constants"] = rows
         ui._cloud_session = session
         ui._business_constants = {key: dict(value) for key, value in DEFAULT_BUSINESS_CONSTANTS.items()}
         ui._business_constants_cloud_loaded = False
+        ui._fill_supplier_prices_for_order_items = lambda _provider, items: items
+        return ui, session
 
+    def test_business_constants_default_read_can_reuse_cache_until_forced_refresh(self) -> None:
+        ui, session = self.cloud_constants_app([
+            {"key": "COSTE_TOTAL_DESCARGA_FUTONES_IVA", "value": 302.50},
+            {"key": "IVA_RECARGO_EQUIVALENCIA", "value": 26.2},
+        ])
         first = ui._current_business_constant_values()
         second = ui._current_business_constant_values()
+        refreshed = ui._current_business_constant_values(refresh_cloud=True, fail_on_refresh_error=True)
 
         self.assertEqual(first["COSTE_TOTAL_DESCARGA_FUTONES_IVA"], 302.50)
         self.assertEqual(first["IVA_RECARGO_EQUIVALENCIA_FACTOR"], 0.262)
         self.assertEqual(second["COSTE_TOTAL_DESCARGA_FUTONES_IVA"], 302.50)
+        self.assertEqual(refreshed["COSTE_TOTAL_DESCARGA_FUTONES_IVA"], 302.50)
+        self.assertEqual(session.client.execute_counts["business_constants"], 2)
+
+    def test_business_constants_select_once_per_explicit_order_calculation(self) -> None:
+        ui, session = self.cloud_constants_app([
+            {"key": "COSTE_TOTAL_DESCARGA_FUTONES_IVA", "value": 302.50},
+            {"key": "IVA_RECARGO_EQUIVALENCIA", "value": 26.2},
+        ])
+
+        calculated, _raw, summary = ui._calculate_supplier_order_in_memory(
+            "ekomat",
+            {"Margen de Venta %": "0", "Coste transporte + IVA": "1"},
+            (self.download_item("LINE-40", 40), self.download_item("LINE-60", 60)),
+            [],
+        )
+
+        self.assertEqual(summary["download_qty"], 100)
+        self.assertEqual(calculated[0].raw["source_row"]["calculation_inputs"]["cd_prod_iva"], 3.03)
         self.assertEqual(session.client.execute_counts["business_constants"], 1)
+
+    def test_business_constants_second_order_calculation_uses_changed_cloud_values(self) -> None:
+        ui, session = self.cloud_constants_app([
+            {"key": "COSTE_TOTAL_DESCARGA_FUTONES_IVA", "value": 302.50},
+            {"key": "IVA_RECARGO_EQUIVALENCIA", "value": 26.2},
+        ])
+        first, _raw, _summary = ui._calculate_supplier_order_in_memory(
+            "ekomat",
+            {"Margen de Venta %": "0", "Coste transporte + IVA": "1"},
+            (self.download_item("LINE-100", 100),),
+            [],
+        )
+        session.client.tables["business_constants"] = [
+            {"key": "COSTE_TOTAL_DESCARGA_FUTONES_IVA", "value": 605.00},
+            {"key": "IVA_RECARGO_EQUIVALENCIA", "value": 26.2},
+        ]
+
+        second, _raw, _summary = ui._calculate_supplier_order_in_memory(
+            "ekomat",
+            {"Margen de Venta %": "0", "Coste transporte + IVA": "1"},
+            (self.download_item("LINE-100", 100),),
+            [],
+        )
+
+        self.assertEqual(first[0].raw["source_row"]["calculation_inputs"]["cd_prod_iva"], 3.03)
+        self.assertEqual(second[0].raw["source_row"]["calculation_inputs"]["cd_prod_iva"], 6.05)
+        self.assertEqual(session.client.execute_counts["business_constants"], 2)
+
+    def test_business_constants_refresh_failure_blocks_economic_calculation(self) -> None:
+        ui, _session = self.cloud_constants_app([
+            {"key": "COSTE_TOTAL_DESCARGA_FUTONES_IVA", "value": 302.50},
+        ])
+
+        with patch.object(prototype_module, "list_business_constants", side_effect=RuntimeError("network down")):
+            with self.assertRaisesRegex(RuntimeError, "refrescar las constantes"):
+                ui._calculate_supplier_order_in_memory(
+                    "ekomat",
+                    {"Margen de Venta %": "0", "Coste transporte + IVA": "1"},
+                    (self.download_item("LINE-100", 100),),
+                    [],
+                )
+
+    def test_business_constants_save_path_invalidates_before_reloading_cloud_snapshot(self) -> None:
+        source = inspect.getsource(FutonHubErpPrototype._render_settings_calculations)
+
+        self.assertIn("save_business_constants", source)
+        self.assertIn("self._business_constants_cloud_loaded = False", source)
+        self.assertIn("list_business_constants(self._cloud_session, raise_on_error=True)", source)
 
     def test_sales_margin_example_5268_and_40_produces_8780(self) -> None:
         ui = app()

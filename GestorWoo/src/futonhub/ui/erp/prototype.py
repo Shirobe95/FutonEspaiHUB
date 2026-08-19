@@ -17,10 +17,6 @@ from tkinter import filedialog, messagebox, simpledialog, ttk
 from typing import Any, Callable
 from urllib.parse import quote
 
-from openpyxl import Workbook
-from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
-from openpyxl.utils import get_column_letter
-
 from gestorwoo.woocommerce import WooCommerceClient, WooCommerceError
 from futonhub.cloud.audit import CloudAuditError, list_audit_logs as legacy_list_audit_logs, list_operation_snapshots as legacy_list_operation_snapshots
 from futonhub.cloud.services.security_logs import (
@@ -185,6 +181,30 @@ from futonhub.ui.erp.shared_ui import (
 )
 
 SUPPLIER_ORDER_DEBUG = False
+_OPENPYXL_EXPORTS_LOADED = False
+
+
+def _ensure_openpyxl_exports_loaded() -> None:
+    global _OPENPYXL_EXPORTS_LOADED
+    global Workbook, Alignment, Border, Font, PatternFill, Side, get_column_letter
+    if _OPENPYXL_EXPORTS_LOADED:
+        return
+    from openpyxl import Workbook as _Workbook
+    from openpyxl.styles import Alignment as _Alignment
+    from openpyxl.styles import Border as _Border
+    from openpyxl.styles import Font as _Font
+    from openpyxl.styles import PatternFill as _PatternFill
+    from openpyxl.styles import Side as _Side
+    from openpyxl.utils import get_column_letter as _get_column_letter
+
+    Workbook = _Workbook
+    Alignment = _Alignment
+    Border = _Border
+    Font = _Font
+    PatternFill = _PatternFill
+    Side = _Side
+    get_column_letter = _get_column_letter
+    _OPENPYXL_EXPORTS_LOADED = True
 
 
 INVENTORY_ITEMS = [
@@ -9108,16 +9128,28 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         return updated
 
 
-    def _current_business_constant_values(self) -> dict[str, float]:
+    def _current_business_constant_values(
+        self,
+        *,
+        refresh_cloud: bool = False,
+        fail_on_refresh_error: bool = False,
+    ) -> dict[str, float]:
         """Return calculation constants from Supabase/cache/defaults as numbers."""
         constants = getattr(self, "_business_constants", None) or {key: dict(value) for key, value in DEFAULT_BUSINESS_CONSTANTS.items()}
-        if self._cloud_session is not None and not getattr(self, "_business_constants_cloud_loaded", False):
+        if self._cloud_session is not None and (refresh_cloud or not getattr(self, "_business_constants_cloud_loaded", False)):
             try:
-                constants = list_business_constants(self._cloud_session)
+                constants = list_business_constants(self._cloud_session, raise_on_error=fail_on_refresh_error)
                 self._business_constants = constants
                 self._business_constants_cloud_loaded = True
-            except Exception:
-                pass
+                self._business_constants_last_refresh_error = ""
+            except Exception as exc:
+                self._business_constants_cloud_loaded = False
+                self._business_constants_last_refresh_error = str(exc)
+                if fail_on_refresh_error:
+                    raise RuntimeError(
+                        "No se pudieron refrescar las constantes de negocio desde Supabase. "
+                        "Reintenta el calculo para evitar usar valores obsoletos."
+                    ) from exc
         result: dict[str, float] = {}
         for key, meta in DEFAULT_BUSINESS_CONSTANTS.items():
             current = constants.get(key, meta) if isinstance(constants, dict) else meta
@@ -9175,7 +9207,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             item.raw.get("source_row") if isinstance(getattr(item, "raw", None), dict) and isinstance(item.raw.get("source_row"), dict) else {}
             for item in items
         ]
-        constants = self._current_business_constant_values()
+        constants = self._current_business_constant_values(refresh_cloud=True, fail_on_refresh_error=True)
         rent_percent = self._parse_rentabilidad_percent(values.get("Margen de Venta %", values.get("Rentabilidad %")))
 
         # Conteos para formula general. M3 total del camion y productos que cuentan.
@@ -10466,6 +10498,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         return clean[:31]
 
     def _autosize_worksheet(self, ws, *, min_width: int = 10, max_width: int = 42) -> None:
+        _ensure_openpyxl_exports_loaded()
         for column_cells in ws.columns:
             max_len = 0
             letter = get_column_letter(column_cells[0].column)
@@ -10488,6 +10521,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             return value
 
     def _apply_report_sheet_style(self, ws, *, freeze: str = "A2", money_cols: tuple[int, ...] = (), percent_cols: tuple[int, ...] = (), dollar_cols: tuple[int, ...] = ()) -> None:
+        _ensure_openpyxl_exports_loaded()
         header_fill = PatternFill("solid", fgColor="1E293B")
         header_font = Font(bold=True, color="FFFFFF")
         thin = Side(style="thin", color="CBD5E1")
@@ -10529,6 +10563,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         self._autosize_worksheet(ws)
 
     def _make_report_title(self, ws, title: str, subtitle: str = "", *, last_col: int = 8) -> None:
+        _ensure_openpyxl_exports_loaded()
         ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=last_col)
         title_cell = ws.cell(row=1, column=1, value=title)
         title_cell.font = Font(size=22, bold=True, color="FFFFFF")
@@ -10545,6 +10580,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             ws.row_dimensions[2].height = 24
 
     def _write_kpi_card(self, ws, row: int, col: int, label: str, value: Any, *, fill: str = "EEF2FF") -> None:
+        _ensure_openpyxl_exports_loaded()
         ws.cell(row=row, column=col, value=label)
         ws.cell(row=row + 1, column=col, value=value)
         ws.cell(row=row, column=col).font = Font(size=9, bold=True, color="475569")
@@ -10570,6 +10606,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         path: str | None = None,
     ) -> None:
         """Exporta un pedido calculado con formato visual y auditoria completa."""
+        _ensure_openpyxl_exports_loaded()
         provider_name = provider or (order.provider if order else "Proveedor")
         order_name = self._order_display_name(order) if order else str((values or {}).get("Nombre del pedido") or "Pedido calculado")
         values = values or {}
@@ -12525,7 +12562,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
 
         if self._cloud_session is not None:
             try:
-                self._business_constants = list_business_constants(self._cloud_session)
+                self._business_constants = list_business_constants(self._cloud_session, raise_on_error=True)
                 self._business_constants_cloud_loaded = True
             except Exception:
                 if not getattr(self, "_business_constants", None):
@@ -12557,7 +12594,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 messagebox.showwarning("Configuracion", "Inicia sesion Supabase para leer constantes reales.")
                 return
             try:
-                self._business_constants = list_business_constants(self._cloud_session)
+                self._business_constants = list_business_constants(self._cloud_session, raise_on_error=True)
                 self._business_constants_cloud_loaded = True
             except Exception as exc:
                 messagebox.showerror("Configuracion", f"No se pudieron leer las constantes.\n\n{exc}")
@@ -12583,7 +12620,8 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 return
             try:
                 result = save_business_constants(self._cloud_session, values)
-                self._business_constants = list_business_constants(self._cloud_session)
+                self._business_constants_cloud_loaded = False
+                self._business_constants = list_business_constants(self._cloud_session, raise_on_error=True)
                 self._business_constants_cloud_loaded = True
             except Exception as exc:
                 messagebox.showerror("Configuracion", f"No se pudieron guardar las constantes.\n\n{exc}")
