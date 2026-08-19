@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.5.0-rc.7 - 2026-08-19
+
+- Pedidos: endurece calculos con constantes Supabase fail-closed.
+- Pedidos: corrige reparto dinamico del coste de descarga por unidades
+  participantes.
+- Rendimiento: mejora arranque, Inventario y carga de runtime.
+- Constantes: reduce lecturas repetidas manteniendo freshness por calculo.
+- Biblioteca de Formulas: organiza por proveedor y area real de uso.
+- Catalogo e Inventario: mantiene las mejoras introducidas en rc.6.
+
 ## v0.5.0-rc.6 - 2026-08-18
 
 - Pedidos: se incorpora PED_CALC_005A; Cipta y Hemei usan la ruta import
