@@ -115,7 +115,7 @@ class PreDemo001C2PresentationTests(unittest.TestCase):
         self.assertEqual(len(FORMULA_LIBRARY), 31)
         self.assertNotIn("metrics =", source)
         self.assertNotIn("self._metric", source)
-        self.assertIn("formula_records", source)
+        self.assertIn("formula_sections", source)
         self.assertIn("FORMULA_CATEGORIES", source)
         self.assertIn("_formula_library_card", source)
         html = render_formula_library_html()

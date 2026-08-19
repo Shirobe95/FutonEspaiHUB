@@ -37,8 +37,44 @@ class FormulaRecord:
     source_path: str
     source_symbol: str
     providers: tuple[str, ...] = ()
+    usage_areas: tuple[str, ...] = ()
+    calculation_family: str = ""
     conditions: str = "Validaciones y casos límite definidos por el método fuente."
     notes: str = ""
+
+
+def normalize_formula_provider(value: str) -> str:
+    text = str(value or "").strip()
+    return "Hemei" if text.casefold() == "heimei" else text
+
+
+def normalize_formula_category(value: str) -> str:
+    text = str(value or "").strip()
+    aliases = {
+        "woo precios": "Cambio de Precios",
+        "recepcion": "Recepción",
+    }
+    return aliases.get(text.casefold(), text)
+
+
+def _default_calculation_family(category: str, providers: tuple[str, ...]) -> str:
+    normalized = {normalize_formula_provider(provider) for provider in providers}
+    normalized_category = normalize_formula_category(category)
+    if "Hemei" in normalized or "Cipta" in normalized:
+        return "import_usd_eur"
+    if "Ekomat" in normalized or "Pascal" in normalized:
+        return "general"
+    if "Comunes" in normalized:
+        return "common"
+    if normalized_category == "Inventario":
+        return "inventory"
+    if normalized_category == "Recepción":
+        return "reception"
+    if normalized_category == "Cambio de Precios":
+        return "direct_price_change"
+    if normalized_category == "Combinaciones Woo":
+        return "woo_combinations"
+    return "other"
 
 
 def _formula(
@@ -57,10 +93,14 @@ def _formula(
     conditions: str = "Validaciones y casos límite definidos por el método fuente.",
     notes: str = "",
     providers: tuple[str, ...] = (),
+    usage_areas: tuple[str, ...] = (),
+    calculation_family: str = "",
 ) -> FormulaRecord:
+    normalized_category = normalize_formula_category(category)
+    normalized_usage_areas = tuple(normalize_formula_category(area) for area in (usage_areas or (normalized_category,)))
     return FormulaRecord(
         key=key,
-        category=category,
+        category=normalized_category,
         name=name,
         status=status,
         purpose=purpose,
@@ -73,6 +113,8 @@ def _formula(
         conditions=conditions,
         notes=notes,
         providers=providers,
+        usage_areas=normalized_usage_areas,
+        calculation_family=calculation_family or _default_calculation_family(normalized_category, providers),
     )
 
 
@@ -417,10 +459,13 @@ FORMULA_LIBRARY: tuple[FormulaRecord, ...] = (
         "_supplier_order_weighted_unit_cost",
         purpose="Calcula el coste comercial ponderado del lote con el stock existente.",
         notes="Si stock o coste medio no son positivos, devuelve el coste final del nuevo lote.",
+        providers=("Comunes",),
+        usage_areas=("Inventario", "Pedidos"),
+        calculation_family="common",
     ),
     _formula(
         "inventario_stock_recepcion",
-        "Inventario",
+        "Recepción",
         "Stock tras recepcion",
         "stock_destino_despues = stock_destino_antes + cantidad_recibida",
         ("stock_destino_antes", "cantidad_recibida"),
@@ -430,10 +475,12 @@ FORMULA_LIBRARY: tuple[FormulaRecord, ...] = (
         "preview_receive_supplier_order",
         purpose="Previsualiza el stock de tienda o almacen despues de una recepcion.",
         notes="Solo se incrementa el destino seleccionado; la biblioteca no ejecuta la recepcion.",
+        usage_areas=("Recepción", "Inventario"),
+        calculation_family="reception",
     ),
     _formula(
         "woo_delta_precio",
-        "Woo Precios",
+        "Cambio de Precios",
         "Diferencia de precio propuesta",
         "delta = precio_propuesto - precio_actual",
         ("precio_propuesto", "precio_actual"),
@@ -443,10 +490,11 @@ FORMULA_LIBRARY: tuple[FormulaRecord, ...] = (
         "_legacy_price_safety_preview",
         purpose="Calcula la diferencia absoluta que se revisa antes de publicar precios.",
         status="AUXILIAR",
+        calculation_family="direct_price_change",
     ),
     _formula(
         "woo_delta_precio_percent",
-        "Woo Precios",
+        "Cambio de Precios",
         "Variacion porcentual de precio",
         "delta_percent = ((precio_propuesto - precio_actual) / precio_actual) * 100",
         ("precio_propuesto", "precio_actual"),
@@ -457,10 +505,11 @@ FORMULA_LIBRARY: tuple[FormulaRecord, ...] = (
         purpose="Mide la variacion y permite aplicar umbrales de aviso o bloqueo antes de WooCommerce.",
         status="AUXILIAR",
         notes="Solo se calcula cuando el precio actual es positivo.",
+        calculation_family="direct_price_change",
     ),
     _formula(
         "woo_combination_weighted_delta",
-        "Woo Precios",
+        "Combinaciones Woo",
         "Delta ponderado por componente Woo",
         "delta_ponderado = delta_unitario * cantidad_componente",
         ("delta_unitario", "cantidad_componente"),
@@ -471,10 +520,11 @@ FORMULA_LIBRARY: tuple[FormulaRecord, ...] = (
         purpose="Acumula el efecto de un cambio de componente según la cantidad exacta usada por una combinación Woo.",
         conditions="cantidad_componente > 0 y la arista de composición debe ser exacta y operativa.",
         notes="Las aristas en cuarentena no se incluyen en el impacto operativo.",
+        calculation_family="woo_combinations",
     ),
     _formula(
         "woo_combination_simulated_price",
-        "Woo Precios",
+        "Combinaciones Woo",
         "Precio simulado de combinación Woo",
         "precio_simulado = precio_efectivo_actual + suma(delta_ponderado)",
         ("precio_efectivo_actual", "delta_ponderado"),
@@ -485,6 +535,7 @@ FORMULA_LIBRARY: tuple[FormulaRecord, ...] = (
         purpose="Calcula el impacto acumulado de los componentes exactos sobre el precio efectivo de una combinación.",
         conditions="El precio efectivo actual debe ser numérico y las relaciones deben pertenecer al grafo operativo aprobado.",
         notes="Es una simulación read-only; no publica cambios en WooCommerce.",
+        calculation_family="woo_combinations",
     ),
     _formula(
         "futuras_pendientes",
@@ -507,24 +558,21 @@ FORMULA_CATEGORIES = (
     "Todas",
     "Pedidos",
     "Inventario",
-    "Woo Precios",
+    "Cambio de Precios",
+    "Combinaciones Woo",
+    "Recepción",
     "Otros",
 )
 
 
 FORMULA_PROVIDER_FILTERS = (
     "Todos",
-    "Comunes",
     "Ekomat",
     "Pascal",
     "Hemei",
     "Cipta",
+    "Comunes",
 )
-
-
-def normalize_formula_provider(value: str) -> str:
-    text = str(value or "").strip()
-    return "Hemei" if text.casefold() == "heimei" else text
 
 
 def _formula_matches_provider(record: FormulaRecord, provider: str) -> bool:
@@ -537,14 +585,80 @@ def _formula_matches_provider(record: FormulaRecord, provider: str) -> bool:
     return normalized in providers or "Comunes" in providers
 
 
+def _formula_matches_category(record: FormulaRecord, category: str) -> bool:
+    normalized = normalize_formula_category(category)
+    if normalized == "Todas":
+        return True
+    areas = tuple(normalize_formula_category(value) for value in (record.usage_areas or (record.category,)))
+    return normalized == normalize_formula_category(record.category) or normalized in areas
+
+
 def formula_records(category: str = "Todas", provider: str = "Todos") -> tuple[FormulaRecord, ...]:
-    if category == "Todas":
+    normalized_category = normalize_formula_category(category)
+    if normalized_category == "Todas":
         records = FORMULA_LIBRARY
     else:
-        records = tuple(record for record in FORMULA_LIBRARY if record.category == category)
-    if category == "Pedidos":
+        records = tuple(record for record in FORMULA_LIBRARY if _formula_matches_category(record, normalized_category))
+    if normalized_category == "Pedidos":
         records = tuple(record for record in records if _formula_matches_provider(record, provider))
     return records
+
+
+def formula_usage_labels(record: FormulaRecord) -> tuple[str, ...]:
+    areas = tuple(normalize_formula_category(value) for value in (record.usage_areas or (record.category,)))
+    providers = tuple(normalize_formula_provider(value) for value in record.providers)
+    labels: list[str] = []
+    for area in areas:
+        if area == "Pedidos" and providers:
+            if providers == ("Comunes",):
+                labels.append("Pedidos / Comunes")
+            else:
+                labels.append(f"Pedidos / {', '.join(providers)}")
+        else:
+            labels.append(area)
+    return tuple(dict.fromkeys(labels))
+
+
+def formula_usage_text(record: FormulaRecord) -> str:
+    return " | ".join(formula_usage_labels(record))
+
+
+def formula_provider_sections(provider: str) -> tuple[tuple[str, tuple[FormulaRecord, ...]], ...]:
+    normalized = normalize_formula_provider(provider)
+    pedidos = formula_records("Pedidos", normalized)
+    common = tuple(record for record in pedidos if "Comunes" in tuple(normalize_formula_provider(value) for value in record.providers))
+    specific = tuple(record for record in pedidos if record not in common)
+    if normalized in {"", "Todos"}:
+        general = tuple(record for record in specific if record.calculation_family == "general")
+        import_usd = tuple(record for record in specific if record.calculation_family == "import_usd_eur")
+        return tuple(
+            (title, records)
+            for title, records in (
+                ("Comunes para pedidos", common),
+                ("Ekomat y Pascal / calculo general", general),
+                ("Hemei y Cipta / import USD-EUR", import_usd),
+            )
+            if records
+        )
+    if normalized == "Comunes":
+        return (("Comunes para pedidos", common),)
+    title = f"{normalized} / formulas especificas"
+    common_title = f"Comunes utilizadas por {normalized}"
+    return tuple((section_title, records) for section_title, records in ((title, specific), (common_title, common)) if records)
+
+
+def formula_sections(category: str = "Todas", provider: str = "Todos") -> tuple[tuple[str, tuple[FormulaRecord, ...]], ...]:
+    normalized_category = normalize_formula_category(category)
+    if normalized_category == "Pedidos":
+        return formula_provider_sections(provider)
+    if normalized_category == "Todas":
+        return tuple(
+            (area, tuple(record for record in FORMULA_LIBRARY if normalize_formula_category(record.category) == area))
+            for area in FORMULA_CATEGORIES
+            if area != "Todas" and any(normalize_formula_category(record.category) == area for record in FORMULA_LIBRARY)
+        )
+    records = formula_records(normalized_category, provider)
+    return ((normalized_category, records),) if records else ()
 
 
 def formula_summary(records: Iterable[FormulaRecord] = FORMULA_LIBRARY) -> dict[str, int]:
@@ -558,23 +672,19 @@ def formula_summary(records: Iterable[FormulaRecord] = FORMULA_LIBRARY) -> dict[
     }
 
 
-def render_formula_library_html(records: Iterable[FormulaRecord] = FORMULA_LIBRARY) -> str:
-    values = tuple(records)
-    category_buttons = "".join(
-        f'<button type="button" data-category="{escape(category)}">{escape(category)}</button>'
-        for category in FORMULA_CATEGORIES
-    )
-    cards = []
-    for record in values:
-        source = f"{record.source_path} :: {record.source_symbol}" if record.source_path else "Pendiente de evidencia"
-        variables = ", ".join(record.variables) or "No aplica"
-        cards.append(
-            f"""
-            <article class="formula-card" data-category="{escape(record.category)}">
+def _formula_card_html(record: FormulaRecord) -> str:
+    source = f"{record.source_path} :: {record.source_symbol}" if record.source_path else "Pendiente de evidencia"
+    variables = ", ".join(record.variables) or "No aplica"
+    usage_chips = "".join(f'<span class="chip">{escape(label)}</span>' for label in formula_usage_labels(record))
+    usage_text = formula_usage_text(record)
+    areas = "|".join(record.usage_areas)
+    return f"""
+            <article class="formula-card" data-record-key="{escape(record.key)}" data-category="{escape(record.category)}" data-areas="{escape(areas)}">
               <div class="card-head">
                 <div><span class="category">{escape(record.category)}</span><h2>{escape(record.name)}</h2></div>
                 <span class="status {escape(record.status.lower())}">{escape(record.status)}</span>
               </div>
+              <div class="chips"><span class="chip-label">USADO EN</span>{usage_chips}</div>
               <p>{escape(record.purpose)}</p>
               <code>{escape(record.expression)}</code>
               <dl>
@@ -582,10 +692,37 @@ def render_formula_library_html(records: Iterable[FormulaRecord] = FORMULA_LIBRA
                 <div><dt>Unidades</dt><dd>{escape(record.units)}</dd></div>
                 <div><dt>Modulo</dt><dd>{escape(record.module)}</dd></div>
                 <div><dt>Fuente</dt><dd>{escape(source)}</dd></div>
+                <div><dt>Usado en</dt><dd>{escape(usage_text)}</dd></div>
+                <div><dt>Familia de calculo</dt><dd>{escape(record.calculation_family)}</dd></div>
                 <div><dt>Condiciones</dt><dd>{escape(record.conditions)}</dd></div>
               </dl>
               {f'<p class="note">{escape(record.notes)}</p>' if record.notes else ''}
             </article>
+            """
+
+
+def render_formula_library_html(records: Iterable[FormulaRecord] = FORMULA_LIBRARY) -> str:
+    values = tuple(records)
+    category_buttons = "".join(
+        f'<button type="button" data-category="{escape(category)}">{escape(category)}</button>'
+        for category in FORMULA_CATEGORIES
+    )
+    provider_panels = []
+    for provider in ("Ekomat", "Pascal", "Hemei", "Cipta"):
+        summary = " + ".join(
+            f"{title}: {len(section_records)}"
+            for title, section_records in formula_provider_sections(provider)
+        )
+        provider_panels.append(f"<article><h3>{escape(provider)}</h3><p>{escape(summary)}</p></article>")
+    cards = []
+    for title, section_records in formula_sections("Todas"):
+        section_cards = "".join(_formula_card_html(record) for record in section_records if record in values)
+        cards.append(
+            f"""
+            <section class="formula-section" data-section="{escape(title)}">
+              <h2>{escape(title)}</h2>
+              <div class="grid">{section_cards}</div>
+            </section>
             """
         )
     return f"""<!doctype html>
@@ -608,6 +745,12 @@ def render_formula_library_html(records: Iterable[FormulaRecord] = FORMULA_LIBRA
     nav {{ display: flex; width: 100%; max-width: 100%; gap: 8px; overflow-x: auto; padding: 4px 0 14px; }}
     button {{ border: 1px solid #cbd5e1; background: #fff; color: #334155; padding: 9px 13px; cursor: pointer; white-space: nowrap; }}
     button.active {{ background: #4f46e5; border-color: #4f46e5; color: #fff; }}
+    .provider-guide {{ display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin: 0 0 18px; }}
+    .provider-guide article {{ background: #fff; border: 1px solid #e2e8f0; padding: 13px; min-width: 0; }}
+    .provider-guide h3 {{ margin: 0 0 6px; font-size: 15px; letter-spacing: 0; }}
+    .provider-guide p {{ margin: 0; font-size: 13px; overflow-wrap: anywhere; }}
+    .formula-section {{ margin-top: 18px; }}
+    .formula-section > h2 {{ font-size: 20px; margin: 0 0 10px; letter-spacing: 0; }}
     .grid {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }}
     .formula-card {{ background: #fff; border: 1px solid #e2e8f0; padding: 18px; min-width: 0; }}
     .card-head {{ display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }}
@@ -615,6 +758,9 @@ def render_formula_library_html(records: Iterable[FormulaRecord] = FORMULA_LIBRA
     h2 {{ font-size: 17px; margin: 4px 0 0; letter-spacing: 0; }}
     p {{ color: #475569; line-height: 1.45; }}
     code {{ display: block; max-width: 100%; white-space: normal; overflow-wrap: anywhere; background: #f1f5f9; border-left: 3px solid #4f46e5; padding: 12px; color: #0f172a; }}
+    .chips {{ display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 10px; }}
+    .chip-label {{ color: #64748b; font-size: 11px; font-weight: 800; }}
+    .chip {{ border: 1px solid #c7d2fe; background: #eef2ff; color: #3730a3; padding: 4px 7px; font-size: 11px; font-weight: 800; }}
     dl {{ display: grid; grid-template-columns: 1fr 1fr; gap: 9px; margin: 14px 0 0; }}
     dl div {{ min-width: 0; }}
     dt {{ color: #64748b; font-size: 11px; font-weight: 800; text-transform: uppercase; }}
@@ -624,7 +770,8 @@ def render_formula_library_html(records: Iterable[FormulaRecord] = FORMULA_LIBRA
     .status.prevista {{ background: #fffbeb; color: #b45309; }}
     .note {{ border-top: 1px solid #e2e8f0; padding-top: 10px; font-size: 13px; }}
     .hidden {{ display: none; }}
-    @media (max-width: 760px) {{ .grid {{ grid-template-columns: 1fr; }} dl {{ grid-template-columns: 1fr; }} }}
+    @media (max-width: 900px) {{ .provider-guide {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }} }}
+    @media (max-width: 760px) {{ .grid {{ grid-template-columns: 1fr; }} .provider-guide {{ grid-template-columns: 1fr; }} dl {{ grid-template-columns: 1fr; }} }}
   </style>
 </head>
 <body>
@@ -632,14 +779,23 @@ def render_formula_library_html(records: Iterable[FormulaRecord] = FORMULA_LIBRA
   <main>
     <div class="notice">Consulta documental. Cualquier cambio de formula requiere un corte funcional independiente.</div>
     <nav aria-label="Categorias">{category_buttons}</nav>
-    <section class="grid">{''.join(cards)}</section>
+    <section class="provider-guide" aria-label="Proyeccion por proveedor">{''.join(provider_panels)}</section>
+    {''.join(cards)}
   </main>
   <script>
     const buttons = [...document.querySelectorAll('button[data-category]')];
     const cards = [...document.querySelectorAll('.formula-card')];
+    const sections = [...document.querySelectorAll('.formula-section')];
     function selectCategory(category) {{
       buttons.forEach(button => button.classList.toggle('active', button.dataset.category === category));
-      cards.forEach(card => card.classList.toggle('hidden', category !== 'Todas' && card.dataset.category !== category));
+      cards.forEach(card => {{
+        const areas = (card.dataset.areas || '').split('|');
+        card.classList.toggle('hidden', category !== 'Todas' && card.dataset.category !== category && !areas.includes(category));
+      }});
+      sections.forEach(section => {{
+        const visible = [...section.querySelectorAll('.formula-card')].some(card => !card.classList.contains('hidden'));
+        section.classList.toggle('hidden', !visible);
+      }});
     }}
     buttons.forEach(button => button.addEventListener('click', () => selectCategory(button.dataset.category)));
     selectCategory('Todas');
@@ -717,8 +873,37 @@ class ErpFormulaLibraryMixin:
                         activebackground="#4338CA" if selected else SOFT,
                         activeforeground="white" if selected else TEXT,
                     )
-            for record in formula_records(category, provider):
-                self._formula_library_card(body, record).pack(fill=tk.X, pady=(0, 10))
+            sections = formula_sections(category, provider)
+            if category == "Pedidos":
+                provider_text = "Todos los proveedores" if provider in {"", "Todos"} else provider
+                tk.Label(
+                    body,
+                    text=f"Proveedor: {provider_text}",
+                    bg=BG,
+                    fg=TEXT,
+                    font=("Segoe UI", 12, "bold"),
+                    anchor=tk.W,
+                ).pack(fill=tk.X, pady=(0, 8))
+            for section_title, section_records in sections:
+                tk.Label(
+                    body,
+                    text=section_title.upper(),
+                    bg=BG,
+                    fg=INDIGO,
+                    font=("Segoe UI", 9, "bold"),
+                    anchor=tk.W,
+                ).pack(fill=tk.X, pady=(8, 7))
+                for record in section_records:
+                    self._formula_library_card(body, record).pack(fill=tk.X, pady=(0, 10))
+            if not sections:
+                tk.Label(
+                    body,
+                    text="No hay formulas documentadas para este filtro.",
+                    bg=BG,
+                    fg=MUTED,
+                    font=("Segoe UI", 10),
+                    anchor=tk.W,
+                ).pack(fill=tk.X, pady=(10, 0))
             for button in categories.winfo_children():
                 selected = str(button.cget("text")) == category
                 button.configure(
@@ -766,6 +951,12 @@ class ErpFormulaLibraryMixin:
         tk.Label(title, text=record.name, bg=CARD, fg=TEXT, font=("Segoe UI", 13, "bold"), anchor=tk.W).pack(fill=tk.X)
         tk.Label(head, text=record.status, bg=soft_bg, fg=fg, font=("Segoe UI", 8, "bold"), padx=9, pady=4).pack(side=tk.RIGHT)
 
+        chips = tk.Frame(card, bg=CARD)
+        chips.pack(fill=tk.X, padx=16, pady=(0, 8))
+        tk.Label(chips, text="USADO EN", bg=CARD, fg=MUTED, font=("Segoe UI", 8, "bold")).pack(side=tk.LEFT, padx=(0, 8))
+        for label in formula_usage_labels(record):
+            tk.Label(chips, text=label, bg=INDIGO_SOFT, fg="#3730A3", font=("Segoe UI", 8, "bold"), padx=7, pady=3).pack(side=tk.LEFT, padx=(0, 6))
+
         tk.Label(card, text=record.purpose, bg=CARD, fg=MUTED, font=("Segoe UI", 9), anchor=tk.W, justify=tk.LEFT, wraplength=920).pack(fill=tk.X, padx=16)
         expression = tk.Frame(card, bg=SOFT, highlightbackground=LINE, highlightthickness=1)
         expression.pack(fill=tk.X, padx=16, pady=10)
@@ -790,7 +981,9 @@ class ErpFormulaLibraryMixin:
         self._formula_library_detail(details, 0, 1, "Unidades", record.units)
         self._formula_library_detail(details, 1, 0, "Modulo", record.module)
         self._formula_library_detail(details, 1, 1, "Fuente", source)
-        self._formula_library_detail(details, 2, 0, "Condiciones", record.conditions)
+        self._formula_library_detail(details, 2, 0, "Usado en", formula_usage_text(record))
+        self._formula_library_detail(details, 2, 1, "Familia de calculo", record.calculation_family)
+        self._formula_library_detail(details, 3, 0, "Condiciones", record.conditions)
         if record.notes:
             tk.Label(card, text=record.notes, bg=INDIGO_SOFT, fg="#3730A3", font=("Segoe UI", 9), anchor=tk.W, justify=tk.LEFT, wraplength=920).pack(fill=tk.X, padx=16, pady=(0, 14), ipady=7)
         return card
