@@ -28,7 +28,13 @@ from futonhub.cloud.services.security_logs import (
     restore_snapshot_to_previous_state,
     security_log_kpis,
 )
-from futonhub.cloud.auth import SupabaseAuthError, register_device_seen, sign_in_with_password
+from futonhub.cloud.auth import (
+    SupabaseAuthError,
+    SupabaseRefreshSessionError,
+    register_device_seen,
+    sign_in_with_password,
+    sign_in_with_refresh_token,
+)
 from futonhub.cloud.services.inventory import (
     fetch_inventory_pack_components,
     list_all_cloud_inventory_items,
@@ -129,6 +135,15 @@ from futonhub.services.woo_link_status_compat import (
     TEST_TECHNICAL as WOO_TEST_TECHNICAL,
     UNLINKED as WOO_UNLINKED,
     canonical_woo_link_status,
+)
+from futonhub.security.remembered_session import (
+    RememberedSession,
+    RememberedSessionError,
+    RememberedSessionUnavailable,
+    clear_remembered_session,
+    has_remembered_session,
+    load_remembered_session,
+    save_remembered_session,
 )
 from futonhub.ui.theme import apply_theme
 from futonhub.ui.windowing import center_window
@@ -593,6 +608,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         self._login_in_progress = False
         self._login_window: tk.Toplevel | None = None
         self._login_loading_window: tk.Toplevel | None = None
+        self._remembered_login_cancelled = False
         self._current_key = "dashboard"
         self._inventory_items: list[InventoryItem] = []
         self._inventory_error = ""
@@ -755,12 +771,36 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
     def _show_startup_login(self) -> None:
         try:
             settings = load_settings()
-            default_email = settings.hub_user_email or ""
+            remembered_session = load_remembered_session()
+            default_email = remembered_session.email if remembered_session else (settings.hub_user_email or "")
+            remembered_error = ""
+        except RememberedSessionUnavailable:
+            remembered_session = None
+            remembered_error = "Recordar sesion no esta disponible en esta plataforma."
+            try:
+                settings = load_settings()
+                default_email = settings.hub_user_email or ""
+            except Exception as exc:
+                messagebox.showerror("Login Supabase", f"No se pudo leer configuracion.\n\n{exc}")
+                self.destroy()
+                return
+        except RememberedSessionError:
+            clear_remembered_session()
+            remembered_session = None
+            remembered_error = "La sesion recordada ya no es valida. Inicia sesion de nuevo."
+            try:
+                settings = load_settings()
+                default_email = settings.hub_user_email or ""
+            except Exception as exc:
+                messagebox.showerror("Login Supabase", f"No se pudo leer configuracion.\n\n{exc}")
+                self.destroy()
+                return
         except Exception as exc:
             messagebox.showerror("Login Supabase", f"No se pudo leer configuracion.\n\n{exc}")
             self.destroy()
             return
 
+        self._remembered_login_cancelled = False
         win = tk.Toplevel(self)
         self._login_window = win
         win.title("FutonHUB - Login")
@@ -786,10 +826,45 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         form.pack(fill=tk.X, padx=24)
         email_var = tk.StringVar(value=default_email)
         password_var = tk.StringVar()
+        remember_var = tk.BooleanVar(value=remembered_session is not None)
         self._field(form, "Usuario", email_var).pack(fill=tk.X, pady=(0, 12))
         self._field(form, "Contrasena", password_var, show="*").pack(fill=tk.X, pady=(0, 8))
-        error_label = tk.Label(card, text="", bg=CARD, fg=ROSE, font=("Segoe UI", 9), anchor=tk.W, justify=tk.LEFT)
+        remember_box = tk.Checkbutton(
+            form,
+            text="Recuerdame en este equipo",
+            variable=remember_var,
+            bg=CARD,
+            fg=TEXT,
+            activebackground=CARD,
+            activeforeground=TEXT,
+            selectcolor=CARD,
+            font=("Segoe UI", 10),
+            anchor=tk.W,
+        )
+        remember_box.pack(fill=tk.X, pady=(0, 2))
+        tk.Label(
+            form,
+            text="Mantiene tu sesion de forma segura en este usuario de Windows.",
+            bg=CARD,
+            fg=MUTED,
+            font=("Segoe UI", 9),
+        ).pack(anchor=tk.W, pady=(0, 8))
+        error_label = tk.Label(card, text=remembered_error, bg=CARD, fg=ROSE, font=("Segoe UI", 9), anchor=tk.W, justify=tk.LEFT)
         error_label.pack(fill=tk.X, padx=24, pady=(0, 8))
+
+        remembered_actions = tk.Frame(card, bg=CARD)
+        remembered_actions.pack(fill=tk.X, padx=24, pady=(0, 4))
+        if remembered_session is not None or has_remembered_session():
+            self._button(
+                remembered_actions,
+                "Usar otra cuenta",
+                command=lambda: self._use_other_remembered_account(email_var, password_var, remember_var, error_label),
+            ).pack(side=tk.LEFT)
+            self._button(
+                remembered_actions,
+                "Olvidar este equipo",
+                command=lambda: self._forget_remembered_session_ui(email_var, password_var, remember_var, error_label),
+            ).pack(side=tk.LEFT, padx=(8, 0))
 
         actions = tk.Frame(card, bg=CARD)
         actions.pack(fill=tk.X, padx=24, pady=(14, 24))
@@ -797,18 +872,18 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             actions,
             "Aceptar",
             primary=True,
-            command=lambda: self._login_supabase(email_var, password_var, error_label, login_button),
+            command=lambda: self._login_supabase(email_var, password_var, remember_var, error_label, login_button),
         )
         login_button.configure(width=12)
         login_button.pack(side=tk.RIGHT)
         cancel_button = self._button(actions, "Cancelar", command=self.destroy)
         cancel_button.configure(width=12)
         cancel_button.pack(side=tk.RIGHT, padx=(0, 8))
-        win.bind("<Return>", lambda _event: self._login_supabase(email_var, password_var, error_label, login_button))
+        win.bind("<Return>", lambda _event: self._login_supabase(email_var, password_var, remember_var, error_label, login_button))
         win.bind("<Escape>", lambda _event: self.destroy())
         win.update_idletasks()
-        width = max(520, win.winfo_reqwidth() + 48)
-        height = max(460, win.winfo_reqheight() + 48)
+        width = max(540, win.winfo_reqwidth() + 48)
+        height = max(520, win.winfo_reqheight() + 48)
         center_window(win, width, height)
         win.grab_set()
         win.lift()
@@ -818,11 +893,125 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             if entries:
                 entries[0].focus_set()
                 break
+        if remembered_session is not None and settings.app_mode == "supabase_guarded":
+            self.after(
+                100,
+                lambda session=remembered_session: self._start_remembered_login(
+                    session,
+                    settings,
+                    email_var,
+                    password_var,
+                    remember_var,
+                    error_label,
+                    login_button,
+                ),
+            )
+
+    def _use_other_remembered_account(
+        self,
+        email_var: tk.StringVar,
+        password_var: tk.StringVar,
+        remember_var: tk.BooleanVar,
+        error_label: tk.Label,
+    ) -> None:
+        self._remembered_login_cancelled = True
+        remember_var.set(False)
+        password_var.set("")
+        error_label.configure(text="Introduce otra cuenta. La sesion recordada no se elimina hasta olvidar este equipo.")
+
+    def _forget_remembered_session_ui(
+        self,
+        email_var: tk.StringVar,
+        password_var: tk.StringVar,
+        remember_var: tk.BooleanVar,
+        error_label: tk.Label,
+    ) -> None:
+        self._remembered_login_cancelled = True
+        clear_remembered_session()
+        remember_var.set(False)
+        password_var.set("")
+        error_label.configure(text="Sesion recordada eliminada de este equipo.")
+
+    def _start_remembered_login(
+        self,
+        remembered_session: RememberedSession,
+        settings: Any,
+        email_var: tk.StringVar,
+        password_var: tk.StringVar,
+        remember_var: tk.BooleanVar,
+        error_label: tk.Label,
+        login_button: tk.Button,
+    ) -> None:
+        if self._login_in_progress or self._remembered_login_cancelled:
+            return
+        self._login_in_progress = True
+        error_label.configure(text=f"Entrando como {remembered_session.email}...")
+        login_button.configure(state=tk.DISABLED, text="Entrando...")
+        self._show_login_loading()
+
+        def worker() -> None:
+            try:
+                session = sign_in_with_refresh_token(remembered_session.refresh_token, settings)
+                if session.refresh_token and session.refresh_token != remembered_session.refresh_token:
+                    save_remembered_session(session.email, session.refresh_token)
+                register_device_seen(session, settings)
+            except SupabaseRefreshSessionError as exc:
+                if getattr(exc, "kind", "") == "invalid_session":
+                    clear_remembered_session()
+                self.after(
+                    0,
+                    lambda exc=exc: self._finish_remembered_login(None, exc, email_var, password_var, remember_var, error_label, login_button),
+                )
+                return
+            except Exception as exc:
+                self.after(
+                    0,
+                    lambda exc=exc: self._finish_remembered_login(None, exc, email_var, password_var, remember_var, error_label, login_button),
+                )
+                return
+            self.after(
+                0,
+                lambda session=session: self._finish_remembered_login(session, None, email_var, password_var, remember_var, error_label, login_button),
+            )
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _finish_remembered_login(
+        self,
+        session,
+        exc: Exception | None,
+        email_var: tk.StringVar,
+        password_var: tk.StringVar,
+        remember_var: tk.BooleanVar,
+        error_label: tk.Label,
+        login_button: tk.Button,
+    ) -> None:
+        if self._remembered_login_cancelled:
+            self._login_in_progress = False
+            self._hide_login_loading()
+            login_button.configure(state=tk.NORMAL, text="Aceptar")
+            return
+        if exc is None:
+            self._finish_login(session, None, error_label, login_button)
+            return
+        self._login_in_progress = False
+        self._hide_login_loading()
+        remember_var.set(False)
+        password_var.set("")
+        if isinstance(exc, SupabaseRefreshSessionError) and exc.kind == "network_error":
+            error_label.configure(text="No se pudo renovar la sesion recordada por red. Reintenta o inicia sesion manualmente.")
+        else:
+            error_label.configure(text="La sesion recordada ya no es valida. Inicia sesion de nuevo.")
+        login_button.configure(state=tk.NORMAL, text="Aceptar")
+        if self._login_window is not None and self._login_window.winfo_exists():
+            self._login_window.grab_set()
+            self._login_window.lift()
 
     def _login_supabase(
         self,
         email_var: tk.StringVar,
         password_var: tk.StringVar,
+        remember_var: tk.BooleanVar,
         error_label: tk.Label,
         login_button: tk.Button,
     ) -> None:
@@ -844,6 +1033,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         if not password:
             error_label.configure(text="Introduce contrasena.")
             return
+        remember_choice = bool(remember_var.get())
         self._login_in_progress = True
         error_label.configure(text="")
         login_button.configure(state=tk.DISABLED, text="Validando...")
@@ -852,6 +1042,10 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         def worker() -> None:
             try:
                 session = sign_in_with_password(email, password, settings)
+                if remember_choice:
+                    save_remembered_session(session.email, session.refresh_token or "")
+                else:
+                    clear_remembered_session()
                 register_device_seen(session, settings)
             except Exception as exc:
                 self.after(0, lambda exc=exc: self._finish_login(None, exc, error_label, login_button))
