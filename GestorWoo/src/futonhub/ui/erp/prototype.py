@@ -81,7 +81,12 @@ from futonhub.cloud.services.supplier_prices import (
     update_supplier_price_inventory_item,
 )
 from futonhub.cloud.services import supplier_prices as supplier_prices_module
-from futonhub.cloud.services.business_constants import DEFAULT_BUSINESS_CONSTANTS, list_business_constants, save_business_constants
+from futonhub.cloud.services.business_constants import (
+    DEFAULT_BUSINESS_CONSTANTS,
+    list_business_constants,
+    save_business_constants,
+    supplier_order_required_business_constant_keys,
+)
 from futonhub.core import codes as codes_module
 from futonhub.core.codes import supplier_order_eligibility_reason
 from futonhub.core.config import load_settings
@@ -9133,23 +9138,36 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         *,
         refresh_cloud: bool = False,
         fail_on_refresh_error: bool = False,
+        required_keys: tuple[str, ...] | None = None,
     ) -> dict[str, float]:
         """Return calculation constants from Supabase/cache/defaults as numbers."""
         constants = getattr(self, "_business_constants", None) or {key: dict(value) for key, value in DEFAULT_BUSINESS_CONSTANTS.items()}
         if self._cloud_session is not None and (refresh_cloud or not getattr(self, "_business_constants_cloud_loaded", False)):
             try:
-                constants = list_business_constants(self._cloud_session, raise_on_error=fail_on_refresh_error)
+                constants = list_business_constants(
+                    self._cloud_session,
+                    raise_on_error=fail_on_refresh_error,
+                    required_keys=required_keys,
+                )
                 self._business_constants = constants
                 self._business_constants_cloud_loaded = True
                 self._business_constants_last_refresh_error = ""
             except Exception as exc:
                 self._business_constants_cloud_loaded = False
-                self._business_constants_last_refresh_error = str(exc)
+                missing_keys = tuple(getattr(exc, "missing_keys", ()))
+                invalid_keys = tuple(getattr(exc, "invalid_keys", ()))
+                self._business_constants_last_refresh_error = (
+                    f"{exc}; missing_keys={missing_keys}; invalid_keys={invalid_keys}"
+                )
                 if fail_on_refresh_error:
-                    raise RuntimeError(
-                        "No se pudieron refrescar las constantes de negocio desde Supabase. "
-                        "Reintenta el calculo para evitar usar valores obsoletos."
-                    ) from exc
+                    message = (
+                        "No se pueden obtener todas las constantes de cálculo vigentes desde Supabase. "
+                        "El pedido no se ha calculado para evitar utilizar valores locales u obsoletos."
+                    )
+                    error = RuntimeError(message)
+                    setattr(error, "missing_keys", missing_keys)
+                    setattr(error, "invalid_keys", invalid_keys)
+                    raise error from exc
         result: dict[str, float] = {}
         for key, meta in DEFAULT_BUSINESS_CONSTANTS.items():
             current = constants.get(key, meta) if isinstance(constants, dict) else meta
@@ -9207,7 +9225,12 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             item.raw.get("source_row") if isinstance(getattr(item, "raw", None), dict) and isinstance(item.raw.get("source_row"), dict) else {}
             for item in items
         ]
-        constants = self._current_business_constant_values(refresh_cloud=True, fail_on_refresh_error=True)
+        required_keys = supplier_order_required_business_constant_keys(calculation_mode)
+        constants = self._current_business_constant_values(
+            refresh_cloud=True,
+            fail_on_refresh_error=True,
+            required_keys=required_keys,
+        )
         rent_percent = self._parse_rentabilidad_percent(values.get("Margen de Venta %", values.get("Rentabilidad %")))
 
         # Conteos para formula general. M3 total del camion y productos que cuentan.

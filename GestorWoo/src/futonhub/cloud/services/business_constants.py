@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from collections.abc import Iterable
 from typing import Any
 
 from futonhub.cloud.audit import AuditEvent, OperationSnapshot, new_operation_id, write_audit_event, write_snapshot
@@ -17,6 +18,52 @@ DEFAULT_BUSINESS_CONSTANTS: dict[str, dict[str, Any]] = {
     "PRICE_DROP_BLOCK_PERCENT": {"value": 30.0, "unit": "%", "description": "Bajada maxima de precio antes de bloquear"},
 }
 
+SUPPLIER_ORDER_GENERAL_REQUIRED_CONSTANTS: tuple[str, ...] = (
+    "COSTE_TOTAL_DESCARGA_FUTONES_IVA",
+    "IVA_RECARGO_EQUIVALENCIA",
+    "COSTE_DIARIO_ALMACENAJE_M3",
+)
+
+SUPPLIER_ORDER_IMPORT_USD_EUR_REQUIRED_CONSTANTS: tuple[str, ...] = (
+    "IMPORTE_DESCARGA_MT",
+    "IMPORTES_VARIOS",
+    "PC_GASTOS_MANIPULACION",
+    "PC_GASTOS_FINANCIACION",
+    "COSTE_DIARIO_ALMACENAJE_M3",
+)
+
+SUPPLIER_ORDER_REQUIRED_CONSTANTS_BY_MODE: dict[str, tuple[str, ...]] = {
+    "general": SUPPLIER_ORDER_GENERAL_REQUIRED_CONSTANTS,
+    "import_usd_eur": SUPPLIER_ORDER_IMPORT_USD_EUR_REQUIRED_CONSTANTS,
+}
+
+
+class BusinessConstantsValidationError(RuntimeError):
+    """Raised when economic constants from Supabase are incomplete or invalid."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        missing_keys: Iterable[str] = (),
+        invalid_keys: Iterable[str] = (),
+    ) -> None:
+        self.missing_keys = tuple(missing_keys)
+        self.invalid_keys = tuple(invalid_keys)
+        details = []
+        if self.missing_keys:
+            details.append("missing_keys=" + ",".join(self.missing_keys))
+        if self.invalid_keys:
+            details.append("invalid_keys=" + ",".join(self.invalid_keys))
+        super().__init__(message + (f" ({'; '.join(details)})" if details else ""))
+
+
+def supplier_order_required_business_constant_keys(calculation_mode: str) -> tuple[str, ...]:
+    return SUPPLIER_ORDER_REQUIRED_CONSTANTS_BY_MODE.get(
+        calculation_mode,
+        SUPPLIER_ORDER_GENERAL_REQUIRED_CONSTANTS,
+    )
+
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -31,6 +78,19 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
         return default
 
 
+def _strict_float(value: Any) -> float:
+    if value is None or value == "":
+        raise ValueError("empty")
+    text = str(value).replace(",", ".").strip()
+    if not text:
+        raise ValueError("empty")
+    return float(text)
+
+
+def _row_key(row: dict[str, Any]) -> str:
+    return str(row.get("key") or row.get("name") or row.get("constant_key") or "").strip()
+
+
 def _value_from_row(row: dict[str, Any]) -> Any:
     for key in ("value", "numeric_value", "constant_value", "valor"):
         if key in row and row.get(key) not in (None, ""):
@@ -43,12 +103,70 @@ def _value_from_row(row: dict[str, Any]) -> Any:
     return None
 
 
-def list_business_constants(session, *, raise_on_error: bool = False) -> dict[str, dict[str, Any]]:
+def load_required_business_constants(session, required_keys: Iterable[str]) -> dict[str, dict[str, Any]]:
+    """Lee constantes economicas obligatorias sin fallback silencioso a defaults."""
+    required = tuple(dict.fromkeys(str(key).strip() for key in required_keys if str(key).strip()))
+    result = {key: dict(value) for key, value in DEFAULT_BUSINESS_CONSTANTS.items()}
+    try:
+        response = session.client.table("business_constants").select("*").execute()
+        rows = getattr(response, "data", None) or []
+    except Exception as exc:
+        raise BusinessConstantsValidationError("No se pudieron leer business_constants desde Supabase.") from exc
+
+    if not rows:
+        raise BusinessConstantsValidationError(
+            "Supabase no devolvio constantes de negocio.",
+            missing_keys=required,
+        )
+
+    seen_required: set[str] = set()
+    invalid: list[str] = []
+    for row in rows:
+        key = _row_key(row)
+        if not key:
+            continue
+        base = result.setdefault(key, {"value": 0.0, "unit": "", "description": key})
+        value = _value_from_row(row)
+        if key in required:
+            seen_required.add(key)
+            try:
+                base["value"] = _strict_float(value)
+            except Exception:
+                invalid.append(key)
+                continue
+        elif value not in (None, ""):
+            base["value"] = _safe_float(value)
+        if row.get("unit") not in (None, ""):
+            base["unit"] = row.get("unit")
+        if row.get("description") not in (None, ""):
+            base["description"] = row.get("description")
+        base["source_row"] = row
+
+    missing = [key for key in required if key not in seen_required]
+    invalid_unique = list(dict.fromkeys(invalid))
+    if missing or invalid_unique:
+        raise BusinessConstantsValidationError(
+            "Supabase devolvio constantes de negocio incompletas o invalidas.",
+            missing_keys=missing,
+            invalid_keys=invalid_unique,
+        )
+    return result
+
+
+def list_business_constants(
+    session,
+    *,
+    raise_on_error: bool = False,
+    required_keys: Iterable[str] | None = None,
+) -> dict[str, dict[str, Any]]:
     """Lee business_constants de Supabase.
 
     Tolera varios esquemas: value/numeric_value/constant_value/source_row.
     Si no hay filas visibles, devuelve defaults locales.
     """
+    if required_keys is not None:
+        return load_required_business_constants(session, required_keys)
+
     result = {key: dict(value) for key, value in DEFAULT_BUSINESS_CONSTANTS.items()}
     try:
         response = session.client.table("business_constants").select("*").execute()
@@ -59,7 +177,7 @@ def list_business_constants(session, *, raise_on_error: bool = False) -> dict[st
         return result
 
     for row in rows:
-        key = str(row.get("key") or row.get("name") or row.get("constant_key") or "").strip()
+        key = _row_key(row)
         if not key:
             continue
         base = result.setdefault(key, {"value": 0.0, "unit": "", "description": key})

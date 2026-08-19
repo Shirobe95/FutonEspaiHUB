@@ -19,7 +19,10 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from futonhub.cloud.services import orders as orders_service  # noqa: E402
 from futonhub.cloud.services import supplier_prices as supplier_prices_module  # noqa: E402
-from futonhub.cloud.services.business_constants import DEFAULT_BUSINESS_CONSTANTS  # noqa: E402
+from futonhub.cloud.services.business_constants import (  # noqa: E402
+    DEFAULT_BUSINESS_CONSTANTS,
+    supplier_order_required_business_constant_keys,
+)
 from futonhub.cloud.services.inventory import search_cloud_inventory_items  # noqa: E402
 from futonhub.cloud.services.supplier_prices import (  # noqa: E402
     SupplierOrderCodeAmbiguityError,
@@ -282,6 +285,30 @@ class SupplierOrderCostTests(unittest.TestCase):
             "PRICE_DROP_BLOCK_PERCENT": 30.0,
         }
 
+    def constant_rows(
+        self,
+        keys: tuple[str, ...],
+        *,
+        overrides: dict[str, object] | None = None,
+    ) -> list[dict[str, object]]:
+        overrides = overrides or {}
+        rows: list[dict[str, object]] = []
+        for key in keys:
+            rows.append({"key": key, "value": overrides.get(key, DEFAULT_BUSINESS_CONSTANTS[key]["value"])})
+        return rows
+
+    def general_constant_rows(self, **overrides: object) -> list[dict[str, object]]:
+        return self.constant_rows(
+            supplier_order_required_business_constant_keys("general"),
+            overrides=overrides,
+        )
+
+    def import_constant_rows(self, **overrides: object) -> list[dict[str, object]]:
+        return self.constant_rows(
+            supplier_order_required_business_constant_keys("import_usd_eur"),
+            overrides=overrides,
+        )
+
     def download_item(self, code: str, quantity: int, *, counts_for_download: bool = True) -> OrderItem:
         source = {
             "m3_total": quantity,
@@ -493,10 +520,9 @@ class SupplierOrderCostTests(unittest.TestCase):
         self.assertEqual(session.client.execute_counts["business_constants"], 2)
 
     def test_business_constants_select_once_per_explicit_order_calculation(self) -> None:
-        ui, session = self.cloud_constants_app([
-            {"key": "COSTE_TOTAL_DESCARGA_FUTONES_IVA", "value": 302.50},
-            {"key": "IVA_RECARGO_EQUIVALENCIA", "value": 26.2},
-        ])
+        ui, session = self.cloud_constants_app(
+            self.general_constant_rows(COSTE_TOTAL_DESCARGA_FUTONES_IVA=302.50)
+        )
 
         calculated, _raw, summary = ui._calculate_supplier_order_in_memory(
             "ekomat",
@@ -510,20 +536,16 @@ class SupplierOrderCostTests(unittest.TestCase):
         self.assertEqual(session.client.execute_counts["business_constants"], 1)
 
     def test_business_constants_second_order_calculation_uses_changed_cloud_values(self) -> None:
-        ui, session = self.cloud_constants_app([
-            {"key": "COSTE_TOTAL_DESCARGA_FUTONES_IVA", "value": 302.50},
-            {"key": "IVA_RECARGO_EQUIVALENCIA", "value": 26.2},
-        ])
+        ui, session = self.cloud_constants_app(
+            self.general_constant_rows(COSTE_TOTAL_DESCARGA_FUTONES_IVA=302.50)
+        )
         first, _raw, _summary = ui._calculate_supplier_order_in_memory(
             "ekomat",
             {"Margen de Venta %": "0", "Coste transporte + IVA": "1"},
             (self.download_item("LINE-100", 100),),
             [],
         )
-        session.client.tables["business_constants"] = [
-            {"key": "COSTE_TOTAL_DESCARGA_FUTONES_IVA", "value": 605.00},
-            {"key": "IVA_RECARGO_EQUIVALENCIA", "value": 26.2},
-        ]
+        session.client.tables["business_constants"] = self.general_constant_rows(COSTE_TOTAL_DESCARGA_FUTONES_IVA=605.00)
 
         second, _raw, _summary = ui._calculate_supplier_order_in_memory(
             "ekomat",
@@ -537,18 +559,145 @@ class SupplierOrderCostTests(unittest.TestCase):
         self.assertEqual(session.client.execute_counts["business_constants"], 2)
 
     def test_business_constants_refresh_failure_blocks_economic_calculation(self) -> None:
-        ui, _session = self.cloud_constants_app([
-            {"key": "COSTE_TOTAL_DESCARGA_FUTONES_IVA", "value": 302.50},
-        ])
+        ui, _session = self.cloud_constants_app(
+            self.general_constant_rows(COSTE_TOTAL_DESCARGA_FUTONES_IVA=302.50)
+        )
 
         with patch.object(prototype_module, "list_business_constants", side_effect=RuntimeError("network down")):
-            with self.assertRaisesRegex(RuntimeError, "refrescar las constantes"):
+            with self.assertRaisesRegex(RuntimeError, "constantes de cálculo vigentes"):
                 ui._calculate_supplier_order_in_memory(
                     "ekomat",
                     {"Margen de Venta %": "0", "Coste transporte + IVA": "1"},
                     (self.download_item("LINE-100", 100),),
                     [],
                 )
+
+    def test_business_constants_empty_supabase_rows_block_economic_calculation(self) -> None:
+        ui, session = self.cloud_constants_app([])
+
+        with self.assertRaisesRegex(RuntimeError, "constantes de cálculo vigentes") as ctx:
+            ui._calculate_supplier_order_in_memory(
+                "ekomat",
+                {"Margen de Venta %": "0", "Coste transporte + IVA": "1"},
+                (self.download_item("LINE-100", 100),),
+                [],
+            )
+
+        self.assertEqual(session.client.execute_counts["business_constants"], 1)
+        self.assertEqual(
+            tuple(ctx.exception.missing_keys),
+            supplier_order_required_business_constant_keys("general"),
+        )
+
+    def test_business_constants_missing_required_key_blocks_economic_calculation(self) -> None:
+        rows = [
+            row
+            for row in self.general_constant_rows(COSTE_TOTAL_DESCARGA_FUTONES_IVA=302.50)
+            if row["key"] != "COSTE_DIARIO_ALMACENAJE_M3"
+        ]
+        ui, _session = self.cloud_constants_app(rows)
+
+        with self.assertRaisesRegex(RuntimeError, "constantes de cálculo vigentes") as ctx:
+            ui._calculate_supplier_order_in_memory(
+                "ekomat",
+                {"Margen de Venta %": "0", "Coste transporte + IVA": "1"},
+                (self.download_item("LINE-100", 100),),
+                [],
+            )
+
+        self.assertEqual(tuple(ctx.exception.missing_keys), ("COSTE_DIARIO_ALMACENAJE_M3",))
+
+    def test_business_constants_empty_required_value_blocks_economic_calculation(self) -> None:
+        ui, _session = self.cloud_constants_app(
+            self.general_constant_rows(COSTE_DIARIO_ALMACENAJE_M3="")
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "constantes de cálculo vigentes") as ctx:
+            ui._calculate_supplier_order_in_memory(
+                "ekomat",
+                {"Margen de Venta %": "0", "Coste transporte + IVA": "1"},
+                (self.download_item("LINE-100", 100),),
+                [],
+            )
+
+        self.assertEqual(tuple(ctx.exception.invalid_keys), ("COSTE_DIARIO_ALMACENAJE_M3",))
+
+    def test_business_constants_invalid_required_value_blocks_economic_calculation(self) -> None:
+        ui, _session = self.cloud_constants_app(
+            self.general_constant_rows(IVA_RECARGO_EQUIVALENCIA="abc")
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "constantes de cálculo vigentes") as ctx:
+            ui._calculate_supplier_order_in_memory(
+                "ekomat",
+                {"Margen de Venta %": "0", "Coste transporte + IVA": "1"},
+                (self.download_item("LINE-100", 100),),
+                [],
+            )
+
+        self.assertEqual(tuple(ctx.exception.invalid_keys), ("IVA_RECARGO_EQUIVALENCIA",))
+
+    def test_business_constants_complete_dataset_allows_economic_calculation(self) -> None:
+        ui, _session = self.cloud_constants_app(
+            self.general_constant_rows(COSTE_TOTAL_DESCARGA_FUTONES_IVA=302.50)
+        )
+
+        calculated, _raw, summary = ui._calculate_supplier_order_in_memory(
+            "ekomat",
+            {"Margen de Venta %": "0", "Coste transporte + IVA": "1"},
+            (self.download_item("LINE-100", 100),),
+            [],
+        )
+
+        self.assertEqual(summary["download_qty"], 100)
+        self.assertEqual(calculated[0].raw["source_row"]["calculation_inputs"]["cd_prod_iva"], 3.03)
+
+    def test_business_constants_unrelated_key_missing_does_not_block_current_mode(self) -> None:
+        ui, _session = self.cloud_constants_app(
+            self.import_constant_rows(
+                IMPORTE_DESCARGA_MT=0.0,
+                IMPORTES_VARIOS=0.0,
+                PC_GASTOS_MANIPULACION=0.0,
+                PC_GASTOS_FINANCIACION=0.0,
+                COSTE_DIARIO_ALMACENAJE_M3=0.0,
+            )
+        )
+
+        _items, _raw, summary = ui._calculate_supplier_order_in_memory(
+            "Hemei",
+            {
+                "Rentabilidad %": "30",
+                "Precio en Dolares": "100",
+                "Precio pagado en Euros": "100",
+                "Factura transporte": "0",
+                "Derechos aranceles": "0",
+            },
+            (heimei_item(),),
+            [],
+        )
+
+        self.assertEqual(summary["calculation_mode"], "import_usd_eur")
+        self.assertEqual(_session.client.execute_counts["business_constants"], 1)
+
+    def test_supplier_order_required_business_constant_keys_are_mode_specific(self) -> None:
+        self.assertEqual(
+            supplier_order_required_business_constant_keys("general"),
+            (
+                "COSTE_TOTAL_DESCARGA_FUTONES_IVA",
+                "IVA_RECARGO_EQUIVALENCIA",
+                "COSTE_DIARIO_ALMACENAJE_M3",
+            ),
+        )
+        self.assertEqual(
+            supplier_order_required_business_constant_keys("import_usd_eur"),
+            (
+                "IMPORTE_DESCARGA_MT",
+                "IMPORTES_VARIOS",
+                "PC_GASTOS_MANIPULACION",
+                "PC_GASTOS_FINANCIACION",
+                "COSTE_DIARIO_ALMACENAJE_M3",
+            ),
+        )
 
     def test_business_constants_save_path_invalidates_before_reloading_cloud_snapshot(self) -> None:
         source = inspect.getsource(FutonHubErpPrototype._render_settings_calculations)
