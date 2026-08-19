@@ -3,11 +3,15 @@ from __future__ import annotations
 from collections.abc import Iterator
 from typing import Any
 
-import requests
-
 
 class WooCommerceError(RuntimeError):
     pass
+
+
+def _requests():
+    import requests
+
+    return requests
 
 
 class WooCommerceClient:
@@ -19,13 +23,14 @@ class WooCommerceClient:
 
         self.base_url = base_url.rstrip("/")
         self.auth = (consumer_key, consumer_secret)
-        self.session = requests.Session()
+        self._requests = _requests()
+        self.session = self._requests.Session()
 
-    def get(self, endpoint: str, params: dict[str, Any] | None = None) -> requests.Response:
+    def get(self, endpoint: str, params: dict[str, Any] | None = None) -> Any:
         url = f"{self.base_url}/wp-json/wc/v3/{endpoint.lstrip('/')}"
         try:
             response = self.session.get(url, auth=self.auth, params=params, timeout=30)
-        except requests.RequestException as exc:
+        except self._requests.RequestException as exc:
             raise WooCommerceError(f"No se pudo conectar con WooCommerce: {exc}") from exc
         if response.status_code >= 400:
             raise WooCommerceError(
@@ -37,7 +42,7 @@ class WooCommerceClient:
         url = f"{self.base_url}/wp-json/wc/v3/{endpoint.lstrip('/')}"
         try:
             response = self.session.put(url, auth=self.auth, json=payload, timeout=30)
-        except requests.RequestException as exc:
+        except self._requests.RequestException as exc:
             raise WooCommerceError(f"No se pudo conectar con WooCommerce: {exc}") from exc
         if response.status_code >= 400:
             raise WooCommerceError(
