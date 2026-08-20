@@ -69,8 +69,10 @@ class Query:
         self.ids = None
         self.equals = []
         self.payload = None
+        self.mode = "select"
 
     def select(self, *_args, **_kwargs):
+        self.mode = "select"
         return self
 
     def in_(self, column, values):
@@ -85,35 +87,104 @@ class Query:
     def limit(self, *_args):
         return self
 
+    def insert(self, payload):
+        self.payload = dict(payload)
+        self.mode = "insert"
+        return self
+
     def update(self, payload):
         self.payload = payload
+        self.mode = "update"
         return self
 
     def execute(self):
         rows = self.session.tables.setdefault(self.table_name, [])
+        if self.mode == "select" and self.session.hide_blackbox_direct_reads and self.table_name in {"operation_snapshots", "audit_logs"}:
+            return Response([])
         selected = list(rows)
         if self.ids is not None:
             selected = [row for row in selected if str(row.get("id")) in self.ids]
         for column, value in self.equals:
             selected = [row for row in selected if row.get(column) == value]
-        if self.payload is not None:
+        if self.mode == "insert":
+            row = dict(self.payload or {})
+            row.setdefault("id", f"{self.table_name}-{len(rows) + 1}")
+            rows.append(row)
+            self.session.updates.append((self.table_name, dict(row), []))
+            return Response([dict(row)])
+        if self.mode == "update" and self.payload is not None:
             for row in selected:
                 row.update(self.payload)
             self.session.updates.append((self.table_name, dict(self.payload), list(self.equals)))
         return Response([dict(row) for row in selected])
 
 
+class RpcQuery:
+    def __init__(self, session, name, args):
+        self.session = session
+        self.name = name
+        self.args = dict(args or {})
+
+    def execute(self):
+        self.session.rpc_calls.append((self.name, dict(self.args)))
+        if self.name == "futonhub_write_operation_snapshot":
+            row = {
+                "id": f"snapshot-{len(self.session.tables['operation_snapshots']) + 1}",
+                "operation_id": self.args.get("p_operation_id"),
+                "user_id": self.args.get("p_user_id"),
+                "module": self.args.get("p_module"),
+                "action": self.args.get("p_action"),
+                "entity_type": self.args.get("p_entity_type"),
+                "entity_id": self.args.get("p_entity_id"),
+                "before_data": self.args.get("p_before_data"),
+                "reason": self.args.get("p_reason"),
+            }
+            self.session.tables["operation_snapshots"].append(row)
+            return Response([dict(row)])
+        if self.name == "futonhub_write_audit_log":
+            row = {
+                "id": f"audit-{len(self.session.tables['audit_logs']) + 1}",
+                "operation_id": self.args.get("p_operation_id"),
+                "user_id": self.args.get("p_user_id"),
+                "user_email": self.args.get("p_user_email"),
+                "module": self.args.get("p_module"),
+                "action": self.args.get("p_action"),
+                "status": self.args.get("p_status"),
+                "severity": self.args.get("p_severity"),
+                "entity_type": self.args.get("p_entity_type"),
+                "entity_id": self.args.get("p_entity_id"),
+                "before_data": self.args.get("p_before_data"),
+                "after_data": self.args.get("p_after_data"),
+            }
+            self.session.tables["audit_logs"].append(row)
+            return Response([dict(row)])
+        if self.name == "futonhub_read_operation_snapshots":
+            return Response([dict(row) for row in self.session.tables["operation_snapshots"]])
+        if self.name == "futonhub_read_audit_logs":
+            return Response([dict(row) for row in self.session.tables["audit_logs"]])
+        return Response([])
+
+
 class Session:
     def __init__(self, rows):
-        self.tables = {"price_change_proposals": rows}
+        self.tables = {
+            "price_change_proposals": rows,
+            "operation_snapshots": [],
+            "audit_logs": [],
+        }
         self.role = "admin"
         self.user_id = "user"
         self.email = "admin@example.invalid"
         self.updates = []
+        self.rpc_calls = []
+        self.hide_blackbox_direct_reads = False
         self.client = self
 
     def table(self, name):
         return Query(self, name)
+
+    def rpc(self, name, args):
+        return RpcQuery(self, name, args)
 
 
 class Woo:
@@ -134,6 +205,36 @@ class Woo:
         return {"id": woo_id}
 
 
+class StatefulWoo:
+    def __init__(self, rows_by_endpoint):
+        self.rows_by_endpoint = {
+            endpoint: dict(row)
+            for endpoint, row in rows_by_endpoint.items()
+        }
+        self.writes = []
+
+    def get(self, endpoint):
+        return SimpleNamespace(json=lambda: dict(self.rows_by_endpoint[endpoint]))
+
+    def _apply(self, endpoint, payload):
+        current = self.rows_by_endpoint.setdefault(endpoint, {})
+        current.update(dict(payload))
+        sale = woocommerce_publish._safe_money(current.get("sale_price"))
+        regular = woocommerce_publish._safe_money(current.get("regular_price"))
+        effective = sale if sale is not None and sale > 0 else regular
+        if effective is not None:
+            current["price"] = f"{effective:.2f}"
+        return dict(current)
+
+    def update_product_pricing(self, woo_id, payload):
+        self.writes.append(("product", int(woo_id), dict(payload)))
+        return self._apply(f"products/{int(woo_id)}", payload)
+
+    def update_variation_pricing(self, parent_id, woo_id, payload):
+        self.writes.append(("variation", int(parent_id), int(woo_id), dict(payload)))
+        return self._apply(f"products/{int(parent_id)}/variations/{int(woo_id)}", payload)
+
+
 class FailingWoo(Woo):
     def __init__(self, reads, fail_on_write: int, fail_rollback: bool = False):
         super().__init__(reads)
@@ -151,6 +252,28 @@ class FailingWoo(Woo):
 
 
 class PriceProposalPublicationGroupTests(unittest.TestCase):
+    def _publish_with_runtime_blackbox(
+        self,
+        rows,
+        woo,
+        proposal_ids,
+        *,
+        hidden_blackbox_reads: bool = False,
+    ):
+        session = Session(rows)
+        session.hide_blackbox_direct_reads = hidden_blackbox_reads
+        with (
+            patch.object(woocommerce_publish, "acquire_system_lock"),
+            patch.object(woocommerce_publish, "release_system_lock"),
+            patch.object(woocommerce_publish, "sync_woocommerce_price_inventory_state", return_value={"ok": True}),
+        ):
+            return session, woocommerce_publish.publish_price_proposal_group(
+                session,
+                proposal_ids=list(proposal_ids),
+                settings=settings(),
+                client=woo,
+            )
+
     def test_product_resolves_product_endpoint(self):
         target = woocommerce_publish._remote_target_for_proposal(
             Session([]), proposal("p", "product", 10, snapshot={"type": "simple"})
@@ -557,6 +680,123 @@ class PriceProposalPublicationGroupTests(unittest.TestCase):
         self.assertIn("WooCommerceClient", inspect.getsource(woocommerce_publish))
         self.assertNotIn("requests.", source)
         self.assertNotIn("ALTER TABLE", source)
+
+    def test_hotfix_publish_uses_blackbox_read_rpc_when_direct_tables_are_not_visible(self):
+        row = proposal(
+            "p",
+            "product",
+            10,
+            snapshot={"woo_id": 10, "type": "simple", "price": 100},
+        )
+        woo = StatefulWoo({
+            "products/10": {"id": 10, "price": "100.00", "regular_price": "100.00", "sale_price": ""},
+        })
+
+        session, result = self._publish_with_runtime_blackbox(
+            [row],
+            woo,
+            ["p"],
+            hidden_blackbox_reads=True,
+        )
+
+        self.assertEqual(woo.writes, [("product", 10, {"regular_price": "110.00", "sale_price": ""})])
+        self.assertEqual(result["line_results"][0]["result"], "APPLIED")
+        self.assertTrue(result["line_results"][0]["put_attempted"])
+        self.assertTrue(result["line_results"][0]["verify_ok"])
+        self.assertTrue(session.tables["operation_snapshots"])
+        self.assertTrue(session.tables["audit_logs"])
+        self.assertIn(("futonhub_read_operation_snapshots", {"p_user_id": "user", "p_limit": 200}), session.rpc_calls)
+        self.assertIn(("futonhub_read_audit_logs", {"p_user_id": "user", "p_limit": 200}), session.rpc_calls)
+
+    def test_already_current_direct_target_is_no_action_without_put(self):
+        row = proposal(
+            "p",
+            "product",
+            10,
+            old_price=110,
+            new_price=110,
+            snapshot={"woo_id": 10, "type": "simple", "price": 110},
+        )
+        woo = StatefulWoo({
+            "products/10": {"id": 10, "price": "110.00", "regular_price": "110.00", "sale_price": ""},
+        })
+
+        _session, result = self._publish_with_runtime_blackbox([row], woo, ["p"])
+
+        self.assertEqual(woo.writes, [])
+        self.assertEqual(result["counts"]["woo_writes"], 0)
+        self.assertEqual(result["line_results"][0]["result"], "NO_ACTION_ALREADY_CURRENT")
+        self.assertFalse(result["line_results"][0]["put_attempted"])
+        self.assertTrue(result["line_results"][0]["verify_ok"])
+
+    def test_three_direct_targets_publish_three_puts(self):
+        rows = [
+            proposal(str(woo_id), "product", woo_id, snapshot={"woo_id": woo_id, "type": "simple", "price": 100})
+            for woo_id in (10, 11, 12)
+        ]
+        woo = StatefulWoo({
+            f"products/{woo_id}": {"id": woo_id, "price": "100.00", "regular_price": "100.00", "sale_price": ""}
+            for woo_id in (10, 11, 12)
+        })
+
+        _session, result = self._publish_with_runtime_blackbox(rows, woo, ["10", "11", "12"])
+
+        self.assertEqual(len(woo.writes), 3)
+        self.assertEqual([write[1] for write in woo.writes], [10, 11, 12])
+        self.assertEqual(result["counts"]["woo_writes"], 3)
+
+    def test_variation_target_publishes_parent_variation_endpoint(self):
+        row = proposal(
+            "v",
+            "variation",
+            20,
+            snapshot={"woo_id": 20, "woo_parent_id": 7, "parent_woo_id": 7, "price": 100},
+        )
+        woo = StatefulWoo({
+            "products/7/variations/20": {"id": 20, "parent_id": 7, "price": "100.00", "regular_price": "100.00", "sale_price": ""},
+        })
+
+        _session, result = self._publish_with_runtime_blackbox([row], woo, ["v"])
+
+        self.assertEqual(woo.writes, [("variation", 7, 20, {"regular_price": "110.00", "sale_price": ""})])
+        self.assertEqual(result["line_results"][0]["woo_id"], 20)
+        self.assertEqual(result["line_results"][0]["parent_woo_id"], 7)
+
+    def test_warning_direct_target_is_counted_as_woo_write_and_published(self):
+        row = proposal(
+            "p",
+            "product",
+            10,
+            snapshot={"woo_id": 10, "type": "simple", "price": 100},
+        )
+        woo = StatefulWoo({
+            "products/10": {"id": 10, "price": "100.00", "regular_price": "100.00", "sale_price": ""},
+        })
+        with patch.object(
+            woocommerce_publish,
+            "_price_safety_preview",
+            return_value={"status": "WARNING", "messages": ["warning"]},
+        ):
+            session, result = self._publish_with_runtime_blackbox([row], woo, ["p"])
+
+        self.assertEqual(woo.writes, [("product", 10, {"regular_price": "110.00", "sale_price": ""})])
+        self.assertEqual(result["counts"]["woo_writes"], 1)
+        self.assertEqual(session.tables["price_change_proposals"][0]["status"], "published")
+
+    def test_unselected_target_is_not_published(self):
+        rows = [
+            proposal("selected", "product", 10, snapshot={"woo_id": 10, "type": "simple", "price": 100}),
+            proposal("unselected", "product", 11, snapshot={"woo_id": 11, "type": "simple", "price": 100}),
+        ]
+        woo = StatefulWoo({
+            "products/10": {"id": 10, "price": "100.00", "regular_price": "100.00", "sale_price": ""},
+            "products/11": {"id": 11, "price": "100.00", "regular_price": "100.00", "sale_price": ""},
+        })
+
+        _session, result = self._publish_with_runtime_blackbox(rows, woo, ["selected"])
+
+        self.assertEqual(woo.writes, [("product", 10, {"regular_price": "110.00", "sale_price": ""})])
+        self.assertEqual(result["counts"]["woo_writes"], 1)
 
 
 if __name__ == "__main__":

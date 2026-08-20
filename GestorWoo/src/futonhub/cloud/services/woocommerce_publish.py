@@ -28,7 +28,24 @@ def _blackbox_record_exists(session, table: str, operation_id: str) -> bool:
     """Comprueba que la caja negra se persistio realmente, no solo que la RPC respondio."""
     try:
         resp = session.client.table(table).select("id,operation_id").eq("operation_id", operation_id).limit(1).execute()
-        return bool(getattr(resp, "data", None) or [])
+        if bool(getattr(resp, "data", None) or []):
+            return True
+    except Exception:
+        pass
+    read_rpc_by_table = {
+        "operation_snapshots": "futonhub_read_operation_snapshots",
+        "audit_logs": "futonhub_read_audit_logs",
+    }
+    rpc_name = read_rpc_by_table.get(table)
+    if not rpc_name:
+        return False
+    try:
+        response = session.client.rpc(
+            rpc_name,
+            {"p_user_id": getattr(session, "user_id", None), "p_limit": 200},
+        ).execute()
+        rows = getattr(response, "data", None) or []
+        return any(str(row.get("operation_id") or "") == str(operation_id) for row in rows if isinstance(row, dict))
     except Exception:
         return False
 
@@ -1062,6 +1079,12 @@ def preview_price_proposal_group_publish(
                     f"Precio registrado {old_price:.2f}; "
                     f"precio Woo actual {woo_price:.2f}."
                 )
+            elif abs(float(new_price) - float(woo_price)) <= 0.009:
+                status = "NO_CHANGE"
+                functional_status = "NO_CHANGE"
+                reason = "NO_ACTION_ALREADY_CURRENT: WooCommerce ya contiene el precio solicitado."
+                pricing_payload = {}
+                pricing_strategy = "no_change"
             else:
                 pricing_payload, pricing_strategy = _pricing_payload_for_effective_price(
                     woo_data,
@@ -1160,6 +1183,7 @@ def preview_price_proposal_group_publish(
                 counts["woo_writes"] += 1
         elif state == "WARNING":
             counts["warnings"] += 1
+            counts["woo_writes"] += 1
         else:
             counts["errors"] += 1
             if state == "DESACTUALIZADA":
@@ -1394,9 +1418,14 @@ def publish_price_proposal_group(
                     "woo_after": row.get("woo_before_full") or {},
                     "inventory_sync": None,
                     "write_performed": False,
+                    "put_attempted": False,
+                    "put_ok": False,
+                    "verify_ok": True,
                 })
                 continue
+            put_attempted = False
             _write_remote_target(woo, target, payload)
+            put_attempted = True
             verified = _fetch_remote_target(woo, target)
             verified_price = _effective_woo_price(verified)
             if verified_price is None or abs(verified_price - float(row["new_price"])) > 0.009:
@@ -1431,6 +1460,9 @@ def publish_price_proposal_group(
                 "woo_after": verified,
                 "inventory_sync": inventory_sync,
                 "write_performed": True,
+                "put_attempted": put_attempted,
+                "put_ok": True,
+                "verify_ok": True,
             })
 
         now = datetime.now(timezone.utc).isoformat()
@@ -1488,7 +1520,10 @@ def publish_price_proposal_group(
             "new_price": row.get("new_price"),
             "pricing_payload": row.get("pricing_payload"),
             "write_performed": bool(row.get("write_performed")),
-            "result": "APPLIED" if row.get("write_performed") else "NO_CHANGE",
+            "put_attempted": bool(row.get("put_attempted")),
+            "put_ok": bool(row.get("put_ok")),
+            "verify_ok": bool(row.get("verify_ok")),
+            "result": "APPLIED" if row.get("write_performed") else "NO_ACTION_ALREADY_CURRENT",
         } for row in published]
         _ensure_audit_persisted(session, AuditEvent(
             operation_id=operation_id,
