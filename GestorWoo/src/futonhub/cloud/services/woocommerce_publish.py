@@ -196,6 +196,13 @@ def _is_revalidatable_publish_row(row: dict[str, Any]) -> bool:
     reason = str(row.get("reason") or "").strip().lower()
     if status == "DESACTUALIZADA":
         return True
+    proposal = row.get("proposal") if isinstance(row.get("proposal"), dict) else {}
+    if (
+        status == "BLOCKED_MISSING_PRICE_CONTEXT"
+        and _proposal_entry_origin(proposal) == "DERIVED_COMBINATION"
+        and "contexto woo" in reason
+    ):
+        return True
     return status == "BLOCKED_INVALID_PAYLOAD" and (
         "contexto woo cambio" in reason
         or "payload recalculado" in reason
@@ -1237,6 +1244,10 @@ def publish_price_proposal_group(
         ]
         if not blocked_rows or any(not _is_revalidatable_publish_row(row) for row in blocked_rows):
             return
+        refreshed_missing_context = any(
+            str(row.get("status") or "").strip().upper() == "BLOCKED_MISSING_PRICE_CONTEXT"
+            for row in blocked_rows
+        )
         differences = _refresh_price_proposal_group_from_live(
             session,
             blocked_rows,
@@ -1268,15 +1279,26 @@ def publish_price_proposal_group(
                     and difference.get("live_old_price") is not None
                     else None
                 ),
-                "reason": "Borrador recalculado con el estado live. Revisa esta diferencia antes de aplicar.",
+                "reason": (
+                    "El contexto Woo de esta relacion necesitaba actualizarse. "
+                    "El borrador se actualizo; revisa los cambios antes de publicar."
+                    if refreshed_missing_context
+                    else "Borrador recalculado con el estado live. Revisa esta diferencia antes de aplicar."
+                ),
             })
         refreshed.update({
             "revalidation_required": True,
             "revalidation_differences": differences,
             "display_rows": display_rows,
         })
+        message = (
+            "El contexto Woo de esta relacion necesita actualizarse. "
+            "Se ha actualizado el borrador sin publicar; revisa los cambios antes de aplicar."
+            if refreshed_missing_context
+            else "La informacion cambio desde el preview. El borrador se recalculo sin publicar; revisa las diferencias."
+        )
         raise PriceProposalRevalidationRequired(
-            "La informacion cambio desde el preview. El borrador se recalculo sin publicar; revisa las diferencias.",
+            message,
             preview=refreshed,
             differences=differences,
         )

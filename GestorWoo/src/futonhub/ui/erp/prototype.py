@@ -6708,6 +6708,8 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                     "effective_price": context.get("effective_price"),
                     "regular_price": context.get("regular_price"),
                     "sale_price": context.get("sale_price"),
+                    "date_modified": context.get("date_modified"),
+                    "date_modified_gmt": context.get("date_modified_gmt"),
                     "name": row.get("name") or snapshot.get("name"),
                 })
                 source["item_snapshot"] = snapshot
@@ -7065,6 +7067,8 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 "sale_price": live_context.get("sale_price"),
                 "date_on_sale_from": live_context.get("date_on_sale_from"),
                 "date_on_sale_to": live_context.get("date_on_sale_to"),
+                "date_modified": live_context.get("date_modified"),
+                "date_modified_gmt": live_context.get("date_modified_gmt"),
                 "status": live_context.get("status"),
                 "stock_status": live_context.get("stock_status"),
                 "attributes": live_context.get("attributes") or [],

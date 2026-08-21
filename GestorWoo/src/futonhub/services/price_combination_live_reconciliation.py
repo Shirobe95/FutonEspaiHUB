@@ -561,6 +561,8 @@ def reconcile_live_combination_plan(
                 "on_sale": (entity or {}).get("on_sale"),
                 "date_on_sale_from": (entity or {}).get("date_on_sale_from"),
                 "date_on_sale_to": (entity or {}).get("date_on_sale_to"),
+                "date_modified": (entity or {}).get("date_modified"),
+                "date_modified_gmt": (entity or {}).get("date_modified_gmt"),
                 "status": (entity or {}).get("status"),
                 "attributes": list((entity or {}).get("attributes") or []),
                 "price_source": "WOO_LIVE" if entity is not None else "",

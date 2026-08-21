@@ -13,6 +13,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from futonhub.cloud.audit import CloudAuditError  # noqa: E402
 from futonhub.cloud.services import price_proposals, woocommerce_publish  # noqa: E402
+from futonhub.services.price_combination_live_reconciliation import reconcile_live_combination_plan  # noqa: E402
 from futonhub.ui.erp.prototype import FutonHubErpPrototype  # noqa: E402
 
 
@@ -55,6 +56,79 @@ def proposal(
             "ui_deleted": deleted,
         },
     }
+
+
+def woo_row(woo_id: int, price: float, *, parent_id: int | None = None, sku: str | None = None, modified: str = "T1") -> dict:
+    row = {
+        "id": int(woo_id),
+        "sku": sku or str(woo_id),
+        "price": f"{price:.2f}",
+        "regular_price": f"{price:.2f}",
+        "sale_price": "",
+        "on_sale": False,
+        "date_on_sale_from": None,
+        "date_on_sale_to": None,
+        "date_modified": modified,
+        "date_modified_gmt": f"{modified}Z",
+        "status": "publish",
+    }
+    if parent_id is not None:
+        row["parent_id"] = int(parent_id)
+    return row
+
+
+def derived_context(woo_id: int, price: float, *, parent_id: int | None = None, modified: str | None = "T1") -> dict:
+    context = {
+        "id": int(woo_id),
+        "parent_id": int(parent_id) if parent_id is not None else None,
+        "price": f"{price:.2f}",
+        "regular_price": f"{price:.2f}",
+        "sale_price": "",
+        "on_sale": False,
+        "date_on_sale_from": None,
+        "date_on_sale_to": None,
+    }
+    if modified is not None:
+        context["date_modified"] = modified
+        context["date_modified_gmt"] = f"{modified}Z"
+    return context
+
+
+def derived_proposal(
+    row_id: str,
+    kind: str,
+    woo_id: int,
+    *,
+    old_price: float,
+    new_price: float,
+    parent_id: int | None = None,
+    stored_context: dict | None = None,
+) -> dict:
+    snapshot = {
+        "woo_id": int(woo_id),
+        "woo_item_kind": kind,
+        "price": old_price,
+        "regular_price": f"{old_price:.2f}",
+        "sale_price": "",
+    }
+    if parent_id is not None:
+        snapshot["woo_parent_id"] = int(parent_id)
+        snapshot["parent_woo_id"] = int(parent_id)
+    row = proposal(row_id, kind, woo_id, old_price=old_price, new_price=new_price, snapshot=snapshot)
+    source = row["source_row"]
+    source.update({
+        "entry_origin": "DERIVED_COMBINATION",
+        "derived_status": "READY",
+        "publication_allowed": "YES",
+        "blocking_reason": "",
+        "component_delta": f"{new_price - old_price:.2f}",
+        "woo_price_context_at_creation": dict(
+            stored_context if stored_context is not None else derived_context(woo_id, old_price, parent_id=parent_id)
+        ),
+        "future_pricing_payload": {"regular_price": f"{new_price:.2f}", "sale_price": ""},
+        "pricing_strategy": "regular_price",
+    })
+    return row
 
 
 class Response:
@@ -249,6 +323,19 @@ class FailingWoo(Woo):
         if self.fail_rollback and self.write_count > self.fail_on_write:
             raise RuntimeError("rollback failed")
         return super().update_product_pricing(woo_id, payload)
+
+
+class ImpactService:
+    def __init__(self, rows):
+        self.rows = [dict(row) for row in rows]
+
+    def impact_for_changes(self, _changes):
+        return {
+            "included_combinations": [dict(row) for row in self.rows],
+            "excluded_combinations": [],
+            "unmatched_changes": [],
+            "counts": {"included_combinations": len(self.rows)},
+        }
 
 
 class PriceProposalPublicationGroupTests(unittest.TestCase):
@@ -797,6 +884,162 @@ class PriceProposalPublicationGroupTests(unittest.TestCase):
 
         self.assertEqual(woo.writes, [("product", 10, {"regular_price": "110.00", "sale_price": ""})])
         self.assertEqual(result["counts"]["woo_writes"], 1)
+
+    def test_derived_live_reconciliation_persists_target_date_modified_context(self):
+        row = {
+            "combination_woo_id": 201,
+            "combination_parent_woo_id": 20,
+            "combination_sku": "COMBO-201",
+            "combination_name": "Combinacion 201",
+            "component_delta": "4.00",
+            "modified_components": [{"component_item_id": "1", "component_sku": "A", "quantity": "2"}],
+        }
+        woo = StatefulWoo({
+            "products/20/variations/201": woo_row(201, 500, parent_id=20, sku="COMBO-201", modified="T-DERIVED"),
+        })
+
+        result = reconcile_live_combination_plan(
+            [{"physical_item_id": "1", "physical_sku": "A", "old_price": "100", "new_price": "102"}],
+            impact_service=ImpactService([row]),
+            woo_client=woo,
+            session=None,
+        )
+
+        context = result["derived_lines"][0]["woo_price_context"]
+        self.assertEqual(context["date_modified"], "T-DERIVED")
+        self.assertEqual(context["date_modified_gmt"], "T-DERIVEDZ")
+        self.assertEqual(context["woo_date_modified"], "T-DERIVEDZ")
+
+    def test_missing_derived_context_is_revalidation_required_and_second_apply_publishes(self):
+        rows = [
+            proposal("direct", "product", 10, old_price=100, new_price=102, snapshot={"woo_id": 10, "type": "simple", "price": 100}),
+            derived_proposal("derived-a", "variation", 201, old_price=500, new_price=504, parent_id=20, stored_context=derived_context(201, 500, parent_id=20, modified=None)),
+            derived_proposal("derived-b", "variation", 202, old_price=600, new_price=604, parent_id=20, stored_context=derived_context(202, 600, parent_id=20, modified=None)),
+            derived_proposal("derived-c", "variation", 203, old_price=700, new_price=704, parent_id=21, stored_context=derived_context(203, 700, parent_id=21, modified=None)),
+        ]
+        woo = StatefulWoo({
+            "products/10": woo_row(10, 100, modified="T-DIRECT"),
+            "products/20/variations/201": woo_row(201, 500, parent_id=20, modified="T-A"),
+            "products/20/variations/202": woo_row(202, 600, parent_id=20, modified="T-B"),
+            "products/21/variations/203": woo_row(203, 700, parent_id=21, modified="T-C"),
+        })
+        session = Session(rows)
+
+        preview = woocommerce_publish.preview_price_proposal_group_publish(
+            session,
+            proposal_ids=[row["id"] for row in rows],
+            settings=settings(),
+            client=woo,
+        )
+        self.assertEqual(preview["rows"][0]["status"], "VALIDO")
+        self.assertEqual([row["status"] for row in preview["rows"][1:]], ["BLOCKED_MISSING_PRICE_CONTEXT"] * 3)
+        self.assertTrue(preview["blocking"])
+        self.assertTrue(preview["revalidation_possible"])
+
+        with (
+            patch.object(woocommerce_publish, "write_snapshot"),
+            patch.object(woocommerce_publish, "write_audit_event"),
+        ):
+            with self.assertRaises(woocommerce_publish.PriceProposalRevalidationRequired) as caught:
+                woocommerce_publish.publish_price_proposal_group(
+                    session,
+                    proposal_ids=[row["id"] for row in rows],
+                    settings=settings(),
+                    client=woo,
+                )
+
+        self.assertEqual(woo.writes, [])
+        self.assertIn("contexto Woo", str(caught.exception))
+        self.assertEqual(len(caught.exception.differences), 3)
+        refreshed_sources = {
+            row["id"]: row["source_row"]["woo_price_context_at_creation"]
+            for row in session.tables["price_change_proposals"]
+            if row["id"].startswith("derived-")
+        }
+        self.assertEqual(refreshed_sources["derived-a"]["date_modified"], "T-A")
+        self.assertEqual(refreshed_sources["derived-b"]["date_modified_gmt"], "T-BZ")
+        self.assertEqual(refreshed_sources["derived-c"]["date_modified"], "T-C")
+
+        with (
+            patch.object(woocommerce_publish, "acquire_system_lock"),
+            patch.object(woocommerce_publish, "release_system_lock"),
+            patch.object(woocommerce_publish, "sync_woocommerce_price_inventory_state", return_value={"ok": True}),
+        ):
+            result = woocommerce_publish.publish_price_proposal_group(
+                session,
+                proposal_ids=[row["id"] for row in rows],
+                settings=settings(),
+                client=woo,
+            )
+
+        self.assertEqual(len(woo.writes), 4)
+        self.assertEqual(result["counts"]["woo_writes"], 4)
+        self.assertTrue(all(line["verify_ok"] for line in result["line_results"]))
+
+    def test_stale_derived_context_refreshes_without_write(self):
+        row = derived_proposal(
+            "derived-stale",
+            "variation",
+            201,
+            old_price=500,
+            new_price=504,
+            parent_id=20,
+            stored_context=derived_context(201, 500, parent_id=20, modified="T1"),
+        )
+        woo = StatefulWoo({
+            "products/20/variations/201": woo_row(201, 500, parent_id=20, modified="T2"),
+        })
+        session = Session([row])
+
+        with (
+            patch.object(woocommerce_publish, "write_snapshot"),
+            patch.object(woocommerce_publish, "write_audit_event"),
+        ):
+            with self.assertRaises(woocommerce_publish.PriceProposalRevalidationRequired):
+                woocommerce_publish.publish_price_proposal_group(
+                    session,
+                    proposal_ids=["derived-stale"],
+                    settings=settings(),
+                    client=woo,
+                )
+
+        self.assertEqual(woo.writes, [])
+        context = session.tables["price_change_proposals"][0]["source_row"]["woo_price_context_at_creation"]
+        self.assertEqual(context["date_modified"], "T2")
+        self.assertEqual(context["date_modified_gmt"], "T2Z")
+
+    def test_derived_simple_product_can_publish_with_complete_context(self):
+        row = derived_proposal(
+            "derived-product",
+            "product",
+            10,
+            old_price=500,
+            new_price=504,
+            stored_context=derived_context(10, 500, modified="T1"),
+        )
+        woo = StatefulWoo({"products/10": woo_row(10, 500, modified="T1")})
+
+        _session, result = self._publish_with_runtime_blackbox([row], woo, ["derived-product"])
+
+        self.assertEqual(woo.writes, [("product", 10, {"regular_price": "504.00", "sale_price": ""})])
+        self.assertEqual(result["line_results"][0]["result"], "APPLIED")
+
+    def test_derived_variation_can_publish_with_complete_context(self):
+        row = derived_proposal(
+            "derived-variation",
+            "variation",
+            201,
+            old_price=500,
+            new_price=504,
+            parent_id=20,
+            stored_context=derived_context(201, 500, parent_id=20, modified="T1"),
+        )
+        woo = StatefulWoo({"products/20/variations/201": woo_row(201, 500, parent_id=20, modified="T1")})
+
+        _session, result = self._publish_with_runtime_blackbox([row], woo, ["derived-variation"])
+
+        self.assertEqual(woo.writes, [("variation", 20, 201, {"regular_price": "504.00", "sale_price": ""})])
+        self.assertEqual(result["line_results"][0]["result"], "APPLIED")
 
 
 if __name__ == "__main__":

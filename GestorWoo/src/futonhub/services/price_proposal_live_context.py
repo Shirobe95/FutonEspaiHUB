@@ -224,6 +224,8 @@ def _live_context(item: Mapping[str, Any], identities: Mapping[str, Any]) -> dic
         "manage_stock": item.get("manage_stock"),
         "stock_quantity": item.get("stock_quantity"),
         "attributes": list(item.get("attributes") or []),
+        "date_modified": item.get("date_modified"),
+        "date_modified_gmt": item.get("date_modified_gmt"),
         "woo_date_modified": item.get("date_modified_gmt") or item.get("date_modified"),
         "woo_id": identities["woo_id"],
         "woo_parent_id": identities["woo_parent_id"],
