@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.5.0-rc.8 - 2026-08-21
+
+- Cambio de Precios: corrige la publicacion real de cambios de precio a
+  WooCommerce.
+- Cambio de Precios: corrige targets Woo product/variation y endpoints de
+  variaciones.
+- Cambio de Precios: corrige la publicacion de combinaciones y relaciones
+  derivadas.
+- Cambio de Precios: anade revalidacion segura de contexto Woo y precios live.
+- Cambio de Precios: mantiene snapshot, auditoria, rollback y verificacion
+  posterior.
+- Cambio de Precios: recupera propuestas legacy con identidad Woo incorrecta
+  mediante SKU exacto.
+- Cambio de Precios: corrige errores de preview, revalidacion y modal en blanco.
+- Cambio de Precios: tras aplicar correctamente vuelve al listado de Propuestas
+  de Precios.
+
 ## v0.5.0-rc.7 - 2026-08-19
 
 - Pedidos: endurece calculos con constantes Supabase fail-closed.
