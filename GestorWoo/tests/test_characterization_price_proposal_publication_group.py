@@ -13,8 +13,11 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from futonhub.cloud.audit import CloudAuditError  # noqa: E402
 from futonhub.cloud.services import price_proposals, woocommerce_publish  # noqa: E402
+from futonhub.services.combination_proposal_integration import derived_source_row  # noqa: E402
 from futonhub.services.price_combination_live_reconciliation import reconcile_live_combination_plan  # noqa: E402
+from futonhub.ui.erp import prototype as erp_prototype_module  # noqa: E402
 from futonhub.ui.erp.prototype import FutonHubErpPrototype  # noqa: E402
+from futonhub.ui.erp.shared_ui import PriceProposal  # noqa: E402
 
 
 def settings():
@@ -58,14 +61,30 @@ def proposal(
     }
 
 
-def woo_row(woo_id: int, price: float, *, parent_id: int | None = None, sku: str | None = None, modified: str = "T1") -> dict:
+def price_text(value) -> str:
+    if value == "":
+        return ""
+    return "" if value is None else f"{float(value):.2f}"
+
+
+def woo_row(
+    woo_id: int,
+    price: float,
+    *,
+    parent_id: int | None = None,
+    sku: str | None = None,
+    modified: str = "T1",
+    regular_price: float | None = None,
+    sale_price: float | str | None = None,
+) -> dict:
+    regular = price if regular_price is None else regular_price
     row = {
         "id": int(woo_id),
         "sku": sku or str(woo_id),
         "price": f"{price:.2f}",
-        "regular_price": f"{price:.2f}",
-        "sale_price": "",
-        "on_sale": False,
+        "regular_price": price_text(regular),
+        "sale_price": price_text(sale_price),
+        "on_sale": bool(price_text(sale_price)),
         "date_on_sale_from": None,
         "date_on_sale_to": None,
         "date_modified": modified,
@@ -77,14 +96,23 @@ def woo_row(woo_id: int, price: float, *, parent_id: int | None = None, sku: str
     return row
 
 
-def derived_context(woo_id: int, price: float, *, parent_id: int | None = None, modified: str | None = "T1") -> dict:
+def derived_context(
+    woo_id: int,
+    price: float,
+    *,
+    parent_id: int | None = None,
+    modified: str | None = "T1",
+    regular_price: float | None = None,
+    sale_price: float | str | None = None,
+) -> dict:
+    regular = price if regular_price is None else regular_price
     context = {
         "id": int(woo_id),
         "parent_id": int(parent_id) if parent_id is not None else None,
         "price": f"{price:.2f}",
-        "regular_price": f"{price:.2f}",
-        "sale_price": "",
-        "on_sale": False,
+        "regular_price": price_text(regular),
+        "sale_price": price_text(sale_price),
+        "on_sale": bool(price_text(sale_price)),
         "date_on_sale_from": None,
         "date_on_sale_to": None,
     }
@@ -103,6 +131,8 @@ def derived_proposal(
     new_price: float,
     parent_id: int | None = None,
     stored_context: dict | None = None,
+    stored_payload: dict | None = None,
+    stored_strategy: str | None = None,
 ) -> dict:
     snapshot = {
         "woo_id": int(woo_id),
@@ -125,10 +155,57 @@ def derived_proposal(
         "woo_price_context_at_creation": dict(
             stored_context if stored_context is not None else derived_context(woo_id, old_price, parent_id=parent_id)
         ),
-        "future_pricing_payload": {"regular_price": f"{new_price:.2f}", "sale_price": ""},
-        "pricing_strategy": "regular_price",
+        "future_pricing_payload": (
+            dict(stored_payload) if stored_payload is not None else {"regular_price": f"{new_price:.2f}", "sale_price": ""}
+        ),
+        "pricing_strategy": stored_strategy if stored_strategy is not None else "regular_price",
     })
     return row
+
+
+def proposal_from_derived_line(row_id: str, line: dict, *, source_ids: tuple[str, ...] = ("direct",)) -> dict:
+    row = proposal(
+        row_id,
+        "variation",
+        int(line["combination_woo_id"]),
+        old_price=float(line["effective_current_price"]),
+        new_price=float(line["simulated_effective_price"]),
+        snapshot={
+            "woo_id": int(line["combination_woo_id"]),
+            "woo_item_kind": "variation",
+            "woo_parent_id": int(line["combination_parent_woo_id"]),
+            "parent_woo_id": int(line["combination_parent_woo_id"]),
+            "price": float(line["effective_current_price"]),
+        },
+    )
+    row["source_row"].update(
+        derived_source_row(
+            line,
+            proposal_name="Test",
+            save_token="token",
+            source_proposal_ids=source_ids,
+        )
+    )
+    return row
+
+
+def combination_row(
+    woo_id: int,
+    *,
+    parent_id: int = 20,
+    sku: str | None = None,
+    name: str | None = None,
+    delta: str = "4.00",
+) -> dict:
+    return {
+        "combination_woo_id": int(woo_id),
+        "combination_parent_woo_id": int(parent_id),
+        "combination_sku": sku or f"COMBO-{woo_id}",
+        "combination_name": name or f"Combinacion {woo_id}",
+        "component_delta": delta,
+        "proposal_trace_keys": ["direct-key"],
+        "modified_components": [{"component_item_id": "1", "component_sku": "A", "quantity": "2"}],
+    }
 
 
 class Response:
@@ -336,6 +413,103 @@ class ImpactService:
             "unmatched_changes": [],
             "counts": {"included_combinations": len(self.rows)},
         }
+
+
+class FakeWidget:
+    def __init__(self, *_args, **kwargs):
+        self.command = kwargs.get("command")
+        self.exists = True
+        self.options = dict(kwargs)
+
+    def title(self, *_args, **_kwargs):
+        return None
+
+    def configure(self, **kwargs):
+        self.options.update(kwargs)
+
+    config = configure
+
+    def transient(self, *_args, **_kwargs):
+        return None
+
+    def resizable(self, *_args, **_kwargs):
+        return None
+
+    def rowconfigure(self, *_args, **_kwargs):
+        return None
+
+    def columnconfigure(self, *_args, **_kwargs):
+        return None
+
+    def winfo_screenwidth(self):
+        return 1200
+
+    def winfo_screenheight(self):
+        return 800
+
+    def minsize(self, *_args, **_kwargs):
+        return None
+
+    def grab_set(self):
+        self.options["grabbed"] = True
+
+    def grab_release(self):
+        self.options["grabbed"] = False
+
+    def winfo_exists(self):
+        return self.exists
+
+    def destroy(self):
+        self.exists = False
+
+    def protocol(self, *_args, **_kwargs):
+        return None
+
+    def bind(self, *_args, **_kwargs):
+        return None
+
+    def grid(self, *_args, **_kwargs):
+        return None
+
+    def pack(self, *_args, **_kwargs):
+        return None
+
+
+class FakeTreeview(FakeWidget):
+    def __init__(self, *_args, **kwargs):
+        super().__init__(*_args, **kwargs)
+        self.items = []
+
+    def heading(self, *_args, **_kwargs):
+        return None
+
+    def column(self, *_args, **_kwargs):
+        return None
+
+    def insert(self, parent, index, **kwargs):
+        item_id = f"item-{len(self.items) + 1}"
+        self.items.append((item_id, parent, index, kwargs))
+        return item_id
+
+    def yview(self, *_args, **_kwargs):
+        return None
+
+    def xview(self, *_args, **_kwargs):
+        return None
+
+
+class FakeScrollbar(FakeWidget):
+    def set(self, *_args, **_kwargs):
+        return None
+
+
+class ImmediateThread:
+    def __init__(self, *, target, daemon=None):
+        self.target = target
+        self.daemon = daemon
+
+    def start(self):
+        self.target()
 
 
 class PriceProposalPublicationGroupTests(unittest.TestCase):
@@ -886,14 +1060,7 @@ class PriceProposalPublicationGroupTests(unittest.TestCase):
         self.assertEqual(result["counts"]["woo_writes"], 1)
 
     def test_derived_live_reconciliation_persists_target_date_modified_context(self):
-        row = {
-            "combination_woo_id": 201,
-            "combination_parent_woo_id": 20,
-            "combination_sku": "COMBO-201",
-            "combination_name": "Combinacion 201",
-            "component_delta": "4.00",
-            "modified_components": [{"component_item_id": "1", "component_sku": "A", "quantity": "2"}],
-        }
+        row = combination_row(201)
         woo = StatefulWoo({
             "products/20/variations/201": woo_row(201, 500, parent_id=20, sku="COMBO-201", modified="T-DERIVED"),
         })
@@ -909,6 +1076,188 @@ class PriceProposalPublicationGroupTests(unittest.TestCase):
         self.assertEqual(context["date_modified"], "T-DERIVED")
         self.assertEqual(context["date_modified_gmt"], "T-DERIVEDZ")
         self.assertEqual(context["woo_date_modified"], "T-DERIVEDZ")
+
+    def test_derived_reconciliation_creates_sale_price_payload_for_persisted_preview(self):
+        woo = StatefulWoo({
+            "products/20/variations/201": woo_row(
+                201,
+                717.30,
+                parent_id=20,
+                sku="COMBO-201",
+                regular_price=900.00,
+                sale_price=717.30,
+            ),
+        })
+
+        result = reconcile_live_combination_plan(
+            [{"physical_item_id": "1", "physical_sku": "A", "old_price": "137.90", "new_price": "139.90"}],
+            impact_service=ImpactService([combination_row(201)]),
+            woo_client=woo,
+            session=None,
+        )
+        line = result["derived_lines"][0]
+
+        self.assertEqual(line["simulated_effective_price"], "721.30")
+        self.assertEqual(line["future_pricing_payload"], {"sale_price": "721.30"})
+        self.assertEqual(line["pricing_strategy"], "sale_price")
+        source = derived_source_row(
+            line,
+            proposal_name="Human smoke",
+            save_token="token",
+            source_proposal_ids=["direct"],
+        )
+        self.assertEqual(source["future_pricing_payload"], {"sale_price": "721.30"})
+        self.assertEqual(source["pricing_strategy"], "sale_price")
+
+    def test_derived_reconciliation_creates_regular_price_payload_for_persisted_preview(self):
+        woo = StatefulWoo({
+            "products/20/variations/201": woo_row(201, 500.00, parent_id=20, sku="COMBO-201"),
+        })
+
+        result = reconcile_live_combination_plan(
+            [{"physical_item_id": "1", "physical_sku": "A", "old_price": "100.00", "new_price": "104.00"}],
+            impact_service=ImpactService([combination_row(201)]),
+            woo_client=woo,
+            session=None,
+        )
+        line = result["derived_lines"][0]
+
+        self.assertEqual(line["simulated_effective_price"], "504.00")
+        self.assertEqual(line["future_pricing_payload"], {"regular_price": "504.00", "sale_price": ""})
+        self.assertEqual(line["pricing_strategy"], "regular_price")
+
+    def test_human_smoke_sale_price_derived_payloads_are_ready_after_persistence(self):
+        rows = [
+            proposal("direct", "product", 10, old_price=137.90, new_price=139.90, snapshot={"woo_id": 10, "type": "simple", "price": 137.90}),
+        ]
+        combination_rows = [
+            combination_row(201, sku="COMBO-201"),
+            combination_row(202, sku="COMBO-202"),
+            combination_row(203, parent_id=21, sku="COMBO-203"),
+        ]
+        woo = StatefulWoo({
+            "products/10": woo_row(10, 137.90, modified="T-DIRECT"),
+            "products/20/variations/201": woo_row(201, 717.30, parent_id=20, sku="COMBO-201", regular_price=900.00, sale_price=717.30, modified="T-A"),
+            "products/20/variations/202": woo_row(202, 729.94, parent_id=20, sku="COMBO-202", regular_price=900.00, sale_price=729.94, modified="T-B"),
+            "products/21/variations/203": woo_row(203, 741.46, parent_id=21, sku="COMBO-203", regular_price=900.00, sale_price=741.46, modified="T-C"),
+        })
+        plan = reconcile_live_combination_plan(
+            [{"physical_item_id": "1", "physical_sku": "A", "old_price": "137.90", "new_price": "139.90"}],
+            impact_service=ImpactService(combination_rows),
+            woo_client=woo,
+            session=None,
+        )
+        for index, line in enumerate(plan["derived_lines"], start=1):
+            rows.append(proposal_from_derived_line(f"derived-{index}", line))
+
+        preview = woocommerce_publish.preview_price_proposal_group_publish(
+            Session(rows),
+            proposal_ids=[row["id"] for row in rows],
+            settings=settings(),
+            client=woo,
+        )
+
+        self.assertEqual(preview["rows"][0]["status"], "VALIDO")
+        derived_rows = preview["rows"][1:]
+        self.assertEqual([row["status"] for row in derived_rows], ["READY", "READY", "READY"])
+        self.assertNotIn("BLOCKED_INVALID_PAYLOAD", {row["functional_status"] for row in preview["rows"]})
+        self.assertEqual([row["pricing_strategy"] for row in derived_rows], ["sale_price", "sale_price", "sale_price"])
+        for row in derived_rows:
+            source = row["proposal"]["source_row"]
+            self.assertEqual(row["pricing_payload"], source["future_pricing_payload"])
+
+    def test_legacy_empty_payload_revalidates_without_write_then_publishes_after_review(self):
+        rows = [
+            proposal("direct", "product", 10, old_price=137.90, new_price=139.90, snapshot={"woo_id": 10, "type": "simple", "price": 137.90}),
+            derived_proposal(
+                "derived-a",
+                "variation",
+                201,
+                old_price=717.30,
+                new_price=721.30,
+                parent_id=20,
+                stored_context=derived_context(201, 717.30, parent_id=20, regular_price=900.00, sale_price=717.30, modified="T-A"),
+                stored_payload={},
+                stored_strategy="",
+            ),
+            derived_proposal(
+                "derived-b",
+                "variation",
+                202,
+                old_price=729.94,
+                new_price=733.94,
+                parent_id=20,
+                stored_context=derived_context(202, 729.94, parent_id=20, regular_price=900.00, sale_price=729.94, modified="T-B"),
+                stored_payload={},
+                stored_strategy="",
+            ),
+            derived_proposal(
+                "derived-c",
+                "variation",
+                203,
+                old_price=741.46,
+                new_price=745.46,
+                parent_id=21,
+                stored_context=derived_context(203, 741.46, parent_id=21, regular_price=900.00, sale_price=741.46, modified="T-C"),
+                stored_payload={},
+                stored_strategy="",
+            ),
+        ]
+        woo = StatefulWoo({
+            "products/10": woo_row(10, 137.90, modified="T-DIRECT"),
+            "products/20/variations/201": woo_row(201, 717.30, parent_id=20, regular_price=900.00, sale_price=717.30, modified="T-A"),
+            "products/20/variations/202": woo_row(202, 729.94, parent_id=20, regular_price=900.00, sale_price=729.94, modified="T-B"),
+            "products/21/variations/203": woo_row(203, 741.46, parent_id=21, regular_price=900.00, sale_price=741.46, modified="T-C"),
+        })
+        session = Session(rows)
+
+        preview = woocommerce_publish.preview_price_proposal_group_publish(
+            session,
+            proposal_ids=[row["id"] for row in rows],
+            settings=settings(),
+            client=woo,
+        )
+        self.assertEqual(preview["rows"][0]["status"], "VALIDO")
+        self.assertEqual([row["status"] for row in preview["rows"][1:]], ["BLOCKED_INVALID_PAYLOAD"] * 3)
+
+        with (
+            patch.object(woocommerce_publish, "write_snapshot"),
+            patch.object(woocommerce_publish, "write_audit_event"),
+        ):
+            with self.assertRaises(woocommerce_publish.PriceProposalRevalidationRequired):
+                woocommerce_publish.publish_price_proposal_group(
+                    session,
+                    proposal_ids=[row["id"] for row in rows],
+                    settings=settings(),
+                    client=woo,
+                )
+
+        self.assertEqual(woo.writes, [])
+        refreshed_payloads = {
+            row["id"]: row["source_row"]["future_pricing_payload"]
+            for row in session.tables["price_change_proposals"]
+            if row["id"].startswith("derived-")
+        }
+        self.assertEqual(refreshed_payloads["derived-a"], {"sale_price": "721.30"})
+        self.assertEqual(refreshed_payloads["derived-b"], {"sale_price": "733.94"})
+        self.assertEqual(refreshed_payloads["derived-c"], {"sale_price": "745.46"})
+
+        with (
+            patch.object(woocommerce_publish, "acquire_system_lock"),
+            patch.object(woocommerce_publish, "release_system_lock"),
+            patch.object(woocommerce_publish, "sync_woocommerce_price_inventory_state", return_value={"ok": True}),
+        ):
+            result = woocommerce_publish.publish_price_proposal_group(
+                session,
+                proposal_ids=[row["id"] for row in rows],
+                settings=settings(),
+                client=woo,
+            )
+
+        self.assertEqual(len(woo.writes), 4)
+        self.assertEqual(result["counts"]["woo_writes"], 4)
+        self.assertEqual(len(result["line_results"]), 4)
+        self.assertTrue(all(line["verify_ok"] for line in result["line_results"]))
 
     def test_missing_derived_context_is_revalidation_required_and_second_apply_publishes(self):
         rows = [
@@ -1040,6 +1389,94 @@ class PriceProposalPublicationGroupTests(unittest.TestCase):
 
         self.assertEqual(woo.writes, [("variation", 20, 201, {"regular_price": "504.00", "sale_price": ""})])
         self.assertEqual(result["line_results"][0]["result"], "APPLIED")
+
+    def test_price_publish_preview_does_not_shadow_price_proposal_parameter(self):
+        source = inspect.getsource(FutonHubErpPrototype._render_price_publish_preview)
+
+        self.assertNotIn('            proposal = row.get("proposal")', source)
+        self.assertIn('row_proposal = row.get("proposal")', source)
+
+    def test_revalidation_rerender_keeps_price_proposal_object(self):
+        app = FutonHubErpPrototype.__new__(FutonHubErpPrototype)
+        app._cloud_session = Session([])
+        app._price_publish_in_progress = True
+        app._price_bulk_preview_dimensions = lambda *_args: (800, 600, 400, 300)
+        app.after = lambda _ms, callback: callback()
+        buttons: list[FakeWidget] = []
+        windows: list[FakeWidget] = []
+
+        def fake_button(_parent, text, *, primary=False, command=None):
+            button = FakeWidget(text=text, primary=primary, command=command)
+            buttons.append(button)
+            return button
+
+        app._button = fake_button
+        proposal_model = PriceProposal("Smoke propuesta", "01/01/2026", 4, 4, 0, 0, "+1.0%", "Ready", tuple())
+        first_preview = {
+            "counts": {"total": 4, "valid": 1, "warnings": 0, "errors": 0, "stale": 0, "direct": 1, "derived": 3, "excluded": 0, "woo_writes": 4},
+            "rows": [
+                {"proposal_id": "direct", "entry_origin": "DIRECT_ITEM", "name": "Direct", "code": "D", "status": "VALIDO", "proposal": {"id": "direct"}},
+                {
+                    "proposal_id": "derived",
+                    "entry_origin": "DERIVED_COMBINATION",
+                    "name": "Derived",
+                    "code": "A",
+                    "status": "BLOCKED_INVALID_PAYLOAD",
+                    "proposal": {"id": "derived", "source_row": {"source_component_entry_ids": ["direct"]}},
+                },
+            ],
+            "exclusions": [],
+            "blocking": False,
+        }
+        refreshed_preview = {
+            "counts": {"total": 1, "valid": 1, "warnings": 0, "errors": 0, "stale": 0, "direct": 0, "derived": 1, "excluded": 0, "woo_writes": 1},
+            "display_rows": [
+                {
+                    "proposal_id": "derived",
+                    "entry_origin": "DERIVED_COMBINATION",
+                    "name": "Derived refreshed",
+                    "code": "A",
+                    "status": "READY",
+                    "proposal": {"id": "derived", "source_row": {"source_component_entry_ids": ["direct"]}},
+                }
+            ],
+            "exclusions": [],
+            "blocking": False,
+            "revalidation_required": True,
+        }
+
+        def fake_toplevel(*_args, **_kwargs):
+            window = FakeWidget()
+            windows.append(window)
+            return window
+
+        with (
+            patch.object(erp_prototype_module.tk, "Toplevel", side_effect=fake_toplevel),
+            patch.object(erp_prototype_module.tk, "Frame", FakeWidget),
+            patch.object(erp_prototype_module.tk, "Label", FakeWidget),
+            patch.object(erp_prototype_module.ttk, "Treeview", FakeTreeview),
+            patch.object(erp_prototype_module.ttk, "Scrollbar", FakeScrollbar),
+            patch.object(erp_prototype_module, "center_window"),
+            patch.object(erp_prototype_module.threading, "Thread", ImmediateThread),
+            patch.object(
+                erp_prototype_module,
+                "publish_price_proposal_group",
+                side_effect=erp_prototype_module.PriceProposalRevalidationRequired(
+                    "refresh",
+                    preview=refreshed_preview,
+                    differences=[],
+                ),
+            ),
+            patch.object(erp_prototype_module.messagebox, "showerror") as showerror,
+        ):
+            FutonHubErpPrototype._render_price_publish_preview(app, proposal_model, ["direct", "derived"], first_preview)
+            publish_buttons = [button for button in buttons if button.options.get("primary")]
+            self.assertEqual(len(publish_buttons), 1)
+            publish_buttons[0].command()
+
+        self.assertGreaterEqual(len(windows), 2)
+        self.assertFalse(showerror.called)
+        self.assertTrue(hasattr(proposal_model, "name"))
 
 
 if __name__ == "__main__":

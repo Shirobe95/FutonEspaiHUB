@@ -3727,11 +3727,11 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
 
         orphan_rows: list[dict[str, Any]] = []
         for row in derived_rows:
-            proposal = row.get("proposal") if isinstance(row.get("proposal"), dict) else {}
-            source = proposal.get("source_row") if isinstance(proposal.get("source_row"), dict) else {}
+            row_proposal = row.get("proposal") if isinstance(row.get("proposal"), dict) else {}
+            row_source = row_proposal.get("source_row") if isinstance(row_proposal.get("source_row"), dict) else {}
             responsible_ids = [
                 str(value).strip()
-                for value in source.get("source_component_entry_ids") or []
+                for value in row_source.get("source_component_entry_ids") or []
                 if str(value).strip()
             ]
             parent_ids = [parents_by_proposal_id[value] for value in responsible_ids if value in parents_by_proposal_id]
@@ -3823,7 +3823,14 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 refreshed_preview = (result or {}).get("preview") or {}
                 close_preview()
                 self._price_publish_in_progress = True
-                self._render_price_publish_preview(proposal, member_ids, refreshed_preview)
+                try:
+                    self._render_price_publish_preview(proposal, member_ids, refreshed_preview)
+                except Exception as exc:
+                    self._price_publish_in_progress = False
+                    messagebox.showerror(
+                        "Cambio de Precios",
+                        f"No se pudo reconstruir el preview revalidado:\n{exc}",
+                    )
                 return
             operation_id = (result or {}).get("operation_id") or "-"
             close_preview()

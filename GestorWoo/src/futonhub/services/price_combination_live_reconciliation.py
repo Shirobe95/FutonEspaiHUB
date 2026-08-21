@@ -13,7 +13,10 @@ from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any, Callable, Iterable, Mapping
 
-from futonhub.cloud.services.woocommerce_publish import _effective_woo_price
+from futonhub.cloud.services.woocommerce_publish import (
+    _effective_woo_price,
+    _pricing_payload_for_effective_price,
+)
 from futonhub.services.combination_price_impact import (
     CombinationPriceImpactError,
     CombinationPriceImpactService,
@@ -525,6 +528,8 @@ def reconcile_live_combination_plan(
                 effective = None
         delta = None
         simulated = None
+        future_pricing_payload: dict[str, Any] = {}
+        pricing_strategy = ""
         try:
             delta = _money(row.get("component_delta"))
             if effective is not None:
@@ -532,6 +537,11 @@ def reconcile_live_combination_plan(
                 if simulated <= 0:
                     status = "PRICE_MISSING"
                     reason = "El nuevo precio derivado no seria positivo."
+                elif entity is not None and status == "VALID":
+                    future_pricing_payload, pricing_strategy = _pricing_payload_for_effective_price(
+                        dict(entity),
+                        float(simulated),
+                    )
         except Exception:
             if status == "VALID":
                 status = "READ_ERROR"
@@ -552,6 +562,8 @@ def reconcile_live_combination_plan(
             "publication_allowed": "YES" if status == "VALID" else "NO",
             "blocking_reason": "" if status == "VALID" else reason,
             "impact_display_status": "VALID" if status == "VALID" else f"BLOCKED_{status}",
+            "future_pricing_payload": dict(future_pricing_payload),
+            "pricing_strategy": pricing_strategy,
             "woo_price_context": {
                 "id": (entity or {}).get("id"),
                 "parent_id": (entity or {}).get("parent_id"),
