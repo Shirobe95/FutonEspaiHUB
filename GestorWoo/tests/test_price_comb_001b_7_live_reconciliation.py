@@ -177,6 +177,22 @@ class PriceComb001B7LiveReconciliationTests(unittest.TestCase):
         self.assertEqual(product_result["woo_item_kind"], "product")
         self.assertEqual(variation_result["woo_item_kind"], "variation")
 
+    def test_woo_exact_sku_variation_is_classified_with_parent_endpoint(self):
+        sku = "0201010"
+        woo = Woo(
+            products={"lookup": variation(12345, 900, sku, "137.90")},
+            variations={"products/900/variations/12345": variation(12345, 900, sku, "137.90")},
+        )
+
+        result = resolve_live_direct_identity("201010", sku, session=None, woo_client=woo)
+
+        self.assertEqual(result["resolution_status"], "RESOLVED")
+        self.assertEqual(result["resolution_source"], "WOO_EXACT_SKU")
+        self.assertEqual(result["woo_item_kind"], "variation")
+        self.assertEqual(result["woo_parent_id"], "900")
+        self.assertEqual(result["woo_endpoint"], "products/900/variations/12345")
+        self.assertNotIn(("products/12345", {}), woo.reads)
+
     # 3. The exact Woo endpoint is retained in the trace.
     def test_endpoint_is_logged(self):
         trace = live_price_trace("201001", "0201001", session=self.session, woo_client=self._with_product_lookup())

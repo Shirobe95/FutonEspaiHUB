@@ -117,6 +117,31 @@ def _replica_exact_candidates(session: Any, physical_sku: str) -> list[dict[str,
     return candidates
 
 
+def _woo_exact_candidate_from_row(row: Mapping[str, Any], physical_sku: str) -> dict[str, Any]:
+    woo_id = _positive_int(row.get("id"), "Woo id")
+    row_type = _text(row.get("type")).lower()
+    raw_parent = row.get("parent_id") or row.get("parent_woo_id")
+    try:
+        parent_value = int(str(raw_parent).strip()) if _text(raw_parent) else 0
+    except (TypeError, ValueError):
+        parent_value = 0
+    if row_type == "variation" or parent_value > 0:
+        return {
+            "woo_id": woo_id,
+            "woo_parent_id": str(_positive_int(raw_parent, "Woo parent_id")),
+            "woo_item_kind": "variation",
+            "woo_sku": physical_sku,
+            "resolution_source": "WOO_EXACT_SKU",
+        }
+    return {
+        "woo_id": woo_id,
+        "woo_parent_id": "",
+        "woo_item_kind": "product",
+        "woo_sku": physical_sku,
+        "resolution_source": "WOO_EXACT_SKU",
+    }
+
+
 def resolve_direct_woo_target(
     physical_item_id: Any,
     physical_sku: Any,
@@ -160,26 +185,27 @@ def resolve_direct_woo_target(
     if woo_client is None:
         return {"resolution_status": "NOT_FOUND", "reason": f"No existe un destino Woo exacto para SKU {sku}."}
     try:
-        candidates = [
-            row for row in _response_rows(woo_client.get("products", params={"sku": sku, "per_page": 100}))
-            if _text(row.get("sku")) == sku and _positive_int(row.get("id"), "Woo id") > 0
-        ]
+        candidates = []
+        for row in _response_rows(woo_client.get("products", params={"sku": sku, "per_page": 100})):
+            if _text(row.get("sku")) == sku:
+                try:
+                    candidates.append(_woo_exact_candidate_from_row(row, sku))
+                except CloudAuditError:
+                    continue
     except Exception as exc:
         return {"resolution_status": "LOOKUP_ERROR", "reason": f"No se pudo consultar Woo por SKU exacto {sku}: {exc}"}
-    unique_woo = {int(row["id"]): row for row in candidates}
+    unique_woo = {
+        (row["woo_item_kind"], int(row["woo_id"]), _text(row.get("woo_parent_id"))): row
+        for row in candidates
+    }
     if len(unique_woo) != 1:
         status = "NOT_FOUND" if not unique_woo else "AMBIGUOUS"
         return {"resolution_status": status, "reason": f"SKU Woo exacto {sku} devolvio {len(unique_woo)} productos."}
-    woo_row = next(iter(unique_woo.values()))
     return {
         "resolution_status": "RESOLVED",
-        "resolution_source": "WOO_EXACT_SKU",
         "physical_item_id": item_id,
         "physical_sku": sku,
-        "woo_id": int(woo_row["id"]),
-        "woo_parent_id": "",
-        "woo_item_kind": "product",
-        "woo_sku": sku,
+        **next(iter(unique_woo.values())),
     }
 
 
@@ -203,6 +229,14 @@ def _read_woo_target(woo_client: Any, identities: Mapping[str, Any], cache: dict
     if kind == "variation" and reported_parent not in (None, ""):
         if _positive_int(reported_parent, "Woo parent_id") != int(identities["woo_parent_id"]):
             raise CloudAuditError("Woo devolvio una variation con parent_id distinto.")
+    if kind == "product":
+        row_type = _text(item.get("type")).lower()
+        try:
+            parent_value = int(str(reported_parent).strip()) if _text(reported_parent) else 0
+        except (TypeError, ValueError):
+            parent_value = 0
+        if row_type == "variation" or parent_value > 0:
+            raise CloudAuditError("Woo devolvio una variacion para un destino product.")
     if identities["woo_sku"] and _text(item.get("sku")) != identities["woo_sku"]:
         raise CloudAuditError("Woo devolvio un SKU distinto del SKU exacto esperado.")
     return item

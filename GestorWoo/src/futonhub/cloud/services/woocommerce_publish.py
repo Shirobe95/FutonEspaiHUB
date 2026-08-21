@@ -186,6 +186,109 @@ def _pricing_payload_matches(expected: dict[str, Any], actual: dict[str, Any] | 
     return True
 
 
+def _positive_int_or_none(value: Any) -> int | None:
+    try:
+        parsed = int(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _live_woo_remote_kind(data: dict[str, Any] | None) -> str:
+    row = data or {}
+    row_type = str(row.get("type") or "").strip().lower()
+    if row_type == "variation" or _positive_int_or_none(row.get("parent_id")):
+        return "variation"
+    return "product"
+
+
+def _validate_remote_target_shape(target: dict[str, Any]) -> dict[str, Any]:
+    remote_kind = str(target.get("remote_kind") or "").strip().lower()
+    woo_id = _positive_int_or_none(target.get("woo_id"))
+    if woo_id is None:
+        raise CloudAuditError("El destino Woo no tiene woo_id positivo.")
+    endpoint = str(target.get("endpoint") or "").strip()
+    remote_key = str(target.get("remote_key") or "").strip()
+    if remote_kind == "product":
+        expected_endpoint = f"products/{woo_id}"
+        expected_key = f"product:{woo_id}"
+        if endpoint != expected_endpoint or remote_key != expected_key:
+            raise CloudAuditError(
+                f"Destino product mal formado: endpoint={endpoint or '-'} remote_key={remote_key or '-'}."
+            )
+        if _positive_int_or_none(target.get("parent_woo_id")) is not None:
+            raise CloudAuditError("Un destino product no puede llevar parent_woo_id positivo.")
+        return target
+    if remote_kind == "variation":
+        parent_id = _positive_int_or_none(target.get("parent_woo_id"))
+        if parent_id is None:
+            raise CloudAuditError("El destino variation no tiene parent_woo_id positivo.")
+        expected_endpoint = f"products/{parent_id}/variations/{woo_id}"
+        expected_key = f"variation:{parent_id}:{woo_id}"
+        if endpoint != expected_endpoint or remote_key != expected_key:
+            raise CloudAuditError(
+                f"Destino variation mal formado: endpoint={endpoint or '-'} remote_key={remote_key or '-'}."
+            )
+        return target
+    raise CloudAuditError("El destino Woo debe ser product o variation.")
+
+
+def _remote_identity_revalidation_from_live(
+    target: dict[str, Any] | None,
+    woo_data: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    if not target or not woo_data:
+        return None
+    target_kind = str(target.get("remote_kind") or "").strip().lower()
+    live_kind = _live_woo_remote_kind(woo_data)
+    if target_kind == live_kind:
+        return None
+    live_woo_id = _positive_int_or_none(woo_data.get("id"))
+    live_parent_id = _positive_int_or_none(woo_data.get("parent_id"))
+    target_woo_id = _positive_int_or_none(target.get("woo_id"))
+    if live_kind == "variation" and live_woo_id == target_woo_id and live_parent_id:
+        return {
+            "can_revalidate": True,
+            "woo_item_kind": "variation",
+            "woo_id": live_woo_id,
+            "woo_parent_id": live_parent_id,
+            "parent_woo_id": live_parent_id,
+            "woo_sku": woo_data.get("sku"),
+            "reason": (
+                "WooCommerce devuelve una variation con parent_id para un destino "
+                f"persistido como {target_kind}. El borrador debe revalidarse antes de publicar."
+            ),
+        }
+    return {
+        "can_revalidate": False,
+        "reason": (
+            "WooCommerce devuelve una identidad remota incompatible con el destino "
+            f"persistido: esperado={target_kind or '-'} live={live_kind or '-'}."
+        )
+    }
+
+
+def _remote_target_diagnostic(
+    row: dict[str, Any],
+    target: dict[str, Any],
+    *,
+    put_attempted: bool,
+    put_confirmed: bool,
+) -> str:
+    return (
+        "remote_target="
+        f"entry_origin={row.get('entry_origin') or '-'}; "
+        f"canonical_key={row.get('canonical_key') or target.get('canonical_key') or '-'}; "
+        f"canonical_kind={target.get('canonical_kind') or '-'}; "
+        f"remote_kind={target.get('remote_kind') or '-'}; "
+        f"woo_id={target.get('woo_id') or '-'}; "
+        f"parent_woo_id={target.get('parent_woo_id') or '-'}; "
+        f"endpoint={target.get('endpoint') or '-'}; "
+        f"put_attempted={bool(put_attempted)}; "
+        f"put_confirmed={bool(put_confirmed)}"
+    )
+
+
 def _proposal_entry_origin(proposal: dict[str, Any]) -> str:
     source = proposal.get("source_row") if isinstance(proposal.get("source_row"), dict) else {}
     return str(source.get("entry_origin") or "DIRECT_ITEM").strip().upper()
@@ -194,7 +297,7 @@ def _proposal_entry_origin(proposal: dict[str, Any]) -> str:
 def _is_revalidatable_publish_row(row: dict[str, Any]) -> bool:
     status = str(row.get("status") or "").strip().upper()
     reason = str(row.get("reason") or "").strip().lower()
-    if status == "DESACTUALIZADA":
+    if status in {"DESACTUALIZADA", "REMOTE_IDENTITY_REVALIDATION_REQUIRED"}:
         return True
     proposal = row.get("proposal") if isinstance(row.get("proposal"), dict) else {}
     if (
@@ -253,10 +356,18 @@ def _refresh_price_proposal_group_from_live(
             raise CloudAuditError(f"{proposal_id} produce un precio recalculado invalido.")
         payload, strategy = _pricing_payload_for_effective_price(live_context, float(refreshed_new))
         target = row.get("target") or {}
+        identity_update = _remote_identity_revalidation_from_live(target, live_context)
+        if identity_update and not identity_update.get("can_revalidate"):
+            raise CloudAuditError("La identidad remota live no puede revalidarse automaticamente.")
+        revalidated_parent_id = (
+            identity_update.get("parent_woo_id")
+            if identity_update
+            else target.get("parent_woo_id")
+        )
         refreshed_context = {
             **_pricing_snapshot(live_context),
             "id": live_context.get("id"),
-            "parent_id": target.get("parent_woo_id"),
+            "parent_id": revalidated_parent_id,
             "date_modified": live_context.get("date_modified"),
             "date_modified_gmt": live_context.get("date_modified_gmt"),
         }
@@ -268,6 +379,16 @@ def _refresh_price_proposal_group_from_live(
             "price_at_creation": float(live_price),
             "proposed_price": float(refreshed_new),
         })
+        if identity_update:
+            item_snapshot.update({
+                "woo_id": identity_update["woo_id"],
+                "woo_parent_id": identity_update["woo_parent_id"],
+                "parent_woo_id": identity_update["parent_woo_id"],
+                "woo_item_kind": identity_update["woo_item_kind"],
+                "item_kind": identity_update["woo_item_kind"],
+                "type": identity_update["woo_item_kind"],
+                "sku": identity_update.get("woo_sku") or item_snapshot.get("sku"),
+            })
         source_update = {
             **source,
             "workflow_state": "READY",
@@ -286,6 +407,34 @@ def _refresh_price_proposal_group_from_live(
             },
             "item_snapshot": item_snapshot,
         }
+        update_payload = {
+            "old_price": float(live_price),
+            "new_price": float(refreshed_new),
+            "delta": float(refreshed_new) - float(live_price),
+            "source_row": source_update,
+        }
+        if identity_update:
+            source_update.update({
+                "ui_canonical_item_kind": identity_update["woo_item_kind"],
+                "ui_canonical_woo_id": identity_update["woo_id"],
+                "woo_id": identity_update["woo_id"],
+                "woo_parent_id": identity_update["woo_parent_id"],
+                "parent_woo_id": identity_update["parent_woo_id"],
+                "woo_item_kind": identity_update["woo_item_kind"],
+                "woo_sku": identity_update.get("woo_sku") or source.get("woo_sku") or "",
+                "remote_identity_revalidated_from": {
+                    "previous_remote_kind": target.get("remote_kind"),
+                    "previous_remote_key": target.get("remote_key"),
+                    "live_remote_kind": identity_update["woo_item_kind"],
+                    "live_parent_woo_id": identity_update["woo_parent_id"],
+                    "source": "woo_live_identity_revalidation",
+                },
+            })
+            update_payload.update({
+                "item_kind": identity_update["woo_item_kind"],
+                "item_woo_id": identity_update["woo_id"],
+                "local_id": identity_update["woo_id"],
+            })
         if entry_origin == "DERIVED_COMBINATION":
             source_update.update({
                 "derived_status": "NO_CHANGE" if abs(float(refreshed_new) - float(live_price)) <= 0.009 else "READY",
@@ -297,12 +446,7 @@ def _refresh_price_proposal_group_from_live(
             })
         update_response = (
             session.client.table("price_change_proposals")
-            .update({
-                "old_price": float(live_price),
-                "new_price": float(refreshed_new),
-                "delta": float(refreshed_new) - float(live_price),
-                "source_row": source_update,
-            })
+            .update(update_payload)
             .eq("id", proposal_id)
             .eq("status", "pending")
             .execute()
@@ -321,6 +465,7 @@ def _refresh_price_proposal_group_from_live(
             "revalidated_new_price": float(refreshed_new),
             "previous_reason": row.get("reason"),
             "pricing_payload": dict(payload),
+            "remote_identity_revalidated": bool(identity_update),
         })
     write_audit_event(session, AuditEvent(
         operation_id=operation_id,
@@ -373,7 +518,7 @@ def _remote_target_for_proposal(session, proposal: dict[str, Any]) -> dict[str, 
             or "product"
         ).strip().lower()
     if remote_kind == "product":
-        return {
+        return _validate_remote_target_shape({
             "canonical_key": canonical_key,
             "canonical_kind": kind,
             "woo_id": woo_id,
@@ -381,7 +526,7 @@ def _remote_target_for_proposal(session, proposal: dict[str, Any]) -> dict[str, 
             "remote_key": f"product:{woo_id}",
             "endpoint": f"products/{woo_id}",
             "cloud_item": cloud_item,
-        }
+        })
     if remote_kind == "variation":
         parent_id = (
             snapshot.get("woo_parent_id")
@@ -395,7 +540,7 @@ def _remote_target_for_proposal(session, proposal: dict[str, Any]) -> dict[str, 
             raise CloudAuditError(
                 f"{canonical_key} no tiene parent product ID fiable."
             ) from exc
-        return {
+        return _validate_remote_target_shape({
             "canonical_key": canonical_key,
             "canonical_kind": kind,
             "woo_id": woo_id,
@@ -404,11 +549,12 @@ def _remote_target_for_proposal(session, proposal: dict[str, Any]) -> dict[str, 
             "remote_key": f"variation:{parent_id}:{woo_id}",
             "endpoint": f"products/{parent_id}/variations/{woo_id}",
             "cloud_item": cloud_item,
-        }
+        })
     raise CloudAuditError(f"{canonical_key} no tiene destino Woo publicable.")
 
 
 def _fetch_remote_target(client: WooCommerceClient, target: dict[str, Any]) -> dict[str, Any]:
+    target = _validate_remote_target_shape(dict(target))
     return client.get(str(target["endpoint"])).json()
 
 
@@ -417,6 +563,7 @@ def _write_remote_target(
     target: dict[str, Any],
     payload: dict[str, Any],
 ) -> Any:
+    target = _validate_remote_target_shape(dict(target))
     if target["remote_kind"] == "product":
         return client.update_product_pricing(int(target["woo_id"]), payload)
     return client.update_variation_pricing(
@@ -1036,6 +1183,19 @@ def preview_price_proposal_group_publish(
             woo_price = _effective_woo_price(woo_data)
             if woo_price is None:
                 raise CloudAuditError("WooCommerce no devuelve un precio efectivo.")
+            remote_identity_update = _remote_identity_revalidation_from_live(target, woo_data)
+            if remote_identity_update:
+                status = (
+                    "REMOTE_IDENTITY_REVALIDATION_REQUIRED"
+                    if remote_identity_update.get("can_revalidate")
+                    else "BLOCKED_REMOTE_IDENTITY_MISMATCH"
+                )
+                functional_status = (
+                    "BLOCKED_REMOTE_IDENTITY_REVALIDATION_REQUIRED"
+                    if remote_identity_update.get("can_revalidate")
+                    else "BLOCKED_REMOTE_IDENTITY_MISMATCH"
+                )
+                reason = str(remote_identity_update.get("reason") or "")
             if entry_origin == "DERIVED_COMBINATION":
                 persisted_status = str(source.get("derived_status") or "").strip().upper()
                 if source.get("publication_allowed") != "YES" or persisted_status not in {"READY", "NO_CHANGE"}:
@@ -1077,7 +1237,7 @@ def preview_price_proposal_group_publish(
                             status = "BLOCKED_INVALID_PAYLOAD"
                             functional_status = status
                             reason = "El contexto Woo cambio desde el preview: " + ", ".join(sorted(changed))
-            if str(status).startswith("BLOCKED_"):
+            if str(status).startswith("BLOCKED_") or str(functional_status).startswith("BLOCKED_"):
                 pass
             elif abs(float(old_price) - float(woo_price)) > 0.009:
                 status = "DESACTUALIZADA"
@@ -1325,6 +1485,7 @@ def publish_price_proposal_group(
     marked_ids: list[str] = []
     published: list[dict[str, Any]] = []
     rollback: list[dict[str, Any]] = []
+    failed_write: dict[str, Any] | None = None
     try:
         acquire_system_lock(
             session,
@@ -1446,8 +1607,31 @@ def publish_price_proposal_group(
                 })
                 continue
             put_attempted = False
-            _write_remote_target(woo, target, payload)
             put_attempted = True
+            try:
+                _write_remote_target(woo, target, payload)
+            except Exception as write_exc:
+                failed_write = {
+                    "proposal_id": row.get("proposal_id"),
+                    "entry_origin": row.get("entry_origin"),
+                    "canonical_key": row.get("canonical_key"),
+                    "target": _json_safe(target),
+                    "pricing_payload": _json_safe(payload),
+                    "put_attempted": True,
+                    "put_ok": False,
+                    "put_confirmed": False,
+                    "write_performed": False,
+                    "diagnostic": _remote_target_diagnostic(
+                        row,
+                        target,
+                        put_attempted=True,
+                        put_confirmed=False,
+                    ),
+                }
+                raise CloudAuditError(
+                    f"{row['canonical_key']} fallo PUT Woo: {write_exc}. "
+                    + failed_write["diagnostic"]
+                ) from write_exc
             verified = _fetch_remote_target(woo, target)
             verified_price = _effective_woo_price(verified)
             if verified_price is None or abs(verified_price - float(row["new_price"])) > 0.009:
@@ -1662,6 +1846,7 @@ def publish_price_proposal_group(
                         **refreshed_context,
                         "rollback_complete": rollback_complete,
                         "rollback_failures": rollback_failures,
+                        **({"publish_failed_write": failed_write} if failed_write else {}),
                     },
                 }).eq("id", row_id).execute()
             except Exception:
@@ -1683,6 +1868,7 @@ def publish_price_proposal_group(
                     "failed_by_user_id": actor["user_id"],
                     "failed_by_user_name": actor["user_name"],
                     "failed_machine": settings.machine_name,
+                    "failed_write": failed_write,
                 }),
                 message="Fallo la publicacion del lote; se ejecuto rollback compensatorio.",
                 error_detail=error_message,

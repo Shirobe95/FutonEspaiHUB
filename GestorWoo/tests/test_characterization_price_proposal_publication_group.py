@@ -570,9 +570,13 @@ class PriceProposalPublicationGroupTests(unittest.TestCase):
 
     def _preview(self, rows, targets, woo_prices):
         woo = Woo({
-            target["endpoint"]: [
-                {"price": str(price), "regular_price": str(price), "sale_price": ""}
-            ]
+            target["endpoint"]: [{
+                "id": target["woo_id"],
+                "parent_id": target.get("parent_woo_id"),
+                "price": str(price),
+                "regular_price": str(price),
+                "sale_price": "",
+            }]
             for target, price in zip(targets, woo_prices)
         })
         with (
@@ -608,8 +612,8 @@ class PriceProposalPublicationGroupTests(unittest.TestCase):
     def test_variation_and_pack_remain_distinct_when_targets_differ(self):
         rows = [proposal("v", "variation", 3662), proposal("pack", "pack", 3662)]
         targets = [
-            {"remote_key": "variation:9:3662", "endpoint": "v", "cloud_item": {}, "woo_id": 3662, "parent_woo_id": 9, "remote_kind": "variation", "canonical_key": "variation:3662"},
-            {"remote_key": "product:3662", "endpoint": "p", "cloud_item": {}, "woo_id": 3662, "remote_kind": "product", "canonical_key": "pack:3662"},
+            {"remote_key": "variation:9:3662", "endpoint": "products/9/variations/3662", "cloud_item": {}, "woo_id": 3662, "parent_woo_id": 9, "remote_kind": "variation", "canonical_key": "variation:3662"},
+            {"remote_key": "product:3662", "endpoint": "products/3662", "cloud_item": {}, "woo_id": 3662, "remote_kind": "product", "canonical_key": "pack:3662"},
         ]
         result = self._preview(rows, targets, [100, 100])
         self.assertEqual([row["status"] for row in result["rows"]], ["VALIDO", "VALIDO"])
@@ -931,6 +935,57 @@ class PriceProposalPublicationGroupTests(unittest.TestCase):
                 )
         self.assertTrue(all(row["status"] == "error" for row in session.tables["price_change_proposals"]))
 
+    def test_remote_put_failure_records_attempted_unconfirmed_diagnostic(self):
+        row = proposal(
+            "p",
+            "product",
+            10,
+            snapshot={"woo_id": 10, "type": "simple", "price": 100},
+        )
+        target = {
+            "remote_key": "product:10",
+            "endpoint": "products/10",
+            "cloud_item": {},
+            "woo_id": 10,
+            "remote_kind": "product",
+            "canonical_key": "product:10",
+        }
+        preflight_row = {
+            "proposal_id": "p",
+            "entry_origin": "DIRECT_ITEM",
+            "canonical_key": "product:10",
+            "target": target,
+            "woo_before": {"regular_price": "100", "sale_price": ""},
+            "woo_before_full": {"regular_price": "100", "sale_price": ""},
+            "woo_current_price": 100.0,
+            "new_price": 110.0,
+            "old_price_proposal": 100.0,
+            "proposal": row,
+        }
+        session = Session([row])
+        woo = FailingWoo({"products/10": []}, fail_on_write=1)
+        with (
+            patch.object(
+                woocommerce_publish,
+                "preview_price_proposal_group_publish",
+                return_value={"blocking": False, "rows": [preflight_row]},
+            ),
+            patch.object(woocommerce_publish, "acquire_system_lock"),
+            patch.object(woocommerce_publish, "release_system_lock"),
+        ):
+            with self.assertRaisesRegex(CloudAuditError, "put_attempted=True"):
+                woocommerce_publish.publish_price_proposal_group(
+                    session,
+                    proposal_ids=["p"],
+                    settings=settings(),
+                    client=woo,
+                )
+        source = session.tables["price_change_proposals"][0]["source_row"]
+        failed_write = source["publish_failed_write"]
+        self.assertTrue(failed_write["put_attempted"])
+        self.assertFalse(failed_write["put_confirmed"])
+        self.assertIn("endpoint=products/10", failed_write["diagnostic"])
+
     def test_incomplete_rollback_uses_error_status(self):
         source = inspect.getsource(woocommerce_publish.publish_price_proposal_group)
         self.assertIn('final_status = "pending" if not rollback_failures else "error"', source)
@@ -1022,6 +1077,91 @@ class PriceProposalPublicationGroupTests(unittest.TestCase):
         self.assertEqual(woo.writes, [("variation", 7, 20, {"regular_price": "110.00", "sale_price": ""})])
         self.assertEqual(result["line_results"][0]["woo_id"], 20)
         self.assertEqual(result["line_results"][0]["parent_woo_id"], 7)
+
+    def test_legacy_direct_product_live_variation_revalidates_then_publishes_variation(self):
+        row = proposal(
+            "legacy-direct",
+            "product",
+            12345,
+            old_price=137.90,
+            new_price=139.90,
+            snapshot={
+                "woo_id": 12345,
+                "woo_item_kind": "product",
+                "sku": "0201010",
+                "price": 137.90,
+            },
+        )
+        row["source_row"].update({
+            "ui_line_code": "0201010",
+            "physical_item_id": "201010",
+            "physical_sku": "0201010",
+            "woo_sku": "0201010",
+        })
+        live_variation = woo_row(
+            12345,
+            137.90,
+            parent_id=900,
+            sku="0201010",
+            modified="T-LIVE",
+        )
+        woo = StatefulWoo({
+            "products/12345": live_variation,
+            "products/900/variations/12345": live_variation,
+        })
+        session = Session([row])
+
+        preview = woocommerce_publish.preview_price_proposal_group_publish(
+            session,
+            proposal_ids=["legacy-direct"],
+            settings=settings(),
+            client=woo,
+        )
+        self.assertTrue(preview["blocking"])
+        self.assertTrue(preview["revalidation_possible"])
+        self.assertEqual(preview["rows"][0]["status"], "REMOTE_IDENTITY_REVALIDATION_REQUIRED")
+
+        with (
+            patch.object(woocommerce_publish, "write_snapshot"),
+            patch.object(woocommerce_publish, "write_audit_event"),
+        ):
+            with self.assertRaises(woocommerce_publish.PriceProposalRevalidationRequired) as caught:
+                woocommerce_publish.publish_price_proposal_group(
+                    session,
+                    proposal_ids=["legacy-direct"],
+                    settings=settings(),
+                    client=woo,
+                )
+        self.assertEqual(woo.writes, [])
+        self.assertTrue(caught.exception.differences[0]["remote_identity_revalidated"])
+        refreshed = session.tables["price_change_proposals"][0]
+        self.assertEqual(refreshed["item_kind"], "variation")
+        self.assertEqual(refreshed["source_row"]["ui_canonical_item_kind"], "variation")
+        self.assertEqual(refreshed["source_row"]["woo_parent_id"], 900)
+        self.assertEqual(refreshed["source_row"]["item_snapshot"]["woo_parent_id"], 900)
+
+        with (
+            patch.object(woocommerce_publish, "acquire_system_lock"),
+            patch.object(woocommerce_publish, "release_system_lock"),
+            patch.object(
+                woocommerce_publish,
+                "sync_woocommerce_price_inventory_state",
+                return_value={"ok": True},
+            ),
+        ):
+            result = woocommerce_publish.publish_price_proposal_group(
+                session,
+                proposal_ids=["legacy-direct"],
+                settings=settings(),
+                client=woo,
+            )
+
+        self.assertEqual(
+            woo.writes,
+            [("variation", 900, 12345, {"regular_price": "139.90", "sale_price": ""})],
+        )
+        self.assertEqual(result["line_results"][0]["parent_woo_id"], 900)
+        self.assertEqual(result["line_results"][0]["result"], "APPLIED")
 
     def test_warning_direct_target_is_counted_as_woo_write_and_published(self):
         row = proposal(

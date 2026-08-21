@@ -85,6 +85,13 @@ def product(woo_id, sku, price="150.00"):
     }
 
 
+def variation(woo_id, parent_id, sku, price="150.00"):
+    row = product(woo_id, sku, price)
+    row["type"] = "variation"
+    row["parent_id"] = parent_id
+    return row
+
+
 def variation_context():
     return {
         "id": 13092,
@@ -171,6 +178,18 @@ class PriceComb001B6DirectResolutionTests(unittest.TestCase):
         result = resolve_direct_woo_target("201001", "0201001", woo_client=woo)
         self.assertEqual(result["resolution_source"], "WOO_EXACT_SKU")
         self.assertEqual(result["woo_id"], 9001)
+
+    def test_woo_exact_sku_variation_keeps_parent_identity(self):
+        lookup = ("products", (("per_page", 100), ("sku", "0201010")))
+        woo = Woo({lookup: [variation(12345, 900, "0201010")]})
+
+        result = resolve_direct_woo_target("201010", "0201010", woo_client=woo)
+
+        self.assertEqual(result["resolution_status"], "RESOLVED")
+        self.assertEqual(result["resolution_source"], "WOO_EXACT_SKU")
+        self.assertEqual(result["woo_item_kind"], "variation")
+        self.assertEqual(result["woo_id"], 12345)
+        self.assertEqual(result["woo_parent_id"], "900")
 
     def test_woo_exact_sku_multiple_matches_are_blocked(self):
         lookup = ("products", (("per_page", 100), ("sku", "0201001")))

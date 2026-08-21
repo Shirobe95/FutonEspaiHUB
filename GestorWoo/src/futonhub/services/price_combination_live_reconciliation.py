@@ -172,6 +172,31 @@ def _woo_product_exact_candidates(woo_client: Any, sku: str) -> list[dict[str, A
     ]
 
 
+def _woo_exact_candidate_from_row(row: Mapping[str, Any], sku: str) -> dict[str, Any]:
+    woo_id = _positive_int(row.get("id"), "Woo id")
+    row_type = _text(row.get("type")).lower()
+    raw_parent = row.get("parent_id") or row.get("parent_woo_id")
+    parent_id = ""
+    try:
+        parent_value = int(str(raw_parent).strip()) if _text(raw_parent) else 0
+    except (TypeError, ValueError):
+        parent_value = 0
+    if row_type == "variation" or parent_value > 0:
+        parent_id = str(_positive_int(raw_parent, "Woo parent_id"))
+        kind = "variation"
+    else:
+        kind = "product"
+    return {
+        "woo_id": woo_id,
+        "woo_parent_id": parent_id,
+        "woo_item_kind": kind,
+        "woo_sku": sku,
+        "name": _text(row.get("name")),
+        "replica_status": "",
+        "resolution_source": "WOO_EXACT_SKU",
+    }
+
+
 def _read_woo_entity(woo_client: Any, candidate: Mapping[str, Any]) -> tuple[dict[str, Any], str]:
     kind = _text(candidate.get("woo_item_kind"))
     woo_id = _positive_int(candidate.get("woo_id"), "woo_id")
@@ -192,6 +217,14 @@ def _read_woo_entity(woo_client: Any, candidate: Mapping[str, Any]) -> tuple[dic
         live_parent = _positive_int(entity.get("parent_id"), "Woo parent_id")
         if live_parent != _positive_int(parent_id, "parent_woo_id"):
             raise ValueError("Woo returned a variation with a different parent_id.")
+    else:
+        row_type = _text(entity.get("type")).lower()
+        try:
+            parent_value = int(str(entity.get("parent_id")).strip()) if _text(entity.get("parent_id")) else 0
+        except (TypeError, ValueError):
+            parent_value = 0
+        if row_type == "variation" or parent_value > 0:
+            raise ValueError("Woo returned a variation for a product target.")
     if _text(entity.get("sku")) != _text(candidate.get("woo_sku")):
         raise ValueError("Woo returned a different literal SKU.")
     return entity, endpoint
@@ -231,18 +264,11 @@ def resolve_live_direct_identity(
     product_candidates: list[dict[str, Any]] = []
     lookup_error = ""
     try:
-        product_candidates = [
-            {
-                "woo_id": _positive_int(row.get("id"), "Woo id"),
-                "woo_parent_id": "",
-                "woo_item_kind": "product",
-                "woo_sku": sku,
-                "name": _text(row.get("name")),
-                "replica_status": "",
-                "resolution_source": "WOO_EXACT_SKU",
-            }
-            for row in _woo_product_exact_candidates(woo_client, sku)
-        ]
+        for row in _woo_product_exact_candidates(woo_client, sku):
+            try:
+                product_candidates.append(_woo_exact_candidate_from_row(row, sku))
+            except ValueError:
+                continue
     except Exception as exc:
         lookup_error = str(exc)
 
