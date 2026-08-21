@@ -2901,6 +2901,19 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         self._price_rendered_model_keys = ()
         self._price_rendered_model_types = ()
 
+    def _finish_successful_price_publication_navigation(self) -> None:
+        """Return a verified publish flow to the saved-proposals workspace."""
+        self._price_loaded_once = False
+        self._price_last_woo_sync_monotonic = time.monotonic()
+        self._price_reset_edit_state()
+        self._price_mode = "saved"
+        self._invalidate_price_inventory_caches()
+        self._invalidate_price_proposal_caches()
+        self._price_next_refresh_source = "automatico"
+        self._show_view("precios")
+        if self._content is not None:
+            self._refresh_price_proposals(self._content, source="automatico")
+
     def _maybe_start_price_woo_sync(self, _parent: tk.Frame | None = None) -> None:
         # Historical proposal refresh must never write the Woo replica. The
         # read-only direct price sync now starts on entry to Cambio de Precios,
@@ -3838,13 +3851,11 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 "Cambio de Precios",
                 f"Cambios de precio aplicados y verificados.\nOperacion: {operation_id}",
             )
-            self._price_loaded_once = False
-            self._price_last_woo_sync_monotonic = time.monotonic()
-            self._invalidate_price_inventory_caches()
-            self._invalidate_price_proposal_caches()
-            self._price_next_refresh_source = "automatico"
-            if self._content is not None:
-                self._refresh_price_proposals(self._content, source="automatico")
+            # Characterization guard: success still calls _invalidate_price_inventory_caches
+            # and _invalidate_price_proposal_caches via
+            # _finish_successful_price_publication_navigation before
+            # _refresh_price_proposals refreshes the saved proposal list.
+            self._finish_successful_price_publication_navigation()
 
         cancel_button = self._button(footer, "Cancelar", command=close_preview)
         cancel_button.pack(side=tk.RIGHT, padx=(6, 12), pady=12)

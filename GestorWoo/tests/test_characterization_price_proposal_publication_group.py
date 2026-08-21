@@ -386,6 +386,25 @@ class StatefulWoo:
         return self._apply(f"products/{int(parent_id)}/variations/{int(woo_id)}", payload)
 
 
+class LegacyProduct404VariationSkuWoo(StatefulWoo):
+    def __init__(self, variation_row: dict):
+        parent_id = int(variation_row["parent_id"])
+        woo_id = int(variation_row["id"])
+        super().__init__({f"products/{parent_id}/variations/{woo_id}": variation_row})
+        self.variation_row = dict(variation_row)
+        self.read_trace = []
+
+    def get(self, endpoint, params=None):
+        self.read_trace.append((endpoint, dict(params or {})))
+        if endpoint == f"products/{int(self.variation_row['id'])}":
+            raise RuntimeError("woocommerce_rest_invalid_product_id")
+        if endpoint == "products" and params:
+            sku = str(params.get("sku") or "").strip()
+            rows = [dict(self.variation_row)] if sku == str(self.variation_row.get("sku") or "") else []
+            return SimpleNamespace(json=lambda: rows)
+        return super().get(endpoint)
+
+
 class FailingWoo(Woo):
     def __init__(self, reads, fail_on_write: int, fail_rollback: bool = False):
         super().__init__(reads)
@@ -1163,6 +1182,86 @@ class PriceProposalPublicationGroupTests(unittest.TestCase):
         self.assertEqual(result["line_results"][0]["parent_woo_id"], 900)
         self.assertEqual(result["line_results"][0]["result"], "APPLIED")
 
+    def test_legacy_product_endpoint_404_recovers_by_exact_sku_before_any_put(self):
+        row = proposal(
+            "legacy-direct-404",
+            "product",
+            12345,
+            old_price=137.90,
+            new_price=139.90,
+            snapshot={
+                "woo_id": 12345,
+                "woo_item_kind": "product",
+                "sku": "0201010",
+                "price": 137.90,
+            },
+        )
+        row["source_row"].update({
+            "ui_line_code": "0201010",
+            "physical_item_id": "201010",
+            "physical_sku": "0201010",
+            "woo_sku": "0201010",
+        })
+        live_variation = woo_row(
+            12345,
+            137.90,
+            parent_id=900,
+            sku="0201010",
+            modified="T-LIVE",
+        )
+        woo = LegacyProduct404VariationSkuWoo(live_variation)
+        session = Session([row])
+
+        preview = woocommerce_publish.preview_price_proposal_group_publish(
+            session,
+            proposal_ids=["legacy-direct-404"],
+            settings=settings(),
+            client=woo,
+        )
+        self.assertTrue(preview["blocking"])
+        self.assertTrue(preview["revalidation_possible"])
+        self.assertEqual(preview["rows"][0]["status"], "REMOTE_IDENTITY_REVALIDATION_REQUIRED")
+        self.assertIn(("products", {"sku": "0201010", "per_page": 100, "status": "any"}), woo.read_trace)
+
+        with (
+            patch.object(woocommerce_publish, "write_snapshot"),
+            patch.object(woocommerce_publish, "write_audit_event"),
+        ):
+            with self.assertRaises(woocommerce_publish.PriceProposalRevalidationRequired):
+                woocommerce_publish.publish_price_proposal_group(
+                    session,
+                    proposal_ids=["legacy-direct-404"],
+                    settings=settings(),
+                    client=woo,
+                )
+        self.assertEqual(woo.writes, [])
+        refreshed = session.tables["price_change_proposals"][0]
+        self.assertEqual(refreshed["item_kind"], "variation")
+        self.assertEqual(refreshed["item_woo_id"], 12345)
+        self.assertEqual(refreshed["source_row"]["woo_parent_id"], 900)
+
+        with (
+            patch.object(woocommerce_publish, "acquire_system_lock"),
+            patch.object(woocommerce_publish, "release_system_lock"),
+            patch.object(
+                woocommerce_publish,
+                "sync_woocommerce_price_inventory_state",
+                return_value={"ok": True},
+            ),
+        ):
+            result = woocommerce_publish.publish_price_proposal_group(
+                session,
+                proposal_ids=["legacy-direct-404"],
+                settings=settings(),
+                client=woo,
+            )
+
+        self.assertEqual(
+            woo.writes,
+            [("variation", 900, 12345, {"regular_price": "139.90", "sale_price": ""})],
+        )
+        self.assertEqual(result["line_results"][0]["result"], "APPLIED")
+
     def test_warning_direct_target_is_counted_as_woo_write_and_published(self):
         row = proposal(
             "p",
@@ -1617,6 +1716,81 @@ class PriceProposalPublicationGroupTests(unittest.TestCase):
         self.assertGreaterEqual(len(windows), 2)
         self.assertFalse(showerror.called)
         self.assertTrue(hasattr(proposal_model, "name"))
+
+    def test_successful_publish_returns_from_editor_to_saved_proposals(self):
+        app = FutonHubErpPrototype.__new__(FutonHubErpPrototype)
+        app._cloud_session = Session([])
+        app._content = FakeWidget()
+        app._current_key = "precios"
+        app._price_mode = "edit"
+        app._price_publish_in_progress = True
+        app._price_edit_lines = [object()]
+        app._price_proposal_model = {"direct": object()}
+        app._price_proposal_line_sources = {"direct": {}}
+        app._price_catalog_generation = 0
+        app._price_bulk_preview_dimensions = lambda *_args: (800, 600, 400, 300)
+        app.after = lambda _ms, callback: callback()
+        app._price_stop_working_overlay = lambda *_args, **_kwargs: None
+        app._price_start_working_overlay = lambda *_args, **_kwargs: FakeWidget()
+        app._price_record_refresh_diagnostic = lambda *_args, **_kwargs: None
+        calls: list[tuple] = []
+        app._show_view = lambda key: calls.append(("show_view", key, app._price_mode))
+        app._refresh_price_proposals = lambda parent, *, source="automatico": calls.append(("refresh", source, app._price_mode, parent is app._content))
+        buttons: list[FakeWidget] = []
+
+        def fake_button(_parent, text, *, primary=False, command=None):
+            button = FakeWidget(text=text, primary=primary, command=command)
+            buttons.append(button)
+            return button
+
+        app._button = fake_button
+        proposal_model = PriceProposal(
+            "Smoke propuesta",
+            "01/01/2026",
+            1,
+            1,
+            0,
+            0,
+            "+1.0%",
+            "Ready",
+            tuple(),
+        )
+        preview = {
+            "counts": {"total": 1, "valid": 1, "warnings": 0, "errors": 0, "stale": 0, "direct": 1, "derived": 0, "excluded": 0, "woo_writes": 1},
+            "rows": [
+                {"proposal_id": "direct", "entry_origin": "DIRECT_ITEM", "name": "Direct", "code": "D", "status": "VALIDO", "proposal": {"id": "direct"}},
+            ],
+            "exclusions": [],
+            "blocking": False,
+        }
+
+        with (
+            patch.object(erp_prototype_module.tk, "Toplevel", return_value=FakeWidget()),
+            patch.object(erp_prototype_module.tk, "Frame", FakeWidget),
+            patch.object(erp_prototype_module.tk, "Label", FakeWidget),
+            patch.object(erp_prototype_module.ttk, "Treeview", FakeTreeview),
+            patch.object(erp_prototype_module.ttk, "Scrollbar", FakeScrollbar),
+            patch.object(erp_prototype_module, "center_window"),
+            patch.object(erp_prototype_module.threading, "Thread", ImmediateThread),
+            patch.object(erp_prototype_module, "load_settings", return_value=settings()),
+            patch.object(
+                erp_prototype_module,
+                "publish_price_proposal_group",
+                return_value={"operation_id": "OP-OK", "published": [], "line_results": [], "counts": {"woo_writes": 1}},
+            ),
+            patch.object(erp_prototype_module.messagebox, "showinfo") as showinfo,
+        ):
+            FutonHubErpPrototype._render_price_publish_preview(app, proposal_model, ["direct"], preview)
+            publish_buttons = [button for button in buttons if button.options.get("primary")]
+            self.assertEqual(len(publish_buttons), 1)
+            publish_buttons[0].command()
+
+        self.assertTrue(showinfo.called)
+        self.assertFalse(app._price_publish_in_progress)
+        self.assertEqual(app._price_mode, "saved")
+        self.assertEqual(app._price_edit_lines, [])
+        self.assertIn(("show_view", "precios", "saved"), calls)
+        self.assertIn(("refresh", "automatico", "saved", True), calls)
 
 
 if __name__ == "__main__":

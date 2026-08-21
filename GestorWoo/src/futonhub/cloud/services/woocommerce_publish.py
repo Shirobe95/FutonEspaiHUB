@@ -268,6 +268,76 @@ def _remote_identity_revalidation_from_live(
     }
 
 
+def _response_rows(response: Any) -> list[dict[str, Any]]:
+    payload = response.json() if hasattr(response, "json") else response
+    if isinstance(payload, dict):
+        return [dict(payload)]
+    if isinstance(payload, list):
+        return [dict(row) for row in payload if isinstance(row, dict)]
+    return []
+
+
+def _proposal_literal_sku_candidates(proposal: dict[str, Any]) -> list[str]:
+    source = proposal.get("source_row") if isinstance(proposal.get("source_row"), dict) else {}
+    snapshot = _proposal_item_snapshot(proposal)
+    values = (
+        source.get("physical_sku"),
+        source.get("woo_sku"),
+        source.get("ui_line_code"),
+        snapshot.get("physical_sku"),
+        snapshot.get("hub_item_code"),
+        snapshot.get("heca_reference"),
+        snapshot.get("woo_sku"),
+        snapshot.get("sku"),
+    )
+    result: list[str] = []
+    for value in values:
+        text = str(value or "").strip()
+        if text and text not in result:
+            result.append(text)
+    return result
+
+
+def _recover_legacy_product_target_by_exact_sku(
+    client: WooCommerceClient,
+    target: dict[str, Any],
+    proposal: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Recover old pending drafts that stored a variation id as product.
+
+    This is intentionally narrow: it only reads Woo by literal SKU after the
+    persisted product endpoint failed. It never writes and never guesses from a
+    numeric SKU, item_id, name, or family.
+    """
+    if str(target.get("remote_kind") or "").strip().lower() != "product":
+        return None
+    target_woo_id = _positive_int_or_none(target.get("woo_id"))
+    if target_woo_id is None:
+        return None
+    for sku in _proposal_literal_sku_candidates(proposal):
+        try:
+            response = client.get("products", params={"sku": sku, "per_page": 100, "status": "any"})
+            exact_rows = [
+                row for row in _response_rows(response)
+                if str(row.get("sku") or "").strip() == sku
+            ]
+        except Exception:
+            continue
+        exact_same_id = [
+            row for row in exact_rows
+            if _positive_int_or_none(row.get("id")) == target_woo_id
+        ]
+        if len(exact_same_id) != 1:
+            continue
+        row = dict(exact_same_id[0])
+        if _live_woo_remote_kind(row) != "variation":
+            continue
+        if _positive_int_or_none(row.get("parent_id")) is None:
+            continue
+        return row
+    return None
+
+
 def _remote_target_diagnostic(
     row: dict[str, Any],
     target: dict[str, Any],
@@ -1179,7 +1249,13 @@ def preview_price_proposal_group_publish(
                 raise CloudAuditError("El precio nuevo debe ser numerico y mayor que 0.")
             target = _remote_target_for_proposal(session, proposal)
             targets.setdefault(str(target["remote_key"]), []).append(canonical_key)
-            woo_data = _fetch_remote_target(woo, target)
+            try:
+                woo_data = _fetch_remote_target(woo, target)
+            except Exception:
+                recovered = _recover_legacy_product_target_by_exact_sku(woo, target, proposal)
+                if recovered is None:
+                    raise
+                woo_data = recovered
             woo_price = _effective_woo_price(woo_data)
             if woo_price is None:
                 raise CloudAuditError("WooCommerce no devuelve un precio efectivo.")
