@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from futonhub.core.catalog_policy import operational_inactive_reason
+
 
 def _truthy_pack_flag(value: Any) -> bool:
     return value is True or str(value or "").strip().lower() in {"1", "true", "yes", "si", "s\u00ed"}
@@ -66,6 +68,9 @@ def supplier_order_eligibility_reason(row: dict[str, Any] | None) -> tuple[bool,
         return candidate if candidate not in (None, "") else source.get(key)
 
     record_type = str(value("hub_search_record_type") or value("item_record_type") or "").strip().lower()
+    inactive_reason = operational_inactive_reason({**source, **row})
+    if inactive_reason:
+        return False, f"rejected:{inactive_reason}"
     if record_type in {"woo_pack", "manual_pack"}:
         return False, f"rejected:item_record_type={record_type}"
     for key in ("item_id", "hub_search_code", "hub_item_code"):

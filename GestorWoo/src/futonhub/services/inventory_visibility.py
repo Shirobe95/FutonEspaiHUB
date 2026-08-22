@@ -8,6 +8,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
+from futonhub.core.catalog_policy import is_operationally_active
 from futonhub.core.runtime_integrity import CHECKSUM_MODE_UTF8_TEXT_LF_V1, canonical_text_sha256
 from futonhub.ui.erp.catalog_filters import PhysicalCatalogSnapshot, natural_catalog_sort_key
 
@@ -216,12 +217,15 @@ class InventoryVisibilityOverrides:
             _text(row.get("item_id")): dict(row)
             for row in snapshot.eligible_live_rows(rows)
             if _text(row.get("item_id")) not in self.excluded_item_ids
+            and is_operationally_active(row)
         }
         for item_id in self.included_item_ids:
             live = live_by_id.get(item_id)
             if live is None:
                 continue
-            result_by_id[item_id] = self._apply_row_overrides(live, self.rows_by_item_id[item_id])
+            candidate = self._apply_row_overrides(live, self.rows_by_item_id[item_id])
+            if is_operationally_active(candidate):
+                result_by_id[item_id] = candidate
         for item_id, override in self.rows_by_item_id.items():
             if item_id in result_by_id:
                 result_by_id[item_id] = self._apply_row_overrides(result_by_id[item_id], override)

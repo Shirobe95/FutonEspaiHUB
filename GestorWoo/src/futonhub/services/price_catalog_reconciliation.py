@@ -16,7 +16,12 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
-from futonhub.ui.erp.catalog_filters import FILTER_FIELDS, PhysicalCatalogSnapshot, natural_catalog_sort_key
+from futonhub.core.catalog_policy import is_discontinued_commercial_status, is_operationally_active
+from futonhub.ui.erp.catalog_filters import (
+    FILTER_FIELDS,
+    PhysicalCatalogSnapshot,
+    natural_catalog_sort_key,
+)
 
 
 CATALOG_DIFF_COLUMNS = (
@@ -38,6 +43,32 @@ def _text(value: Any) -> str:
     return "" if value is None else str(value).strip()
 
 
+def _apply_runtime_price_policy(row: dict[str, Any], override: Mapping[str, Any]) -> None:
+    price_policy = _text(override.get("price_policy_override")).upper()
+    if price_policy:
+        row["price_policy_override"] = price_policy
+    if price_policy == "NO":
+        row["price_operable"] = False
+        row["sale_item"] = "NO"
+        if _text(override.get("business_usage")):
+            row["business_usage"] = _text(override.get("business_usage"))
+        if _text(override.get("visibility_reason")):
+            row["inventory_visibility_reason"] = _text(override.get("visibility_reason"))
+
+
+def _apply_live_commercial_status(row: dict[str, Any]) -> None:
+    if not is_discontinued_commercial_status(row.get("commercial_status")):
+        return
+    row["catalog_commercial_status"] = "DESCATALOGADO_NO_WOO_REQUIRED"
+    row["woo_mapping_required"] = "NO"
+    row["price_operable"] = False
+    row["sale_item"] = "NO"
+    if _text(row.get("operational_status")) in {"", "OPERATIONAL_BASELINE"}:
+        row["operational_status"] = "HISTORICAL_OR_DISCONTINUED"
+    row["quarantine_group"] = _text(row.get("quarantine_group")) or "DESCATALOGADO"
+    row["quarantine_reason"] = _text(row.get("quarantine_reason")) or "DESCATALOGADO_NO_WOO_REQUIRED"
+
+
 def physical_sku(row: Mapping[str, Any]) -> str:
     return _text(row.get("physical_sku") or row.get("hub_item_code") or row.get("heca_reference"))
 
@@ -45,6 +76,8 @@ def physical_sku(row: Mapping[str, Any]) -> str:
 def reconcile_canonical_catalogue(
     snapshot: PhysicalCatalogSnapshot,
     live_rows: Iterable[Mapping[str, Any]],
+    *,
+    visibility_overrides: Any | None = None,
 ) -> dict[str, Any]:
     """Return exactly one visible row for every approved canonical item.
 
@@ -107,6 +140,9 @@ def reconcile_canonical_catalogue(
         merged["canonical_name"] = _text(canonical.get("name"))
         for field in FILTER_FIELDS:
             merged[f"canonical_{field}"] = _text(canonical.get(field))
+        if visibility_overrides is not None:
+            _apply_runtime_price_policy(merged, visibility_overrides.metadata_for_item_id(item_id))
+        _apply_live_commercial_status(merged)
         canonical_rows.append(merged)
 
     canonical_ids = set(snapshot.rows_by_item_id)
@@ -220,6 +256,11 @@ def filter_coverage_audit_rows(
             "reason": reason,
         })
     return rows
+
+
+def operational_price_catalogue_rows(rows: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """Return rows allowed to enter new price-change selection surfaces."""
+    return [dict(row) for row in rows if is_operationally_active(row)]
 
 
 def write_csv(path: Path, columns: tuple[str, ...], rows: Iterable[Mapping[str, Any]]) -> Path:

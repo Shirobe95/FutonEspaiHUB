@@ -110,7 +110,8 @@ from futonhub.services.price_catalog_audit import (
     write_catalog_count_audit,
     write_filter_performance,
 )
-from futonhub.services.price_catalog_reconciliation import reconcile_canonical_catalogue
+from futonhub.services.inventory_visibility import InventoryVisibilityOverrides
+from futonhub.services.price_catalog_reconciliation import operational_price_catalogue_rows, reconcile_canonical_catalogue
 from futonhub.services.price_woo_catalog_index import (
     SESSION_USABLE_STATUSES,
     build_woo_read_only_index,
@@ -1843,12 +1844,14 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
     def _open_inventory_proposal_modal(self, item: InventoryItem) -> None:
         raw = item.raw or {}
         operational_status = str(raw.get("operational_status") or "").strip()
-        if operational_status and operational_status != "OPERATIONAL_BASELINE":
+        price_operable = raw.get("price_operable")
+        price_operable_blocked = price_operable is not None and str(price_operable).strip().lower() in {"0", "false", "no", "none"}
+        if (operational_status and operational_status != "OPERATIONAL_BASELINE") or price_operable_blocked:
             messagebox.showwarning(
                 "Cambio de Precios",
                 "El articulo se conserva en Inventario, pero esta fuera del baseline operativo "
                 "y no puede entrar en propuestas automaticas.\n\n"
-                f"Estado: {operational_status}\n"
+                f"Estado: {operational_status or '-'}\n"
                 f"Grupo: {raw.get('quarantine_group') or '-'}\n"
                 f"Motivo: {raw.get('quarantine_reason') or '-'}",
             )
@@ -4539,8 +4542,13 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             try:
                 raw_rows = list_all_cloud_inventory_items(self._cloud_session, page_size=200)
                 snapshot = self._price_catalog_snapshot()
-                reconciliation = reconcile_canonical_catalogue(snapshot, raw_rows)
-                canonical_rows = list(reconciliation.get("canonical_rows") or [])
+                visibility = InventoryVisibilityOverrides.load_runtime_cached()
+                reconciliation = reconcile_canonical_catalogue(
+                    snapshot,
+                    raw_rows,
+                    visibility_overrides=visibility,
+                )
+                canonical_rows = operational_price_catalogue_rows(reconciliation.get("canonical_rows") or [])
                 items = [self._inventory_item_from_cloud_row(row) for row in canonical_rows]
                 stage_counts = {
                     "raw_inventory_rows": len(raw_rows),
