@@ -86,6 +86,17 @@ from futonhub.cloud.services.supplier_prices import (
     resolve_supplier_order_inventory_items,
     update_supplier_price_inventory_item,
 )
+from futonhub.cloud.services.updates import (
+    PROCESS_DEFINITIONS as UPDATE_PROCESS_DEFINITIONS,
+    PROCESS_ROTATION_C,
+    PROCESS_STOCK,
+    PROCESS_SUPPLIER_PRICES,
+    UpdateApplyError,
+    UpdatesValidationError,
+    apply_update_preview,
+    preview_updates_from_excel,
+    write_update_template,
+)
 from futonhub.cloud.services import supplier_prices as supplier_prices_module
 from futonhub.cloud.services.business_constants import (
     DEFAULT_BUSINESS_CONSTANTS,
@@ -12285,6 +12296,350 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         if pascal > 0:
             return "Pascal"
         return "Sin precio"
+
+    def _build_updates(self, parent: tk.Frame) -> None:
+        self._page_header(
+            parent,
+            "",
+            "Actualizaciones",
+            "Importacion controlada por Excel para Rotacion C, Stock y Precios de Proveedores.",
+            ["Excel", "Supabase"],
+        )
+
+        if self._cloud_session is None:
+            empty = self._card(parent)
+            empty.pack(fill=tk.BOTH, expand=True)
+            tk.Label(
+                empty,
+                text="Inicia sesion en Supabase para preparar y aplicar actualizaciones.",
+                bg=CARD,
+                fg=MUTED,
+                font=("Segoe UI", 12),
+            ).pack(expand=True)
+            return
+
+        process_order = (PROCESS_ROTATION_C, PROCESS_STOCK, PROCESS_SUPPLIER_PRICES)
+        label_to_process = {UPDATE_PROCESS_DEFINITIONS[key]["label"]: key for key in process_order}
+        state: dict[str, Any] = {"preview": None, "applying": False}
+
+        layout = tk.Frame(parent, bg=BG)
+        layout.pack(fill=tk.BOTH, expand=True)
+        layout.rowconfigure(2, weight=1)
+        layout.columnconfigure(0, weight=1)
+
+        controls = self._card(layout)
+        controls.grid(row=0, column=0, sticky="ew", pady=(0, 14))
+        controls.columnconfigure(1, weight=1)
+
+        tk.Label(controls, text="Proceso", bg=CARD, fg=TEXT, font=("Segoe UI", 10, "bold")).grid(row=0, column=0, sticky="w", padx=16, pady=14)
+        process_var = tk.StringVar(value=UPDATE_PROCESS_DEFINITIONS[PROCESS_ROTATION_C]["label"])
+        process_combo = ttk.Combobox(controls, textvariable=process_var, values=list(label_to_process.keys()), state="readonly", width=28)
+        process_combo.grid(row=0, column=1, sticky="w", padx=(0, 12), pady=14, ipady=4)
+
+        status_label = tk.Label(controls, text="Sin Excel cargado.", bg=CARD, fg=MUTED, font=("Segoe UI", 9, "bold"))
+        status_label.grid(row=1, column=0, columnspan=5, sticky="w", padx=16, pady=(0, 14))
+
+        process_cards = tk.Frame(layout, bg=BG)
+        process_cards.grid(row=1, column=0, sticky="ew", pady=(0, 14))
+        for index, process in enumerate(process_order):
+            process_cards.columnconfigure(index, weight=1)
+            card = self._card(process_cards)
+            card.grid(row=0, column=index, sticky="ew", padx=(0 if index == 0 else 10, 0))
+            tk.Label(
+                card,
+                text=UPDATE_PROCESS_DEFINITIONS[process]["label"].upper(),
+                bg=CARD,
+                fg=TEXT,
+                font=("Segoe UI", 12, "bold"),
+            ).pack(anchor=tk.W, padx=14, pady=(14, 4))
+            tk.Label(
+                card,
+                text="Plantilla: " + " | ".join(UPDATE_PROCESS_DEFINITIONS[process]["headers"]),
+                bg=CARD,
+                fg=MUTED,
+                font=("Segoe UI", 8),
+                wraplength=310,
+                justify=tk.LEFT,
+            ).pack(anchor=tk.W, padx=14, pady=(0, 14))
+
+        table_card = self._card(layout)
+        table_card.grid(row=2, column=0, sticky="nsew")
+        table_card.rowconfigure(1, weight=1)
+        table_card.columnconfigure(0, weight=1)
+        tk.Label(table_card, text="Preview", bg=CARD, fg=TEXT, font=("Segoe UI", 14, "bold")).grid(row=0, column=0, sticky="w", padx=16, pady=14)
+
+        table_host = tk.Frame(table_card, bg=CARD)
+        table_host.grid(row=1, column=0, sticky="nsew")
+        table_host.rowconfigure(0, weight=1)
+        table_host.columnconfigure(0, weight=1)
+        columns = ("ID", "Item ID", "Nombre", "Actual", "Nuevo", "Proveedor", "Estado", "Motivo")
+        tree = ttk.Treeview(table_host, columns=columns, show="headings", height=14)
+        widths = {
+            "ID": 110,
+            "Item ID": 90,
+            "Nombre": 360,
+            "Actual": 210,
+            "Nuevo": 210,
+            "Proveedor": 150,
+            "Estado": 190,
+            "Motivo": 280,
+        }
+        for col in columns:
+            tree.heading(col, text=col)
+            tree.column(col, width=widths.get(col, 120), minwidth=80, anchor=tk.W if col in {"Nombre", "Motivo"} else tk.CENTER)
+        tree.tag_configure("ready", background="#ECFDF5")
+        tree.tag_configure("nochange", background="#F8FAFC")
+        tree.tag_configure("blocked", background="#FFF1F2")
+        yscroll = ttk.Scrollbar(table_host, orient=tk.VERTICAL, command=tree.yview)
+        xscroll = ttk.Scrollbar(table_host, orient=tk.HORIZONTAL, command=tree.xview)
+        tree.configure(yscrollcommand=yscroll.set, xscrollcommand=xscroll.set)
+        tree.grid(row=0, column=0, sticky="nsew", padx=(16, 0), pady=(0, 0))
+        yscroll.grid(row=0, column=1, sticky="ns", padx=(0, 16))
+        xscroll.grid(row=1, column=0, sticky="ew", padx=16, pady=(0, 16))
+
+        apply_button_holder: dict[str, tk.Widget] = {}
+        action_buttons: list[tk.Widget] = []
+
+        def view_alive() -> bool:
+            try:
+                return bool(parent.winfo_exists() and controls.winfo_exists())
+            except tk.TclError:
+                return False
+
+        def configure_widget(widget: tk.Widget | None, **kwargs: Any) -> None:
+            if widget is None:
+                return
+            try:
+                if widget.winfo_exists():
+                    widget.configure(**kwargs)
+            except tk.TclError:
+                return
+
+        def refresh_apply_button_state() -> None:
+            apply_button = apply_button_holder.get("button")
+            preview = state.get("preview")
+            enabled = bool(preview and preview.get("apply_enabled") and not state.get("applying"))
+            configure_widget(apply_button, state=tk.NORMAL if enabled else tk.DISABLED)
+
+        def set_applying(applying: bool) -> None:
+            state["applying"] = applying
+            configure_widget(process_combo, state=tk.DISABLED if applying else "readonly")
+            for button in action_buttons:
+                configure_widget(button, state=tk.DISABLED if applying else tk.NORMAL)
+            refresh_apply_button_state()
+            if applying:
+                configure_widget(status_label, text="Aplicando actualizacion...", fg=INDIGO)
+
+        def close_overlay(overlay: tk.Toplevel | None) -> None:
+            if overlay is None:
+                return
+            try:
+                if overlay.winfo_exists():
+                    self._close_working_overlay(overlay)
+            except tk.TclError:
+                return
+
+        def selected_process() -> str:
+            return label_to_process.get(process_var.get(), PROCESS_ROTATION_C)
+
+        def preview_values(row: dict[str, Any]) -> tuple[str, str, str]:
+            process = row.get("process")
+            if process == PROCESS_ROTATION_C:
+                return (
+                    str(row.get("rotation_current") or ""),
+                    str(row.get("rotation_new") or ""),
+                    "",
+                )
+            if process == PROCESS_STOCK:
+                current = (
+                    f"Tienda {row.get('store_stock_current') or 0} | "
+                    f"Warehouse {row.get('warehouse_stock_current') or 0} | "
+                    f"Total {row.get('stock_total_current') or 0}"
+                )
+                new = (
+                    f"Tienda {row.get('store_stock_new') or 0} | "
+                    f"Warehouse {row.get('warehouse_stock_new') or 0} | "
+                    f"Total {row.get('stock_total_new') or 0}"
+                )
+                return current, new, ""
+            if process == PROCESS_SUPPLIER_PRICES:
+                current = (
+                    f"Principal {row.get('primary_supplier_price_current') or ''} | "
+                    f"Pascal {row.get('pascal_price_current') or ''}"
+                )
+                new = (
+                    f"Principal {row.get('primary_supplier_price_new') or ''} | "
+                    f"Pascal {row.get('pascal_price_new') or ''}"
+                )
+                return current, new, row.get("primary_supplier") or ""
+            return "", "", ""
+
+        def render_preview(preview: dict[str, Any] | None) -> None:
+            tree.delete(*tree.get_children())
+            state["preview"] = preview
+            apply_button = apply_button_holder.get("button")
+            if not preview:
+                status_label.configure(text="Sin Excel cargado.", fg=MUTED)
+                refresh_apply_button_state()
+                return
+            for row in preview.get("rows") or []:
+                current, new, supplier = preview_values(row)
+                status = row.get("status") or ""
+                tag = "ready" if status == "READY" else "nochange" if status == "NO_CHANGE" else "blocked"
+                tree.insert(
+                    "",
+                    tk.END,
+                    values=(
+                        row.get("id") or "",
+                        row.get("item_id") or "",
+                        row.get("name") or "",
+                        current,
+                        new,
+                        supplier,
+                        status,
+                        row.get("reason") or "",
+                    ),
+                    tags=(tag,),
+                )
+            status_label.configure(
+                text=(
+                    f"{preview.get('label')}: {preview.get('row_count')} filas | "
+                    f"READY {preview.get('ready_count')} | NO_CHANGE {preview.get('no_change_count')} | "
+                    f"celdas a escribir {preview.get('write_cell_count')}"
+                ),
+                fg=GREEN if preview.get("apply_enabled") else ORANGE if preview.get("valid") else ROSE,
+            )
+            refresh_apply_button_state()
+
+        def download_template() -> None:
+            process = selected_process()
+            default_name = UPDATE_PROCESS_DEFINITIONS[process]["template_name"]
+            path = filedialog.asksaveasfilename(
+                title="Descargar plantilla",
+                defaultextension=".xlsx",
+                initialfile=default_name,
+                filetypes=[("Excel", "*.xlsx")],
+            )
+            if not path:
+                return
+            try:
+                write_update_template(process, path)
+            except Exception as exc:
+                messagebox.showerror("Actualizaciones", f"No se pudo crear la plantilla.\n\n{exc}")
+                return
+            messagebox.showinfo("Actualizaciones", f"Plantilla generada:\n{path}")
+
+        def load_excel() -> None:
+            if state.get("applying"):
+                return
+            path = filedialog.askopenfilename(
+                title="Cargar Excel de actualizacion",
+                filetypes=[("Excel", "*.xlsx *.xlsm"), ("Todos", "*.*")],
+            )
+            if not path:
+                return
+            try:
+                preview = preview_updates_from_excel(self._cloud_session, selected_process(), path)
+            except UpdatesValidationError as exc:
+                messagebox.showerror("Actualizaciones", str(exc))
+                render_preview(None)
+                return
+            except Exception as exc:
+                messagebox.showerror("Actualizaciones", f"No se pudo preparar el preview.\n\n{exc}")
+                render_preview(None)
+                return
+            render_preview(preview)
+
+        def apply_preview() -> None:
+            if state.get("applying"):
+                return
+            preview = state.get("preview")
+            if not preview or not preview.get("apply_enabled"):
+                messagebox.showwarning("Actualizaciones", "Carga un Excel valido antes de aplicar.")
+                return
+            message = (
+                f"Aplicar {preview.get('write_cell_count')} cambios en Supabase.\n\n"
+                "Se revalidara el estado live, se generara snapshot y postcheck.\n"
+                "WooCommerce, precios Woo, stock Woo y coste ponderado no se tocan.\n\n"
+                "Continuar"
+            )
+            if not messagebox.askyesno("Aplicar actualizacion", message):
+                return
+            session = self._cloud_session
+            process = str(preview.get("process") or selected_process())
+            source_path = str(preview.get("source_path") or "")
+            overlay = self._show_working_overlay("Aplicando actualizacion", "Aplicando actualizacion...")
+            set_applying(True)
+
+            def finish_success(result: dict[str, Any], refreshed_preview: dict[str, Any] | None, refresh_error: str) -> None:
+                close_overlay(overlay)
+                if not view_alive():
+                    return
+                set_applying(False)
+                detail = ""
+                if refresh_error:
+                    detail = f"\n\nEl apply termino, pero no se pudo refrescar el preview:\n{refresh_error}"
+                messagebox.showinfo(
+                    "Actualizaciones",
+                    (
+                        f"Actualizacion aplicada.\nOperation ID: {result.get('operation_id')}\n"
+                        f"Filas: {result.get('applied_rows')}\nPostcheck: {len(result.get('postcheck') or [])}"
+                        f"{detail}"
+                    ),
+                )
+                render_preview(refreshed_preview)
+
+            def finish_error(error: str, result: dict[str, Any]) -> None:
+                close_overlay(overlay)
+                if not view_alive():
+                    return
+                set_applying(False)
+                detail = "\n".join(str(err) for err in result.get("errors") or [error])
+                messagebox.showerror(
+                    "Actualizaciones",
+                    f"Actualizacion no aplicada completamente.\nEstado: {result.get('status') or 'FAILED'}\n\n{detail}",
+                )
+
+            def schedule(callback: Callable[[], None]) -> None:
+                try:
+                    self.after(0, callback)
+                except tk.TclError:
+                    return
+
+            def worker() -> None:
+                try:
+                    result = apply_update_preview(session, preview)
+                    refreshed_preview = None
+                    refresh_error = ""
+                    if source_path:
+                        try:
+                            refreshed_preview = preview_updates_from_excel(session, process, source_path)
+                        except Exception as exc:
+                            refresh_error = str(exc)
+                    schedule(lambda result=result, refreshed_preview=refreshed_preview, refresh_error=refresh_error: finish_success(result, refreshed_preview, refresh_error))
+                except UpdateApplyError as exc:
+                    result = getattr(exc, "result", {}) or {}
+                    schedule(lambda exc=exc, result=result: finish_error(str(exc), result))
+                except Exception as exc:
+                    schedule(lambda exc=exc: finish_error(str(exc), {"status": "FAILED", "errors": [str(exc)]}))
+
+            threading.Thread(target=worker, daemon=True).start()
+
+        def process_changed(_event: object | None = None) -> None:
+            if state.get("applying"):
+                return
+            render_preview(None)
+
+        process_combo.bind("<<ComboboxSelected>>", process_changed)
+        template_button = self._button(controls, "Descargar plantilla", command=download_template)
+        template_button.grid(row=0, column=2, sticky="e", padx=(0, 10), pady=14)
+        load_button = self._button(controls, "Cargar Excel", primary=True, command=load_excel)
+        load_button.grid(row=0, column=3, sticky="e", padx=(0, 10), pady=14)
+        apply_button = self._button(controls, "Aplicar actualizacion", primary=True, command=apply_preview)
+        apply_button.grid(row=0, column=4, sticky="e", padx=(0, 16), pady=14)
+        apply_button.configure(state=tk.DISABLED)
+        apply_button_holder["button"] = apply_button
+        action_buttons.extend([template_button, load_button])
 
     def _build_supplier_prices(self, parent: tk.Frame) -> None:
         self._page_header(
