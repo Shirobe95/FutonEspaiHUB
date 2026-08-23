@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.5.0 · PLUS ULTRA
+
+- FutonHUB ERP alcanza una version estable para operativa diaria: Dashboard,
+  Inventario, Pedidos/Recepcion, Cambio de Precios WooCommerce, relaciones Woo,
+  Biblioteca de Formulas, Configuracion y Actualizaciones.
+- Catalogo e Inventario: politica central de Descatalogados consolidada; los
+  94 articulos descatalogados se respetan en los workflows operativos.
+- Seguridad de sesion: Remember Me seguro mediante Windows DPAPI, auto-login
+  con refresh session y accion visible `Cerrar sesion / Cambiar usuario`.
+- Distribucion/runtime: mejora de tiempo de arranque, lazy Woo dependency y
+  contratos runtime independientes de artefactos locales de auditoria.
+- Actualizaciones masivas: soporte controlado para Rotacion C, Stock y Precios
+  Proveedores con templates Excel, preview, revalidation, snapshot, auditoria,
+  rollback y proteccion de Descatalogados.
+- Actualizaciones: resolucion controlada de IDs con/sin cero inicial; los alias
+  Woo ya no provocan falsas ambiguedades frente a una identidad fisica unica.
+- Cambio de Precios: conserva el hardening Woo heredado de rc8 para publisher,
+  targets product/variation, combinaciones derivadas, revalidacion, auditoria y
+  rollback.
+- Configuracion/Calculos: `IVA Recargo de Equivalencia` deja de mostrarse como
+  constante editable; el calculo economico conserva la variable/factor interno.
+- Inventario: retirado el aviso legacy de catalogo sin cambiar busqueda,
+  filtros, detalle, packs, Woo info, stock ni exclusion de Descatalogados.
+- Pascal: la ausencia de precio Pascal es un estado valido de negocio; no se
+  declara reconciliacion masiva de datos Pascal en esta version.
+
 ## v0.5.0-rc.8 - 2026-08-21
 
 - Cambio de Precios: corrige la publicacion real de cambios de precio a
