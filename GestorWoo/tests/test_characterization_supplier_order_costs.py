@@ -622,20 +622,20 @@ class SupplierOrderCostTests(unittest.TestCase):
 
         self.assertEqual(tuple(ctx.exception.invalid_keys), ("COSTE_DIARIO_ALMACENAJE_M3",))
 
-    def test_business_constants_invalid_required_value_blocks_economic_calculation(self) -> None:
-        ui, _session = self.cloud_constants_app(
-            self.general_constant_rows(IVA_RECARGO_EQUIVALENCIA="abc")
+    def test_legacy_recargo_row_is_ignored_as_input_constant(self) -> None:
+        rows = self.general_constant_rows(COSTE_TOTAL_DESCARGA_FUTONES_IVA=302.50)
+        rows.append({"key": "IVA_RECARGO_EQUIVALENCIA", "value": "abc"})
+        ui, _session = self.cloud_constants_app(rows)
+
+        calculated, _raw, summary = ui._calculate_supplier_order_in_memory(
+            "ekomat",
+            {"Margen de Venta %": "0", "Coste transporte + IVA": "1"},
+            (self.download_item("LINE-100", 100),),
+            [],
         )
 
-        with self.assertRaisesRegex(RuntimeError, "constantes de cálculo vigentes") as ctx:
-            ui._calculate_supplier_order_in_memory(
-                "ekomat",
-                {"Margen de Venta %": "0", "Coste transporte + IVA": "1"},
-                (self.download_item("LINE-100", 100),),
-                [],
-            )
-
-        self.assertEqual(tuple(ctx.exception.invalid_keys), ("IVA_RECARGO_EQUIVALENCIA",))
+        self.assertEqual(summary["download_qty"], 100)
+        self.assertEqual(calculated[0].raw["source_row"]["calculation_details"]["iva_re"], 2.62)
 
     def test_business_constants_complete_dataset_allows_economic_calculation(self) -> None:
         ui, _session = self.cloud_constants_app(
@@ -684,7 +684,6 @@ class SupplierOrderCostTests(unittest.TestCase):
             supplier_order_required_business_constant_keys("general"),
             (
                 "COSTE_TOTAL_DESCARGA_FUTONES_IVA",
-                "IVA_RECARGO_EQUIVALENCIA",
                 "COSTE_DIARIO_ALMACENAJE_M3",
             ),
         )
@@ -698,6 +697,21 @@ class SupplierOrderCostTests(unittest.TestCase):
                 "COSTE_DIARIO_ALMACENAJE_M3",
             ),
         )
+
+    def test_recargo_is_not_editable_or_required_but_calculation_factor_is_preserved(self) -> None:
+        self.assertNotIn("IVA_RECARGO_EQUIVALENCIA", DEFAULT_BUSINESS_CONSTANTS)
+        self.assertNotIn("IVA_RECARGO_EQUIVALENCIA", supplier_order_required_business_constant_keys("general"))
+
+        ui, _session = self.cloud_constants_app([
+            {"key": "COSTE_TOTAL_DESCARGA_FUTONES_IVA", "value": 302.50},
+            {"key": "COSTE_DIARIO_ALMACENAJE_M3", "value": 0.0},
+            {"key": "IVA_RECARGO_EQUIVALENCIA", "value": 99.9},
+        ])
+
+        constants = ui._current_business_constant_values(refresh_cloud=True, fail_on_refresh_error=True)
+
+        self.assertEqual(constants["IVA_RECARGO_EQUIVALENCIA"], 26.2)
+        self.assertEqual(constants["IVA_RECARGO_EQUIVALENCIA_FACTOR"], 0.262)
 
     def test_business_constants_save_path_invalidates_before_reloading_cloud_snapshot(self) -> None:
         source = inspect.getsource(FutonHubErpPrototype._render_settings_calculations)

@@ -7,20 +7,21 @@ from typing import Any
 from futonhub.cloud.audit import AuditEvent, OperationSnapshot, new_operation_id, write_audit_event, write_snapshot
 
 
+IVA_RECARGO_EQUIVALENCIA_FACTOR = 0.262
+IVA_RECARGO_EQUIVALENCIA_PERCENT = 26.2
+
 DEFAULT_BUSINESS_CONSTANTS: dict[str, dict[str, Any]] = {
     "IMPORTE_DESCARGA_MT": {"value": 12.0, "unit": "EUR/m", "description": "Importe descarga por metro"},
     "PC_GASTOS_MANIPULACION": {"value": 2.0, "unit": "%", "description": "Porcentaje manipulacion"},
     "PC_GASTOS_FINANCIACION": {"value": 2.5, "unit": "%", "description": "Porcentaje financiacion"},
     "IMPORTES_VARIOS": {"value": 1.0, "unit": "%", "description": "Importes varios"},
     "COSTE_TOTAL_DESCARGA_FUTONES_IVA": {"value": 326.0, "unit": "EUR", "description": "Descarga futones con IVA"},
-    "IVA_RECARGO_EQUIVALENCIA": {"value": 26.2, "unit": "%", "description": "IVA + recargo equivalencia"},
     "COSTE_DIARIO_ALMACENAJE_M3": {"value": 0.15, "unit": "EUR/m3", "description": "Almacenaje diario por M3"},
     "PRICE_DROP_BLOCK_PERCENT": {"value": 30.0, "unit": "%", "description": "Bajada maxima de precio antes de bloquear"},
 }
 
 SUPPLIER_ORDER_GENERAL_REQUIRED_CONSTANTS: tuple[str, ...] = (
     "COSTE_TOTAL_DESCARGA_FUTONES_IVA",
-    "IVA_RECARGO_EQUIVALENCIA",
     "COSTE_DIARIO_ALMACENAJE_M3",
 )
 

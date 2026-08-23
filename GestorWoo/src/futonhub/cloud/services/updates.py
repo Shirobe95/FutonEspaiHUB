@@ -209,11 +209,7 @@ def _select_rows_by_exact_value(session, column: str, value: Any) -> list[dict[s
     return [dict(row) for row in (getattr(response, "data", None) or [])]
 
 
-def resolve_update_inventory_item(session, requested_id: Any) -> tuple[dict[str, Any] | None, str]:
-    code = str(requested_id or "").strip()
-    if not code:
-        return None, "ID vacio"
-
+def _collect_update_inventory_candidates(session, code: str) -> tuple[dict[int, dict[str, Any]], list[str]]:
     found: dict[int, dict[str, Any]] = {}
     diagnostics: list[str] = []
     for column in ("heca_reference", "hub_item_code", "woo_sku"):
@@ -227,19 +223,52 @@ def resolve_update_inventory_item(session, requested_id: Any) -> tuple[dict[str,
                 found[int(row.get("item_id"))] = row
             except Exception:
                 diagnostics.append(f"{column}: item_id invalido")
+    return found, diagnostics
 
-    if len(found) == 1:
-        row = next(iter(found.values()))
-        if not _row_matches_requested_id(row, code):
-            return None, "La fila encontrada no conserva el ID literal solicitado"
-        if not _is_simple_inventory_row(row):
-            return None, "La fila no es un registro fisico simple actualizable"
-        return row, ""
-    if len(found) > 1:
-        return None, "Resolucion exacta ambigua para el ID"
+
+def _resolve_update_inventory_item_literal(session, code: str) -> tuple[dict[str, Any] | None, str, bool]:
+    found, diagnostics = _collect_update_inventory_candidates(session, code)
+    physical = {
+        item_id: row
+        for item_id, row in found.items()
+        if _is_simple_inventory_row(row) and _row_matches_requested_id(row, code)
+    }
+
+    if len(physical) == 1:
+        return next(iter(physical.values())), "", False
+    if len(physical) > 1:
+        return None, "Resolucion exacta ambigua para el ID", True
     if diagnostics:
-        return None, "; ".join(diagnostics)
-    return None, "No existe coincidencia exacta"
+        return None, "; ".join(diagnostics), False
+    if found:
+        return None, "No existe coincidencia fisica simple exacta", False
+    return None, "No existe coincidencia exacta", False
+
+
+def _canonical_update_item_code(row: Mapping[str, Any]) -> str:
+    for field in ("heca_reference", "hub_item_code", "woo_sku"):
+        value = str(row.get(field) or "").strip()
+        if value:
+            return value
+    return str(row.get("item_id") or "").strip()
+
+
+def resolve_update_inventory_item(session, requested_id: Any) -> tuple[dict[str, Any] | None, str]:
+    code = str(requested_id or "").strip()
+    if not code:
+        return None, "ID vacio"
+
+    row, reason, blocked = _resolve_update_inventory_item_literal(session, code)
+    if row is not None or blocked:
+        return row, reason
+
+    if code.isdigit() and len(code) == 6:
+        prefixed = "0" + code
+        prefixed_row, prefixed_reason, prefixed_blocked = _resolve_update_inventory_item_literal(session, prefixed)
+        if prefixed_row is not None or prefixed_blocked:
+            return prefixed_row, prefixed_reason
+
+    return None, reason
 
 
 def _fetch_inventory_item_by_id(session, item_id: int | str) -> dict[str, Any] | None:
@@ -401,7 +430,8 @@ def _base_preview_row(process: str, raw: Mapping[str, Any], item: Mapping[str, A
     return {
         "process": process,
         "row_number": raw.get("_row_number"),
-        "id": str(raw.get("ID") or "").strip(),
+        "id": _canonical_update_item_code(item),
+        "requested_id": str(raw.get("ID") or "").strip(),
         "item_id": int(item.get("item_id")),
         "name": item.get("name") or "",
         "heca_reference": item.get("heca_reference") or "",

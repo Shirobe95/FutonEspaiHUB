@@ -259,11 +259,7 @@ class ErpInventoryListMixin:
                 eligible_rows = visibility.apply_to_live_rows(snapshot, rows)
                 eligible_rows = self._inventory_operational_baseline().enrich_rows(eligible_rows)
                 items = [self._inventory_item_from_cloud_row(row) for row in eligible_rows]
-                missing_count = visibility.expected_visible_count(len(snapshot.item_ids)) - len(eligible_rows)
-                warning = ""
-                if missing_count:
-                    warning = f"Aviso de catalogo: {missing_count} registros no cumplen el contrato operativo y no se muestran."
-                self.after(0, lambda: self._finish_inventory_refresh(items, warning, eligible_rows))
+                self.after(0, lambda: self._finish_inventory_refresh(items, "", eligible_rows))
             except (CatalogFilterConfigurationError, CatalogOperationalBaselineError) as exc:
                 self.after(0, lambda exc=exc: self._finish_inventory_refresh([], f"No se puede cargar la configuracion runtime de inventario: {exc}", []))
             except Exception as exc:

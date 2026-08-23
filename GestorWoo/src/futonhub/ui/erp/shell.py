@@ -100,6 +100,51 @@ class ErpShellNavigationMixin:
                 button.pack(fill=tk.X, padx=14, pady=2)
                 self._nav_buttons[item.key] = button
 
+        spacer = tk.Frame(parent, bg=SIDEBAR)
+        spacer.pack(fill=tk.BOTH, expand=True)
+        self._build_session_sidebar_footer(parent)
+
+    def _build_session_sidebar_footer(self, parent: tk.Frame) -> None:
+        footer = tk.Frame(parent, bg=SIDEBAR, highlightbackground=LINE, highlightthickness=1)
+        footer.pack(fill=tk.X, padx=14, pady=(8, 16))
+        session = getattr(self, "_cloud_session", None)
+        email = str(getattr(session, "email", "") or "").strip() or "Sesion activa"
+        role = str(getattr(session, "role", "") or "").strip() or "usuario"
+        tk.Label(
+            footer,
+            text=email,
+            bg=SIDEBAR,
+            fg=TEXT,
+            font=("Segoe UI", 9, "bold"),
+            anchor=tk.W,
+            wraplength=180,
+            justify=tk.LEFT,
+        ).pack(fill=tk.X, padx=10, pady=(10, 2))
+        tk.Label(
+            footer,
+            text=role,
+            bg=SIDEBAR,
+            fg=MUTED,
+            font=("Segoe UI", 8),
+            anchor=tk.W,
+        ).pack(fill=tk.X, padx=10, pady=(0, 8))
+        button = tk.Button(
+            footer,
+            text="Cerrar sesión / Cambiar usuario",
+            anchor=tk.W,
+            bd=0,
+            relief=tk.FLAT,
+            padx=10,
+            pady=8,
+            bg=SOFT,
+            fg="#475569",
+            activebackground=INDIGO_SOFT,
+            activeforeground=TEXT,
+            font=("Segoe UI", 9, "bold"),
+            command=self._logout_change_user,
+        )
+        button.pack(fill=tk.X, padx=8, pady=(0, 10))
+
     def _global_search_visible_for_view(self, key: str) -> bool:
         return False
 

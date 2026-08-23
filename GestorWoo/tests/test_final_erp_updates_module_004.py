@@ -360,7 +360,7 @@ class UpdatesModule004Tests(unittest.TestCase):
         self.assertEqual(blocked["status_counts"][updates.PRIMARY_SUPPLIER_UNRESOLVED], 1)
         self.assertEqual(blocked["status_counts"][updates.NO_CHANGE], 1)
 
-    def test_leading_zero_requires_literal_match_not_integer_identity(self) -> None:
+    def test_six_digit_numeric_id_can_resolve_unique_zero_prefixed_physical_item(self) -> None:
         client = FakeClient()
         client.tables["inventory_items"] = [
             inventory_row(725002, "0725002"),
@@ -377,19 +377,90 @@ class UpdatesModule004Tests(unittest.TestCase):
 
         self.assertTrue(valid["apply_enabled"])
         self.assertEqual(valid["rows"][0]["item_id"], 725002)
+        self.assertEqual(valid["rows"][0]["id"], "0725002")
+
+        without_zero = updates.preview_updates(
+            session,
+            updates.PROCESS_ROTATION_C,
+            [{"ID": "725002", "Rotación C": 1.5}],
+        )
+
+        self.assertTrue(without_zero["apply_enabled"])
+        self.assertEqual(without_zero["rows"][0]["item_id"], 725002)
+        self.assertEqual(without_zero["rows"][0]["id"], "0725002")
+        self.assertEqual(without_zero["rows"][0]["requested_id"], "725002")
 
         invalid = updates.preview_updates(
             session,
             updates.PROCESS_ROTATION_C,
             [
-                {"ID": "725002", "Rotación C": 1},
                 {"ID": "0758007", "Rotación C": 1},
                 {"ID": "1020011", "Rotación C": 1},
             ],
         )
 
         self.assertFalse(invalid["apply_enabled"])
-        self.assertEqual(invalid["status_counts"][updates.INVALID_ID], 3)
+        self.assertEqual(invalid["status_counts"][updates.INVALID_ID], 2)
+
+    def test_alias_with_same_heca_reference_does_not_make_unique_physical_item_ambiguous(self) -> None:
+        client = FakeClient()
+        alias = inventory_row(724012, "0724011A")
+        alias.update(
+            {
+                "heca_reference": "0724011",
+                "item_record_type": "alias",
+                "base_item_code": "0724011",
+            }
+        )
+        client.tables["inventory_items"] = [
+            inventory_row(724011, "0724011"),
+            alias,
+        ]
+        session = fake_session(client)
+
+        preview = updates.preview_updates(
+            session,
+            updates.PROCESS_ROTATION_C,
+            [{"ID": "724011", "Rotación C": 1.5}],
+        )
+
+        self.assertTrue(preview["apply_enabled"])
+        self.assertEqual(preview["status_counts"], {updates.READY: 1})
+        self.assertEqual(preview["rows"][0]["item_id"], 724011)
+        self.assertEqual(preview["rows"][0]["id"], "0724011")
+
+    def test_multiple_physical_exact_candidates_still_block_as_ambiguous(self) -> None:
+        client = FakeClient()
+        client.tables["inventory_items"] = [
+            inventory_row(724011, "0724011"),
+            inventory_row(724099, "0724011"),
+        ]
+        session = fake_session(client)
+
+        preview = updates.preview_updates(
+            session,
+            updates.PROCESS_ROTATION_C,
+            [{"ID": "0724011", "Rotación C": 1.5}],
+        )
+
+        self.assertFalse(preview["apply_enabled"])
+        self.assertEqual(preview["status_counts"], {updates.INVALID_ID: 1})
+        self.assertIn("ambigua", preview["rows"][0]["reason"])
+
+    def test_zero_prefixed_resolution_does_not_bypass_descatalogado_block(self) -> None:
+        client = FakeClient()
+        client.tables["inventory_items"] = [inventory_row(725001, "0725001", commercial_status="Descatalogado")]
+        session = fake_session(client)
+
+        preview = updates.preview_updates(
+            session,
+            updates.PROCESS_STOCK,
+            [{"ID": "725001", "Stock Tienda": 1, "Stock Warehouse": 1}],
+        )
+
+        self.assertFalse(preview["apply_enabled"])
+        self.assertEqual(preview["status_counts"], {updates.DESCATALOGADO_NO_ACTUALIZABLE: 1})
+        self.assertEqual(preview["rows"][0]["id"], "0725001")
 
     def test_supplier_price_upsert_failure_rolls_back_current_inventory_update(self) -> None:
         client = FakeClient()

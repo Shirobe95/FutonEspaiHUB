@@ -213,6 +213,65 @@ class RememberMeUiContractTests(unittest.TestCase):
         self.assertIn("clear_remembered_session", source)
         self.assertNotIn("ACEPTAR", source)
 
+    def test_sidebar_exposes_logout_change_user_action(self) -> None:
+        source = (SRC / "futonhub" / "ui" / "erp" / "shell.py").read_text(encoding="utf-8")
+
+        self.assertIn("Cerrar sesión / Cambiar usuario", source)
+        self.assertIn("command=self._logout_change_user", source)
+
+    def test_logout_clears_session_and_returns_to_manual_login_without_reautologin(self) -> None:
+        from futonhub.ui.erp import prototype as prototype_module
+        from futonhub.ui.erp.prototype import FutonHubErpPrototype
+
+        app = FutonHubErpPrototype.__new__(FutonHubErpPrototype)
+        app._cloud_session = SimpleNamespace(email="worker-a@example.test", role="worker")
+        app._login_in_progress = True
+        app._remembered_login_cancelled = False
+        app._inventory_items = [object()]
+        app._inventory_loaded_once = True
+        app._price_live_price_context_by_physical_item = {"619011": {"price": "10"}}
+        app._price_catalog_loaded_once = True
+        app._business_constants_cloud_loaded = True
+
+        calls: dict[str, object] = {}
+        app._hide_login_loading = lambda: calls.setdefault("hide_loading", True)
+        app._destroy_authenticated_shell = lambda: calls.setdefault("destroy_shell", True)
+        app.withdraw = lambda: calls.setdefault("withdraw", True)
+
+        def show_login(**kwargs):
+            calls["show_login"] = kwargs
+
+        app._show_startup_login = show_login
+
+        with patch.object(prototype_module, "clear_remembered_session") as clear:
+            app._logout_change_user_confirmed()
+
+        clear.assert_called_once_with()
+        self.assertIsNone(app._cloud_session)
+        self.assertFalse(app._login_in_progress)
+        self.assertTrue(app._remembered_login_cancelled)
+        self.assertEqual(app._inventory_items, [])
+        self.assertFalse(app._inventory_loaded_once)
+        self.assertEqual(app._price_live_price_context_by_physical_item, {})
+        self.assertFalse(app._price_catalog_loaded_once)
+        self.assertFalse(app._business_constants_cloud_loaded)
+        self.assertEqual(
+            calls["show_login"],
+            {"force_manual": True, "default_email_override": "worker-a@example.test"},
+        )
+
+    def test_forced_manual_login_keeps_password_empty_remember_off_and_skips_autologin(self) -> None:
+        from futonhub.ui.erp.prototype import FutonHubErpPrototype
+        import inspect
+
+        source = inspect.getsource(FutonHubErpPrototype._show_startup_login)
+
+        self.assertIn("remembered_session = None if force_manual else load_remembered_session()", source)
+        self.assertIn("password_var = tk.StringVar()", source)
+        self.assertIn("remember_var = tk.BooleanVar(value=False if force_manual else remembered_session is not None)", source)
+        self.assertIn("if not force_manual and remembered_session is not None", source)
+        self.assertNotIn("save_remembered_session(password", source)
+
 
 if __name__ == "__main__":
     unittest.main()

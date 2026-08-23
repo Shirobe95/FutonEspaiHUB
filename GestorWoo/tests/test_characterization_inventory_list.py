@@ -140,6 +140,12 @@ class InventoryListRefreshTests(unittest.TestCase):
         self.assertIn("1020007", {str(row["item_id"]) for row in app._inventory_catalog_source_rows})
         self.assertEqual(app._inventory_error, "")
 
+    def test_inventory_refresh_does_not_surface_legacy_catalog_notice(self) -> None:
+        source = (ROOT / "src" / "futonhub" / "ui" / "erp" / "inventory_list.py").read_text(encoding="utf-8")
+
+        self.assertNotIn("Aviso de catalogo", source)
+        self.assertNotIn("registros no cumplen el contrato operativo", source)
+
     def test_runtime_baseline_failure_is_not_reported_as_supabase_failure(self) -> None:
         app = InventoryListCollector(Session())
         row = self._eligible_row()

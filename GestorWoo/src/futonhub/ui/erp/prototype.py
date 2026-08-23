@@ -100,6 +100,8 @@ from futonhub.cloud.services.updates import (
 from futonhub.cloud.services import supplier_prices as supplier_prices_module
 from futonhub.cloud.services.business_constants import (
     DEFAULT_BUSINESS_CONSTANTS,
+    IVA_RECARGO_EQUIVALENCIA_FACTOR,
+    IVA_RECARGO_EQUIVALENCIA_PERCENT,
     list_business_constants,
     save_business_constants,
     supplier_order_required_business_constant_keys,
@@ -780,18 +782,24 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             foreground=[("selected", "#FFFFFF")],
         )
 
-    def _show_startup_login(self) -> None:
+    def _show_startup_login(self, *, force_manual: bool = False, default_email_override: str | None = None) -> None:
         try:
             settings = load_settings()
-            remembered_session = load_remembered_session()
-            default_email = remembered_session.email if remembered_session else (settings.hub_user_email or "")
+            remembered_session = None if force_manual else load_remembered_session()
+            default_email = (
+                default_email_override
+                if default_email_override is not None
+                else remembered_session.email
+                if remembered_session
+                else (settings.hub_user_email or "")
+            )
             remembered_error = ""
         except RememberedSessionUnavailable:
             remembered_session = None
             remembered_error = "Recordar sesion no esta disponible en esta plataforma."
             try:
                 settings = load_settings()
-                default_email = settings.hub_user_email or ""
+                default_email = default_email_override if default_email_override is not None else (settings.hub_user_email or "")
             except Exception as exc:
                 messagebox.showerror("Login Supabase", f"No se pudo leer configuracion.\n\n{exc}")
                 self.destroy()
@@ -802,7 +810,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             remembered_error = "La sesion recordada ya no es valida. Inicia sesion de nuevo."
             try:
                 settings = load_settings()
-                default_email = settings.hub_user_email or ""
+                default_email = default_email_override if default_email_override is not None else (settings.hub_user_email or "")
             except Exception as exc:
                 messagebox.showerror("Login Supabase", f"No se pudo leer configuracion.\n\n{exc}")
                 self.destroy()
@@ -812,7 +820,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             self.destroy()
             return
 
-        self._remembered_login_cancelled = False
+        self._remembered_login_cancelled = force_manual
         win = tk.Toplevel(self)
         self._login_window = win
         win.title("FutonHUB - Login")
@@ -838,7 +846,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         form.pack(fill=tk.X, padx=24)
         email_var = tk.StringVar(value=default_email)
         password_var = tk.StringVar()
-        remember_var = tk.BooleanVar(value=remembered_session is not None)
+        remember_var = tk.BooleanVar(value=False if force_manual else remembered_session is not None)
         self._field(form, "Usuario", email_var).pack(fill=tk.X, pady=(0, 12))
         self._field(form, "Contrasena", password_var, show="*").pack(fill=tk.X, pady=(0, 8))
         remember_box = tk.Checkbutton(
@@ -866,7 +874,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
 
         remembered_actions = tk.Frame(card, bg=CARD)
         remembered_actions.pack(fill=tk.X, padx=24, pady=(0, 4))
-        if remembered_session is not None or has_remembered_session():
+        if not force_manual and (remembered_session is not None or has_remembered_session()):
             self._button(
                 remembered_actions,
                 "Usar otra cuenta",
@@ -905,7 +913,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             if entries:
                 entries[0].focus_set()
                 break
-        if remembered_session is not None and settings.app_mode == "supabase_guarded":
+        if not force_manual and remembered_session is not None and settings.app_mode == "supabase_guarded":
             self.after(
                 100,
                 lambda session=remembered_session: self._start_remembered_login(
@@ -1095,6 +1103,148 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         self.deiconify()
         self.lift()
         self.focus_force()
+
+    def _logout_change_user(self) -> None:
+        if not messagebox.askyesno(
+            "Cerrar sesion",
+            "Se cerrara la sesion actual y volveras al login.\n\nContinuar",
+        ):
+            return
+        self._logout_change_user_confirmed()
+
+    def _logout_change_user_confirmed(self) -> None:
+        previous_email = str(getattr(getattr(self, "_cloud_session", None), "email", "") or "").strip()
+        self._remembered_login_cancelled = True
+        self._login_in_progress = False
+        clear_remembered_session()
+        self._cloud_session = None
+        self._hide_login_loading()
+        self._reset_session_state_after_logout()
+        try:
+            self.withdraw()
+        except Exception:
+            pass
+        self._destroy_authenticated_shell()
+        self._show_startup_login(force_manual=True, default_email_override=previous_email)
+
+    def _destroy_authenticated_shell(self) -> None:
+        login_windows = {
+            child
+            for child in (getattr(self, "_login_window", None), getattr(self, "_login_loading_window", None))
+            if child is not None
+        }
+        try:
+            children = list(self.winfo_children())
+        except Exception:
+            children = []
+        for child in children:
+            if child in login_windows:
+                continue
+            try:
+                child.destroy()
+            except Exception:
+                pass
+        self._nav_buttons = {}
+        self._content = None
+        self._status_area = None
+        self._global_search_area = None
+
+    def _reset_session_state_after_logout(self) -> None:
+        self._current_key = "dashboard"
+        self._inventory_items = []
+        self._inventory_error = ""
+        self._inventory_loading = False
+        self._inventory_loaded_once = False
+        self._inventory_query = ""
+        self._inventory_catalog_source_rows = []
+        self._inventory_catalog_filter_selection_state = CatalogFilterSelection()
+        self._inventory_catalog_applied_filter_state = CatalogFilterSelection()
+        self._inventory_catalog_snapshot_cache = None
+        self._selected_inventory_item = None
+        self._proposal_source_item = None
+        self._selected_price_proposal = SAVED_PROPOSALS[0]
+        self._price_proposals = list(SAVED_PROPOSALS)
+        self._price_loading = False
+        self._price_loaded_once = False
+        self._price_error = ""
+        self._price_mode = "saved"
+        self._price_edit_lines = []
+        self._price_proposal_model = {}
+        self._price_rendered_model_keys = ()
+        self._price_rendered_model_types = ()
+        self._price_edit_initialized = False
+        self._price_edit_selected_code = ""
+        self._price_edit_notice = ""
+        self._price_search_query = ""
+        self._price_catalog_filter_selection_state = CatalogFilterSelection()
+        self._price_catalog_applied_filter_state = CatalogFilterSelection()
+        self._proposal_search_query = ""
+        self._price_delete_target_id = ""
+        self._price_delete_target_name = ""
+        self._price_available_items = []
+        self._price_catalog_items = []
+        self._price_catalog_loaded_once = False
+        self._price_catalog_loading = False
+        self._price_catalog_generation = 0
+        self._price_catalog_error = ""
+        self._price_catalog_stage_counts = {}
+        self._price_catalog_reconciliation = {}
+        self._price_woo_read_only_index = None
+        self._price_approved_woo_edges_by_item_id = {}
+        self._price_filter_metadata_by_physical_item = {}
+        self._price_filter_options_cache = {}
+        self._price_filter_metadata_generation = 0
+        self._price_filter_performance = {}
+        self._price_search_results = []
+        self._price_items_loading = False
+        self._price_items_error = ""
+        self._price_items_generation = 0
+        self._price_candidate_page = 0
+        self._price_visible_candidate_ids = set()
+        self._price_selected_candidate_ids = set()
+        self._price_line_sources = {}
+        self._price_proposal_line_sources = {}
+        self._price_live_price_context_by_physical_item = {}
+        self._price_live_price_traces = []
+        self._price_live_sync_in_progress = False
+        self._price_live_sync_completed = False
+        self._price_live_sync_generation = 0
+        self._price_live_sync_summary = {}
+        self._price_live_sync_error_physical_item_ids = set()
+        self._price_live_sync_required = False
+        self._price_save_in_progress = False
+        self._price_publish_in_progress = False
+        self._price_restore_in_progress = False
+        self._price_woo_sync_in_progress = False
+        self._price_last_woo_sync_monotonic = 0.0
+        self._price_delete_in_progress = False
+        self._price_add_in_progress = False
+        self._price_bulk_add_in_progress = False
+        self._price_save_token = ""
+        self._price_refresh_generation = 0
+        self._price_refresh_diagnostics = []
+        self._price_next_refresh_source = ""
+        self._price_refresh_preferred_token = ""
+        self._supplier_orders = []
+        self._orders_loaded_once = False
+        self._orders_loading = False
+        self._orders_error = ""
+        self._selected_supplier_order = None
+        self._woo_sync_preview = None
+        self._woo_sync_rows = []
+        self._woo_sync_loading = False
+        self._woo_sync_error = ""
+        self._woo_sync_filter_text = ""
+        self._woo_sync_filter_review = "Todos"
+        self._woo_sync_filter_status = "Todos"
+        self._woo_sync_filter_link = "Todos"
+        self._business_constants = {key: dict(value) for key, value in DEFAULT_BUSINESS_CONSTANTS.items()}
+        self._business_constants_cloud_loaded = False
+        self._security_events = []
+        self._security_log_rows = []
+        self._security_visible_rows = []
+        self._security_snapshots = []
+        self._security_error = ""
 
     def _show_login_loading(self) -> None:
         if self._login_loading_window is not None and self._login_loading_window.winfo_exists():
@@ -9407,12 +9557,10 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         for key, meta in DEFAULT_BUSINESS_CONSTANTS.items():
             current = constants.get(key, meta) if isinstance(constants, dict) else meta
             result[key] = self._money_float(current.get("value") if isinstance(current, dict) else None) or self._money_float(meta.get("value"))
-        # La formula legacy usa IVA_RE como multiplicador, no porcentaje bruto.
-        # Si en configuracion viene 26.2, equivale a 0.262.
-        if result.get("IVA_RECARGO_EQUIVALENCIA", 0) > 1:
-            result["IVA_RECARGO_EQUIVALENCIA_FACTOR"] = result["IVA_RECARGO_EQUIVALENCIA"] / 100
-        else:
-            result["IVA_RECARGO_EQUIVALENCIA_FACTOR"] = result.get("IVA_RECARGO_EQUIVALENCIA", 0)
+        # IVA + recargo is a derived fiscal factor, not an editable business
+        # constant. Legacy DB rows may still exist but are intentionally ignored.
+        result["IVA_RECARGO_EQUIVALENCIA"] = IVA_RECARGO_EQUIVALENCIA_PERCENT
+        result["IVA_RECARGO_EQUIVALENCIA_FACTOR"] = IVA_RECARGO_EQUIVALENCIA_FACTOR
         return result
 
     def _line_inventory_float(self, source: dict[str, Any], key: str, default: float = 0.0) -> float:
