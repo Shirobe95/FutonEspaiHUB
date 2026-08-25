@@ -164,7 +164,7 @@ class PriceComb001B83CatalogueReconciliationTests(unittest.TestCase):
         result = reconcile_woo_contexts([sync_row("1", "0201001")], woo_index=index)
         self.assertEqual(result["live_price_context_by_physical_item"]["1"]["sync_status"], "AMBIGUOUS_WOO_LINK")
 
-    def test_private_combination_destination_is_not_published(self):
+    def test_private_combination_destination_with_effective_price_is_price_ready(self):
         status, reason = _reconciliation_status(
             {
                 "combination_woo_id": "13092",
@@ -183,8 +183,8 @@ class PriceComb001B83CatalogueReconciliationTests(unittest.TestCase):
             "",
             duplicate=False,
         )
-        self.assertEqual(status, "NOT_PUBLISHED")
-        self.assertIn("private", reason)
+        self.assertEqual(status, "VALID")
+        self.assertIn("Validacion live exacta completada", reason)
 
     def test_suffixes_and_leading_zeroes_are_not_normalized_or_fuzzy_matched(self):
         index = build_woo_read_only_index(ReadOnlyWoo([product(10, "0201001-A"), product(11, "201001")]))

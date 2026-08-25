@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from futonhub.services.combination_price_impact import CombinationPriceImpactService  # noqa: E402
+from futonhub.services.combination_proposal_integration import derived_source_row  # noqa: E402
 from futonhub.services.price_combination_live_reconciliation import (  # noqa: E402
     ReadOnlyAccessError,
     live_price_trace,
@@ -26,12 +27,12 @@ from futonhub.ui.erp.prototype import FutonHubErpPrototype  # noqa: E402
 from futonhub.ui.erp.shared_ui import ProposalLine  # noqa: E402
 
 
-def product(woo_id: int, sku: str, price: str = "134.90") -> dict:
+def product(woo_id: int, sku: str, price: str = "134.90", *, status: str = "publish") -> dict:
     return {
         "id": woo_id,
         "sku": sku,
         "name": f"Producto {sku}",
-        "status": "publish",
+        "status": status,
         "regular_price": "" if price == "" else "165.00",
         "sale_price": price,
         "price": price,
@@ -43,9 +44,9 @@ def product(woo_id: int, sku: str, price: str = "134.90") -> dict:
     }
 
 
-def variation(woo_id: int, parent_id: int, sku: str, price: str = "730.70") -> dict:
+def variation(woo_id: int, parent_id: int, sku: str, price: str = "730.70", *, status: str = "publish") -> dict:
     return {
-        **product(woo_id, sku, price),
+        **product(woo_id, sku, price, status=status),
         "parent_id": parent_id,
     }
 
@@ -106,19 +107,63 @@ class Woo:
 
 
 class GraphWoo(Woo):
-    def __init__(self, service: CombinationPriceImpactService, *, missing_id: str = ""):
+    def __init__(
+        self,
+        service: CombinationPriceImpactService,
+        *,
+        missing_id: str = "",
+        not_found_id: str = "",
+        empty_price_id: str = "",
+        entity_overrides: dict[str, dict] | None = None,
+    ):
         super().__init__()
         self.service = service
         self.missing_id = missing_id
+        self.not_found_id = not_found_id
+        self.empty_price_id = empty_price_id
+        self.entity_overrides = entity_overrides or {}
+
+    def _source_for_id(self, woo_id: str) -> dict:
+        return (
+            self.service.combination_by_id.get(woo_id)
+            or self.service.quarantined_combination_by_id[woo_id]
+        )
+
+    def _entity_for_id(self, woo_id: str) -> dict:
+        source = self._source_for_id(woo_id)
+        price = "" if woo_id == self.empty_price_id else str(source.get("effective_price") or "730.70")
+        entity = variation(
+            int(woo_id),
+            int(source["combination_parent_woo_id"]),
+            str(source["combination_sku"]),
+            price,
+            status=str(source.get("woo_status") or "publish"),
+        )
+        entity.update(self.entity_overrides.get(woo_id, {}))
+        return entity
 
     def get(self, endpoint, params=None):
         self.reads.append((endpoint, dict(params or {})))
         if endpoint.startswith("products/") and "/variations/" in endpoint:
             woo_id = endpoint.rsplit("/", 1)[-1]
+            if woo_id == self.not_found_id:
+                return []
             if woo_id == self.missing_id:
                 return variation(int(woo_id), int(endpoint.split("/")[1]), "", "")
-            source = self.service.combination_by_id[woo_id]
-            return variation(int(woo_id), int(source["combination_parent_woo_id"]), source["combination_sku"])
+            return self._entity_for_id(woo_id)
+        if endpoint == "products":
+            sku = (params or {}).get("sku")
+            rows = []
+            for source in [
+                *self.service.combination_by_id.values(),
+                *self.service.quarantined_combination_by_id.values(),
+            ]:
+                woo_id = str(source.get("combination_woo_id"))
+                if woo_id == self.not_found_id:
+                    continue
+                if str(source.get("combination_sku")) == sku:
+                    rows.append(self._entity_for_id(woo_id))
+            return rows
         return super().get(endpoint, params)
 
 
@@ -216,25 +261,27 @@ class PriceComb001B7LiveReconciliationTests(unittest.TestCase):
         self.assertEqual(trace["status"], "BLOCKED_LIVE_PRICE_UNAVAILABLE")
         self.assertIsNone(trace["final_old_price"])
 
-    # 7. The approved graph has 18 operational candidates for 0201001.
-    def test_reconciles_18_candidates_for_0201001_individually(self):
+    # 7. The approved graph has 18 clean + 78 quarantine-resolved live targets for 0201001.
+    def test_reconciles_tatami_80x200_quarantine_against_live_woo(self):
         result = reconcile_live_combination_plan(self._change(), impact_service=self.service, woo_client=GraphWoo(self.service), session=self.session)
-        self.assertEqual(result["counts"]["candidates"], 18)
-        self.assertEqual(result["counts"]["valid"], 18)
-        self.assertEqual(result["counts"]["quarantined"], 78)
+        self.assertEqual(len(result["all_lines"]), 96)
+        self.assertEqual(result["counts"]["candidates"], 96)
+        self.assertEqual(result["counts"]["valid"], 96)
+        self.assertEqual(result["counts"]["quarantine_resolved"], 78)
+        self.assertEqual(result["counts"]["quarantined"], 0)
 
-    # 8. The approved graph has 19 operational candidates for 0201002.
-    def test_reconciles_19_candidates_for_0201002_individually(self):
+    # 8. The same rule is not limited to a single hard-coded SKU.
+    def test_reconciles_tatami_90x200_quarantine_against_live_woo(self):
         result = reconcile_live_combination_plan(self._change("0201002", "201002"), impact_service=self.service, woo_client=GraphWoo(self.service), session=self.session)
         self.assertEqual(result["counts"]["candidates"], 19)
-        self.assertEqual(result["counts"]["valid"], 19)
+        self.assertEqual(result["counts"]["valid"], result["counts"]["candidates"])
 
     # 9. Only VALID variation rows form the applicable proposal projection.
     def test_only_valid_rows_enter_proposal(self):
         first = self.service.impact_for_changes(self._change())["included_combinations"][0]["combination_woo_id"]
         result = reconcile_live_combination_plan(self._change(), impact_service=self.service, woo_client=GraphWoo(self.service, missing_id=str(first)), session=self.session)
         self.assertTrue(all(row["validation_status"] == "VALID" for row in result["derived_lines"]))
-        self.assertEqual(len(result["derived_lines"]), 17)
+        self.assertEqual(len(result["derived_lines"]), len(result["all_lines"]) - 1)
 
     # 10. Missing prices/errors stay visible in a distinct blocked collection.
     def test_blocked_rows_are_separate_from_valid_rows(self):
@@ -242,6 +289,75 @@ class PriceComb001B7LiveReconciliationTests(unittest.TestCase):
         result = reconcile_live_combination_plan(self._change(), impact_service=self.service, woo_client=GraphWoo(self.service, missing_id=str(first)), session=self.session)
         self.assertEqual(len(result["blocked_lines"]), 1)
         self.assertEqual(result["blocked_lines"][0]["included_in_proposal"], "NO")
+
+    def test_quarantined_placeholder_with_live_woo_price_enters_ready_preview(self):
+        result = reconcile_live_combination_plan(self._change(), impact_service=self.service, woo_client=GraphWoo(self.service), session=self.session)
+        row = next(item for item in result["derived_lines"] if str(item["combination_woo_id"]) == "4594")
+
+        self.assertEqual(row["status"], "READY")
+        self.assertEqual(row["validation_status"], "VALID")
+        self.assertEqual(row["impact_display_status"], "READY")
+        self.assertEqual(row["placeholder_relation_resolved"], "YES")
+        self.assertEqual(row["quarantine_resolved_via_live_woo"], "YES")
+        self.assertEqual(row["effective_current_price"], "749.90")
+        self.assertEqual(row["component_delta"], "2.00")
+        self.assertEqual(row["simulated_effective_price"], "751.90")
+        self.assertEqual(row["remote_resolution_source"], "WOO_ID_PARENT_EXACT")
+        self.assertIn("Target Woo real resuelto", row["reason"])
+
+        source = derived_source_row(
+            row,
+            proposal_name="Tatami smoke",
+            save_token="token",
+            source_proposal_ids=["direct"],
+        )
+        self.assertEqual(source["placeholder_relation_resolved"], "YES")
+        self.assertEqual(source["quarantine_resolved_via_live_woo"], "YES")
+        self.assertEqual(source["quarantine_reason"], "PENDING_BUSINESS_REVIEW_PLACEHOLDER_011")
+
+    def test_quarantined_placeholder_without_live_target_stays_excluded(self):
+        result = reconcile_live_combination_plan(
+            self._change(),
+            impact_service=self.service,
+            woo_client=GraphWoo(self.service, not_found_id="4594"),
+            session=self.session,
+        )
+        row = next(item for item in result["excluded_lines"] if str(item["combination_woo_id"]) == "4594")
+
+        self.assertEqual(row["validation_status"], "UNRESOLVED_REMOTE_TARGET")
+        self.assertEqual(row["status"], "BLOCKED_UNRESOLVED_REMOTE_TARGET")
+        self.assertEqual(row["included_in_proposal"], "NO")
+
+    def test_quarantined_placeholder_without_live_price_stays_excluded(self):
+        result = reconcile_live_combination_plan(
+            self._change(),
+            impact_service=self.service,
+            woo_client=GraphWoo(self.service, empty_price_id="4594"),
+            session=self.session,
+        )
+        row = next(item for item in result["excluded_lines"] if str(item["combination_woo_id"]) == "4594")
+
+        self.assertEqual(row["validation_status"], "NO_BASE_PRICE")
+        self.assertEqual(row["status"], "BLOCKED_NO_BASE_PRICE")
+        self.assertEqual(row["included_in_proposal"], "NO")
+
+    def test_private_outofstock_purchasable_false_target_with_price_is_ready(self):
+        result = reconcile_live_combination_plan(
+            self._change(),
+            impact_service=self.service,
+            woo_client=GraphWoo(
+                self.service,
+                entity_overrides={
+                    "4594": {"status": "private", "stock_status": "outofstock", "purchasable": False}
+                },
+            ),
+            session=self.session,
+        )
+        row = next(item for item in result["derived_lines"] if str(item["combination_woo_id"]) == "4594")
+
+        self.assertEqual(row["validation_status"], "VALID")
+        self.assertEqual(row["publication_allowed"], "YES")
+        self.assertEqual(row["woo_status"], "private")
 
     # 11. Component labels come from an exact inventory item_id lookup.
     def test_component_names_are_resolved(self):

@@ -362,7 +362,10 @@ def _existing_direct_changes(entries: Iterable[Mapping[str, Any]]) -> list[dict[
 def _impact_by_destination(impact: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
     return {
         str(row.get("combination_woo_id")): row
-        for row in impact.get("included_combinations") or []
+        for row in [
+            *(impact.get("included_combinations") or []),
+            *(impact.get("excluded_combinations") or []),
+        ]
         if row.get("combination_woo_id") not in (None, "")
     }
 
@@ -478,10 +481,18 @@ def project_persisted_derived_rows(
     if persisted_by_destination:
         all_lines = list(persisted_by_destination.values())
         valid = [row for row in all_lines if row.get("validation_status") == "VALID"]
-        excluded = [row for row in all_lines if row.get("validation_status") == "QUARANTINED"]
+        excluded = [
+            row for row in all_lines
+            if row.get("validation_status") == "QUARANTINED"
+            or (
+                str(row.get("excluded") or "").upper() == "YES"
+                and row.get("validation_status") != "VALID"
+            )
+        ]
         blocked = [
             row for row in all_lines
-            if row.get("validation_status") not in {"VALID", "QUARANTINED"}
+            if row.get("validation_status") != "VALID"
+            and str(row.get("excluded") or "").upper() != "YES"
         ]
         return {
             "derived_lines": valid,

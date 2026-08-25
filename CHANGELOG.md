@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.5.1 · Price Publication Reliability
+
+- Cambio de Precios: consolida la publicacion fiable de precios WooCommerce con
+  resolucion exacta de targets product/variation, SKUs literales y sin matching
+  aproximado.
+- Cambio de Precios: preserva revalidacion live, snapshot, auditoria,
+  verificacion GET posterior, rollback y aislamiento por target ante fallos.
+- Cambio de Precios: corrige la interpretacion de combinaciones derivadas,
+  cuarentenas resueltas por Woo live, casos sin precio base y resumen honesto de
+  resultados.
+- Verificado smoke humano real Tatami 80x200 con combinaciones y post-smoke
+  read-only contra WooCommerce live.
+
 ## 0.5.0 · PLUS ULTRA
 
 - FutonHUB ERP alcanza una version estable para operativa diaria: Dashboard,

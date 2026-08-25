@@ -163,6 +163,50 @@ def derived_proposal(
     return row
 
 
+def placeholder_derived_proposal(
+    row_id: str = "placeholder-101",
+    *,
+    woo_id: int = 4587,
+    parent_id: int = 3658,
+    old_price: float = 100,
+    new_price: float = 101,
+    resolved: bool = False,
+) -> dict:
+    row = derived_proposal(
+        row_id,
+        "variation",
+        woo_id,
+        old_price=old_price,
+        new_price=new_price,
+        parent_id=parent_id,
+    )
+    source = row["source_row"]
+    source.update({
+        "publication_allowed": "YES" if resolved else "NO",
+        "quarantine_reason": "PENDING_BUSINESS_REVIEW_PLACEHOLDER_011",
+        "blocking_reason": "Pending Business Review Placeholder 101",
+        "placeholder_relation_id": "101",
+        "combination_sku": "0201001|0201001|1249001|1249001|0615011|0615011",
+        "component_skus_all": "0201001|0201001|1249001|1249001|0615011|0615011",
+        "modified_components": [
+            {"component_item_id": "201001", "component_sku": "0201001", "quantity": "2"},
+            {"component_item_id": "1249001", "component_sku": "1249001", "quantity": "2"},
+        ],
+        "relation_edges": [
+            {
+                "edge_status": "PENDING_BUSINESS_REVIEW_PLACEHOLDER_011",
+                "resolution_status": "PLACEHOLDER_UNRESOLVED" if not resolved else "RESOLVED_EXACT_WOO_TARGET",
+            }
+        ],
+    })
+    if resolved:
+        source["placeholder_relation_resolved"] = "YES"
+        source["resolved_remote_key"] = f"variation:{parent_id}:{woo_id}"
+        source["resolved_woo_id"] = str(woo_id)
+        source["resolved_parent_id"] = str(parent_id)
+    return row
+
+
 def proposal_from_derived_line(row_id: str, line: dict, *, source_ids: tuple[str, ...] = ("direct",)) -> dict:
     row = proposal(
         row_id,
@@ -317,9 +361,11 @@ class RpcQuery:
 
 
 class Session:
-    def __init__(self, rows):
+    def __init__(self, rows, *, inventory_rows: list[dict] | None = None):
         self.tables = {
             "price_change_proposals": rows,
+            "inventory_items": [dict(row) for row in (inventory_rows or [])],
+            "inventory_change_history": [],
             "operation_snapshots": [],
             "audit_logs": [],
         }
@@ -405,6 +451,23 @@ class LegacyProduct404VariationSkuWoo(StatefulWoo):
         return super().get(endpoint)
 
 
+class ExactSkuSearchWoo(StatefulWoo):
+    def __init__(self, rows_by_endpoint, search_rows_by_sku):
+        super().__init__(rows_by_endpoint)
+        self.search_rows_by_sku = {
+            str(sku): [dict(row) for row in rows]
+            for sku, rows in search_rows_by_sku.items()
+        }
+        self.read_trace = []
+
+    def get(self, endpoint, params=None):
+        self.read_trace.append((endpoint, dict(params or {})))
+        if endpoint == "products" and params:
+            sku = str(params.get("sku") or "").strip()
+            return SimpleNamespace(json=lambda: [dict(row) for row in self.search_rows_by_sku.get(sku, [])])
+        return super().get(endpoint)
+
+
 class FailingWoo(Woo):
     def __init__(self, reads, fail_on_write: int, fail_rollback: bool = False):
         super().__init__(reads)
@@ -419,6 +482,220 @@ class FailingWoo(Woo):
         if self.fail_rollback and self.write_count > self.fail_on_write:
             raise RuntimeError("rollback failed")
         return super().update_product_pricing(woo_id, payload)
+
+
+class NonPersistingProductWoo(StatefulWoo):
+    def __init__(self, rows_by_endpoint, *, non_persisting_product_id: int):
+        super().__init__(rows_by_endpoint)
+        self.non_persisting_product_id = int(non_persisting_product_id)
+
+    def update_product_pricing(self, woo_id, payload):
+        self.writes.append(("product", int(woo_id), dict(payload)))
+        if int(woo_id) == self.non_persisting_product_id:
+            return {"id": int(woo_id), **dict(payload)}
+        return self._apply(f"products/{int(woo_id)}", payload)
+
+
+class NonPersistingVariationWoo(StatefulWoo):
+    def __init__(self, rows_by_endpoint, *, non_persisting_variation_id: int):
+        super().__init__(rows_by_endpoint)
+        self.non_persisting_variation_id = int(non_persisting_variation_id)
+
+    def update_variation_pricing(self, parent_id, woo_id, payload):
+        self.writes.append(("variation", int(parent_id), int(woo_id), dict(payload)))
+        if int(woo_id) == self.non_persisting_variation_id:
+            return {"id": int(woo_id), **dict(payload)}
+        return self._apply(f"products/{int(parent_id)}/variations/{int(woo_id)}", payload)
+
+
+class EventuallyConsistentProductWoo(StatefulWoo):
+    def __init__(self, rows_by_endpoint, *, delayed_product_id: int, stale_gets_after_first_write: int):
+        super().__init__(rows_by_endpoint)
+        self.delayed_product_id = int(delayed_product_id)
+        self.stale_gets_after_first_write = int(stale_gets_after_first_write)
+        self._stale_gets_remaining = 0
+        self._stale_rows: dict[str, dict] = {}
+        self._delay_started = False
+
+    def get(self, endpoint):
+        if endpoint == f"products/{self.delayed_product_id}" and self._stale_gets_remaining > 0:
+            self._stale_gets_remaining -= 1
+            return SimpleNamespace(json=lambda: dict(self._stale_rows[endpoint]))
+        return super().get(endpoint)
+
+    def update_product_pricing(self, woo_id, payload):
+        endpoint = f"products/{int(woo_id)}"
+        self.writes.append(("product", int(woo_id), dict(payload)))
+        if int(woo_id) == self.delayed_product_id and not self._delay_started:
+            self._stale_rows[endpoint] = dict(self.rows_by_endpoint[endpoint])
+            self._stale_gets_remaining = self.stale_gets_after_first_write
+            self._delay_started = True
+        return self._apply(endpoint, payload)
+
+
+class RollbackVerificationFailWoo(StatefulWoo):
+    def __init__(self, rows_by_endpoint, *, fail_on_publish_product_id: int, rollback_verify_product_id: int):
+        super().__init__(rows_by_endpoint)
+        self.fail_on_publish_product_id = int(fail_on_publish_product_id)
+        self.rollback_verify_product_id = int(rollback_verify_product_id)
+        self._rollback_phase = False
+
+    def update_product_pricing(self, woo_id, payload):
+        self.writes.append(("product", int(woo_id), dict(payload)))
+        if int(woo_id) == self.fail_on_publish_product_id and not self._rollback_phase:
+            self._rollback_phase = True
+            raise RuntimeError("write failed")
+        return self._apply(f"products/{int(woo_id)}", payload)
+
+    def get(self, endpoint):
+        if self._rollback_phase and endpoint == f"products/{self.rollback_verify_product_id}":
+            row = dict(self.rows_by_endpoint[endpoint])
+            row.update({"price": "999.00", "regular_price": "999.00", "sale_price": ""})
+            return SimpleNamespace(json=lambda: row)
+        return super().get(endpoint)
+
+
+class ResponseLostProductWoo(StatefulWoo):
+    def __init__(self, rows_by_endpoint, *, lost_product_ids: set[int]):
+        super().__init__(rows_by_endpoint)
+        self.lost_product_ids = {int(value) for value in lost_product_ids}
+        self._lost_once: set[int] = set()
+
+    def update_product_pricing(self, woo_id, payload):
+        self.writes.append(("product", int(woo_id), dict(payload)))
+        endpoint = f"products/{int(woo_id)}"
+        result = self._apply(endpoint, payload)
+        if int(woo_id) in self.lost_product_ids and int(woo_id) not in self._lost_once:
+            self._lost_once.add(int(woo_id))
+            raise TimeoutError("response lost after remote write")
+        return result
+
+
+class ResponseLostAndNonPersistingProductWoo(ResponseLostProductWoo):
+    def __init__(self, rows_by_endpoint, *, lost_product_ids: set[int], non_persisting_product_ids: set[int]):
+        super().__init__(rows_by_endpoint, lost_product_ids=lost_product_ids)
+        self.non_persisting_product_ids = {int(value) for value in non_persisting_product_ids}
+
+    def update_product_pricing(self, woo_id, payload):
+        if int(woo_id) in self.non_persisting_product_ids:
+            self.writes.append(("product", int(woo_id), dict(payload)))
+            return {"id": int(woo_id), **dict(payload)}
+        return super().update_product_pricing(woo_id, payload)
+
+
+class EventuallyConfirmedLostResponseWoo(StatefulWoo):
+    def __init__(
+        self,
+        rows_by_endpoint,
+        *,
+        lost_product_ids: set[int],
+        non_persisting_product_ids: set[int] | None = None,
+    ):
+        super().__init__(rows_by_endpoint)
+        self.lost_product_ids = {int(value) for value in lost_product_ids}
+        self.non_persisting_product_ids = {int(value) for value in (non_persisting_product_ids or set())}
+        self._lost_once: set[int] = set()
+        self._stale_reads: dict[str, dict] = {}
+
+    def get(self, endpoint):
+        if endpoint in self._stale_reads:
+            stale = self._stale_reads.pop(endpoint)
+            return SimpleNamespace(json=lambda: dict(stale))
+        return super().get(endpoint)
+
+    def update_product_pricing(self, woo_id, payload):
+        woo_id = int(woo_id)
+        self.writes.append(("product", woo_id, dict(payload)))
+        if woo_id in self.non_persisting_product_ids:
+            return {"id": woo_id, **dict(payload)}
+        endpoint = f"products/{woo_id}"
+        before = dict(self.rows_by_endpoint[endpoint])
+        result = self._apply(endpoint, payload)
+        if woo_id in self.lost_product_ids and woo_id not in self._lost_once:
+            self._lost_once.add(woo_id)
+            self._stale_reads[endpoint] = before
+            raise TimeoutError("response lost before stale GET catches up")
+        return result
+
+
+class NoApplyThenRetryProductWoo(StatefulWoo):
+    def __init__(self, rows_by_endpoint, *, no_apply_once_product_id: int):
+        super().__init__(rows_by_endpoint)
+        self.no_apply_once_product_id = int(no_apply_once_product_id)
+        self._failed_once = False
+
+    def update_product_pricing(self, woo_id, payload):
+        self.writes.append(("product", int(woo_id), dict(payload)))
+        if int(woo_id) == self.no_apply_once_product_id and not self._failed_once:
+            self._failed_once = True
+            raise TimeoutError("response failed before remote write")
+        return self._apply(f"products/{int(woo_id)}", payload)
+
+
+class UnknownAfterPutExceptionWoo(StatefulWoo):
+    def __init__(self, rows_by_endpoint, *, unknown_product_id: int, unknown_price: float):
+        super().__init__(rows_by_endpoint)
+        self.unknown_product_id = int(unknown_product_id)
+        self.unknown_price = float(unknown_price)
+        self._failed_once = False
+
+    def update_product_pricing(self, woo_id, payload):
+        self.writes.append(("product", int(woo_id), dict(payload)))
+        endpoint = f"products/{int(woo_id)}"
+        if int(woo_id) == self.unknown_product_id and not self._failed_once:
+            self._failed_once = True
+            self._apply(endpoint, {"regular_price": f"{self.unknown_price:.2f}", "sale_price": ""})
+            raise TimeoutError("response failed with unknown remote state")
+        return self._apply(endpoint, payload)
+
+
+class GetFailAfterPutExceptionWoo(StatefulWoo):
+    def __init__(self, rows_by_endpoint, *, lost_product_id: int):
+        super().__init__(rows_by_endpoint)
+        self.lost_product_id = int(lost_product_id)
+        self._failed_write = False
+        self._failed_get = False
+
+    def update_product_pricing(self, woo_id, payload):
+        self.writes.append(("product", int(woo_id), dict(payload)))
+        endpoint = f"products/{int(woo_id)}"
+        result = self._apply(endpoint, payload)
+        if int(woo_id) == self.lost_product_id and not self._failed_write:
+            self._failed_write = True
+            raise TimeoutError("response lost after remote write")
+        return result
+
+    def get(self, endpoint):
+        if endpoint == f"products/{self.lost_product_id}" and self._failed_write and not self._failed_get:
+            self._failed_get = True
+            raise TimeoutError("get failed after ambiguous put")
+        return super().get(endpoint)
+
+
+class MixedTargetOutcomeWoo(StatefulWoo):
+    def __init__(
+        self,
+        rows_by_endpoint,
+        *,
+        restore_product_ids: set[int] | None = None,
+        no_remote_change_product_ids: set[int] | None = None,
+    ):
+        super().__init__(rows_by_endpoint)
+        self.restore_product_ids = {int(value) for value in (restore_product_ids or set())}
+        self.no_remote_change_product_ids = {int(value) for value in (no_remote_change_product_ids or set())}
+        self._restore_failed_once: set[int] = set()
+
+    def update_product_pricing(self, woo_id, payload):
+        woo_id = int(woo_id)
+        self.writes.append(("product", woo_id, dict(payload)))
+        endpoint = f"products/{woo_id}"
+        if woo_id in self.no_remote_change_product_ids:
+            return {"id": woo_id, **dict(payload)}
+        if woo_id in self.restore_product_ids and woo_id not in self._restore_failed_once:
+            self._restore_failed_once.add(woo_id)
+            self._apply(endpoint, {"regular_price": "105.00", "sale_price": ""})
+            raise TimeoutError("remote changed to unexpected price")
+        return self._apply(endpoint, payload)
 
 
 class ImpactService:
@@ -615,10 +892,10 @@ class PriceProposalPublicationGroupTests(unittest.TestCase):
     def test_duplicate_remote_target_blocks_distinct_canonical_lines(self):
         rows = [proposal("v", "variation", 3662), proposal("pack", "pack", 3662)]
         targets = [
-            {"remote_key": "variation:9:3662", "endpoint": "a", "cloud_item": {}, "woo_id": 3662, "parent_woo_id": 9, "remote_kind": "variation", "canonical_key": "variation:3662"},
-            {"remote_key": "variation:9:3662", "endpoint": "a", "cloud_item": {}, "woo_id": 3662, "parent_woo_id": 9, "remote_kind": "variation", "canonical_key": "pack:3662"},
+            {"remote_key": "variation:9:3662", "endpoint": "products/9/variations/3662", "cloud_item": {}, "woo_id": 3662, "parent_woo_id": 9, "remote_kind": "variation", "canonical_key": "variation:3662"},
+            {"remote_key": "variation:9:3662", "endpoint": "products/9/variations/3662", "cloud_item": {}, "woo_id": 3662, "parent_woo_id": 9, "remote_kind": "variation", "canonical_key": "pack:3662"},
         ]
-        woo = Woo({"a": [{"price": "100"}, {"price": "100"}]})
+        woo = Woo({"products/9/variations/3662": [{"price": "100"}, {"price": "100"}]})
         with (
             patch.object(woocommerce_publish, "_remote_target_for_proposal", side_effect=targets),
             patch.object(woocommerce_publish, "_price_safety_preview", return_value={"status": "OK", "messages": []}),
@@ -764,6 +1041,22 @@ class PriceProposalPublicationGroupTests(unittest.TestCase):
         source = inspect.getsource(FutonHubErpPrototype._render_price_publish_preview)
         self.assertIn("Publicando precios en WooCommerce...", source)
         self.assertIn("{index}/{total}", source)
+        self.assertIn("phase:", source)
+
+    def test_publish_success_message_uses_verified_target_counts(self):
+        source = inspect.getsource(FutonHubErpPrototype._render_price_publish_preview)
+        self.assertIn("audit_counts", source)
+        self.assertIn("verify_ok_count", source)
+        self.assertIn("target_count", source)
+        self.assertIn("precios actualizados y verificados en WooCommerce", source)
+        self.assertIn("final_status", source)
+        self.assertIn("showwarning", source)
+        self.assertIn("skipped_no_base_price_count", source)
+        self.assertIn("skipped_placeholder_relation_count", source)
+        self.assertIn("skipped_unresolved_remote_target_count", source)
+        self.assertIn("Omitidos por relacion sin identidad Woo", source)
+        self.assertIn("Sin identidad Woo resoluble", source)
+        self.assertIn("failed_restored_count", source)
 
     def test_published_detail_shows_date_user_and_operation(self):
         source = inspect.getsource(FutonHubErpPrototype._render_saved_proposal_detail)
@@ -773,8 +1066,10 @@ class PriceProposalPublicationGroupTests(unittest.TestCase):
 
     def test_service_uses_existing_pricing_contract(self):
         source = inspect.getsource(woocommerce_publish.publish_price_proposal_group)
+        helper_source = inspect.getsource(woocommerce_publish._sync_verified_price_inventory_state)
         self.assertIn("_pricing_payload_for_effective_price", source)
-        self.assertIn("sync_woocommerce_price_inventory_state", source)
+        self.assertIn("_sync_verified_price_inventory_state", source)
+        self.assertIn("sync_woocommerce_price_inventory_state", helper_source)
 
     def test_service_acquires_and_releases_lock(self):
         source = inspect.getsource(woocommerce_publish.publish_price_proposal_group)
@@ -788,7 +1083,8 @@ class PriceProposalPublicationGroupTests(unittest.TestCase):
 
     def test_service_rolls_back_in_reverse_order(self):
         source = inspect.getsource(woocommerce_publish.publish_price_proposal_group)
-        self.assertIn("for row in reversed(published):", source)
+        self.assertIn("rollback_source = rollback_candidates or published", source)
+        self.assertIn("for row in reversed(rollback_source):", source)
         self.assertIn("admin_publish_price_proposal_group_rollback", source)
 
     def test_any_identified_user_role_can_apply_and_is_audited(self):
@@ -899,13 +1195,10 @@ class PriceProposalPublicationGroupTests(unittest.TestCase):
             "woo_current_price": 100.0, "new_price": 110.0,
             "old_price_proposal": 100.0, "proposal": row,
         } for row, target in zip(rows, targets)]
-        woo = FailingWoo({
-            "products/10": [
-                {"price": "110", "regular_price": "110.00", "sale_price": ""},
-                {"price": "100", "regular_price": "100", "sale_price": ""},
-            ],
-            "products/11": [],
-        }, fail_on_write=2)
+        woo = NonPersistingProductWoo({
+            "products/10": {"id": 10, "price": "100.00", "regular_price": "100.00", "sale_price": ""},
+            "products/11": {"id": 11, "price": "100.00", "regular_price": "100.00", "sale_price": ""},
+        }, non_persisting_product_id=11)
         session = Session(rows)
         with (
             patch.object(woocommerce_publish, "preview_price_proposal_group_publish", return_value={"blocking": False, "rows": preflight_rows}),
@@ -920,7 +1213,8 @@ class PriceProposalPublicationGroupTests(unittest.TestCase):
                     session, proposal_ids=["a", "b"], confirm="PUBLICAR", settings=settings(), client=woo
                 )
         self.assertTrue(all(row["status"] == "pending" for row in session.tables["price_change_proposals"]))
-        self.assertEqual(woo.write_count, 3)
+        self.assertEqual(woo.rows_by_endpoint["products/10"]["price"], "100.00")
+        self.assertEqual(woo.rows_by_endpoint["products/11"]["price"], "100.00")
 
     def test_incomplete_rollback_marks_critical_error(self):
         rows = [proposal("a", "product", 10), proposal("b", "product", 11)]
@@ -992,18 +1286,17 @@ class PriceProposalPublicationGroupTests(unittest.TestCase):
             patch.object(woocommerce_publish, "acquire_system_lock"),
             patch.object(woocommerce_publish, "release_system_lock"),
         ):
-            with self.assertRaisesRegex(CloudAuditError, "put_attempted=True"):
-                woocommerce_publish.publish_price_proposal_group(
-                    session,
-                    proposal_ids=["p"],
-                    settings=settings(),
-                    client=woo,
-                )
+            result = woocommerce_publish.publish_price_proposal_group(
+                session,
+                proposal_ids=["p"],
+                settings=settings(),
+                client=woo,
+            )
         source = session.tables["price_change_proposals"][0]["source_row"]
-        failed_write = source["publish_failed_write"]
-        self.assertTrue(failed_write["put_attempted"])
-        self.assertFalse(failed_write["put_confirmed"])
-        self.assertIn("endpoint=products/10", failed_write["diagnostic"])
+        target = result["target_manifest"]["targets"][0]
+        self.assertEqual(result["final_status"], "CRITICAL_PARTIAL_STATE")
+        self.assertEqual(target["status"], "FAILED_ROLLBACK_INCOMPLETE")
+        self.assertTrue(source["target_rollback"])
 
     def test_incomplete_rollback_uses_error_status(self):
         source = inspect.getsource(woocommerce_publish.publish_price_proposal_group)
@@ -1079,6 +1372,746 @@ class PriceProposalPublicationGroupTests(unittest.TestCase):
         self.assertEqual(len(woo.writes), 3)
         self.assertEqual([write[1] for write in woo.writes], [10, 11, 12])
         self.assertEqual(result["counts"]["woo_writes"], 3)
+
+    def test_target_manifest_counts_match_verified_targets_on_success(self):
+        rows = [
+            proposal("product-10", "product", 10, snapshot={"woo_id": 10, "type": "simple", "price": 100}),
+            proposal("variation-20", "variation", 20, snapshot={"woo_id": 20, "woo_parent_id": 7, "parent_woo_id": 7, "price": 100}),
+        ]
+        woo = StatefulWoo({
+            "products/10": {"id": 10, "price": "100.00", "regular_price": "100.00", "sale_price": ""},
+            "products/7/variations/20": {"id": 20, "parent_id": 7, "price": "100.00", "regular_price": "100.00", "sale_price": ""},
+        })
+
+        _session, result = self._publish_with_runtime_blackbox(rows, woo, ["product-10", "variation-20"])
+
+        manifest = result["target_manifest"]
+        self.assertEqual(manifest["target_count"], 2)
+        self.assertEqual([target["endpoint"] for target in manifest["targets"]], ["products/10", "products/7/variations/20"])
+        self.assertEqual([target["woo_type"] for target in manifest["targets"]], ["product", "variation"])
+        self.assertEqual(result["audit_counts"]["final_status"], "SUCCESS_VERIFIED")
+        self.assertEqual(result["audit_counts"]["verify_ok_count"], 2)
+        self.assertEqual(result["audit_counts"]["verify_fail_count"], 0)
+
+    def test_derived_combination_without_inventory_row_is_verified_without_fake_association(self):
+        row = derived_proposal(
+            "derived-20",
+            "variation",
+            20,
+            old_price=100,
+            new_price=101,
+            parent_id=7,
+        )
+        woo = StatefulWoo({
+            "products/7/variations/20": woo_row(20, 100, parent_id=7, modified="T1"),
+        })
+        session = Session([row])
+
+        with (
+            patch.object(woocommerce_publish, "acquire_system_lock"),
+            patch.object(woocommerce_publish, "release_system_lock"),
+        ):
+            result = woocommerce_publish.publish_price_proposal_group(
+                session,
+                proposal_ids=["derived-20"],
+                settings=settings(),
+                client=woo,
+            )
+
+        target = result["target_manifest"]["targets"][0]
+        self.assertEqual(result["final_status"], "SUCCESS_VERIFIED")
+        self.assertEqual(result["audit_counts"]["target_count"], 1)
+        self.assertEqual(result["audit_counts"]["verify_ok_count"], 1)
+        self.assertEqual(target["inventory_sync_status"], "NOT_APPLICABLE_DERIVED_COMBINATION")
+        self.assertEqual(result["published"][0]["inventory_sync"]["inventory_sync_status"], "NOT_APPLICABLE_DERIVED_COMBINATION")
+        self.assertEqual(session.tables["inventory_items"], [])
+        self.assertEqual(session.tables["inventory_change_history"], [])
+        self.assertFalse(any(table == "inventory_items" for table, _payload, _equals in session.updates))
+
+    def test_direct_item_without_inventory_resolution_fails_closed_and_rolls_back(self):
+        row = proposal("direct-10", "product", 10, snapshot={"woo_id": 10, "type": "simple", "price": 100})
+        woo = StatefulWoo({
+            "products/10": {"id": 10, "price": "100.00", "regular_price": "100.00", "sale_price": ""},
+        })
+        session = Session([row])
+
+        with (
+            patch.object(woocommerce_publish, "acquire_system_lock"),
+            patch.object(woocommerce_publish, "release_system_lock"),
+        ):
+            result = woocommerce_publish.publish_price_proposal_group(
+                session,
+                proposal_ids=["direct-10"],
+                settings=settings(),
+                client=woo,
+            )
+
+        target = result["target_manifest"]["targets"][0]
+        self.assertEqual(result["final_status"], "COMPLETED_WITH_ERRORS")
+        self.assertEqual(result["audit_counts"]["failed_restored_count"], 1)
+        self.assertEqual(woo.rows_by_endpoint["products/10"]["price"], "100.00")
+        self.assertEqual(target["inventory_sync_status"], "FAILED_DIRECT_ITEM")
+        self.assertEqual(
+            target["rollback_inventory_sync_status"],
+            "SKIPPED_DIRECT_ITEM_NO_INVENTORY_ROW_AFTER_ROLLBACK",
+        )
+        self.assertEqual(target["status"], "FAILED_RESTORED")
+
+    def test_fifty_eight_targets_allow_derived_without_physical_inventory_rows(self):
+        direct_rows = [
+            proposal(
+                f"direct-{woo_id}",
+                "product",
+                woo_id,
+                snapshot={"woo_id": woo_id, "type": "simple", "price": 100},
+            )
+            for woo_id in range(10, 16)
+        ]
+        derived_rows = [
+            derived_proposal(
+                f"derived-{woo_id}",
+                "variation",
+                woo_id,
+                old_price=100,
+                new_price=101,
+                parent_id=900,
+            )
+            for woo_id in range(2000, 2052)
+        ]
+        rows = direct_rows + derived_rows
+        inventory_rows = [
+            {
+                "item_id": woo_id + 1000,
+                "name": f"Direct {woo_id}",
+                "woo_id": woo_id,
+                "woo_price": "100.00",
+                "source_row": {},
+            }
+            for woo_id in range(10, 16)
+        ]
+        woo = StatefulWoo({
+            **{
+                f"products/{woo_id}": {
+                    "id": woo_id,
+                    "price": "100.00",
+                    "regular_price": "100.00",
+                    "sale_price": "",
+                }
+                for woo_id in range(10, 16)
+            },
+            **{
+                f"products/900/variations/{woo_id}": woo_row(woo_id, 100, parent_id=900, modified="T1")
+                for woo_id in range(2000, 2052)
+            },
+        })
+        session = Session(rows, inventory_rows=inventory_rows)
+
+        with (
+            patch.object(woocommerce_publish, "acquire_system_lock"),
+            patch.object(woocommerce_publish, "release_system_lock"),
+        ):
+            result = woocommerce_publish.publish_price_proposal_group(
+                session,
+                proposal_ids=[row["id"] for row in rows],
+                settings=settings(),
+                client=woo,
+            )
+
+        statuses = [target["inventory_sync_status"] for target in result["target_manifest"]["targets"]]
+        self.assertEqual(result["final_status"], "SUCCESS_VERIFIED")
+        self.assertEqual(result["audit_counts"]["target_count"], 58)
+        self.assertEqual(result["audit_counts"]["verify_ok_count"], 58)
+        self.assertEqual(statuses.count("SYNCED_DIRECT_ITEM"), 6)
+        self.assertEqual(statuses.count("NOT_APPLICABLE_DERIVED_COMBINATION"), 52)
+        self.assertEqual(len(session.tables["inventory_change_history"]), 6)
+
+    def test_001d_fifty_eight_mixed_results_are_processed_without_reverting_successes(self):
+        ids_applied = list(range(1000, 1052))
+        ids_already = [1052, 1053]
+        id_skipped = 1054
+        ids_restored = [1055, 1056]
+        id_no_remote = 1057
+        all_ids = ids_applied + ids_already + [id_skipped] + ids_restored + [id_no_remote]
+        rows = [
+            proposal(
+                f"target-{woo_id}",
+                "product",
+                woo_id,
+                old_price=110 if woo_id in ids_already else 100,
+                new_price=110,
+                snapshot={"woo_id": woo_id, "type": "simple", "price": 100},
+            )
+            for woo_id in all_ids
+        ]
+        preflight_rows = []
+        for row, woo_id in zip(rows, all_ids):
+            status = "NO_CHANGE" if woo_id in ids_already else "SKIPPED_NO_BASE_PRICE" if woo_id == id_skipped else "VALIDO"
+            current_price = None if woo_id == id_skipped else 110.0 if woo_id in ids_already else 100.0
+            snapshot = (
+                {"price": "", "regular_price": "", "sale_price": ""}
+                if woo_id == id_skipped
+                else {"price": f"{current_price:.2f}", "regular_price": f"{current_price:.2f}", "sale_price": ""}
+            )
+            target = {
+                "remote_key": f"product:{woo_id}",
+                "endpoint": f"products/{woo_id}",
+                "cloud_item": {},
+                "woo_id": woo_id,
+                "remote_kind": "product",
+                "canonical_key": f"product:{woo_id}",
+            }
+            preflight_rows.append({
+                "proposal_id": row["id"],
+                "canonical_key": target["canonical_key"],
+                "target": target,
+                "woo_before": snapshot,
+                "woo_before_full": {"id": woo_id, **snapshot},
+                "woo_current_price": current_price,
+                "new_price": 110.0,
+                "old_price_proposal": current_price,
+                "status": status,
+                "proposal": row,
+            })
+        woo = MixedTargetOutcomeWoo(
+            {
+                f"products/{woo_id}": {
+                    "id": woo_id,
+                    "price": "110.00" if woo_id in ids_already else "100.00",
+                    "regular_price": "110.00" if woo_id in ids_already else "100.00",
+                    "sale_price": "",
+                }
+                for woo_id in all_ids
+            },
+            restore_product_ids=set(ids_restored),
+            no_remote_change_product_ids={id_no_remote},
+        )
+        session = Session(rows)
+
+        with (
+            patch.object(woocommerce_publish, "preview_price_proposal_group_publish", return_value={"blocking": False, "rows": preflight_rows, "counts": {"direct": 58, "derived": 0}}),
+            patch.object(woocommerce_publish, "acquire_system_lock"),
+            patch.object(woocommerce_publish, "release_system_lock"),
+            patch.object(woocommerce_publish, "sync_woocommerce_price_inventory_state", return_value={"ok": True}),
+        ):
+            result = woocommerce_publish.publish_price_proposal_group(
+                session,
+                proposal_ids=[row["id"] for row in rows],
+                settings=settings(),
+                client=woo,
+            )
+
+        audit = result["audit_counts"]
+        self.assertEqual(result["final_status"], "COMPLETED_WITH_ERRORS")
+        self.assertEqual(audit["target_count"], 58)
+        self.assertEqual(audit["processed_count"], 58)
+        self.assertEqual(audit["applied_verified_count"], 52)
+        self.assertEqual(audit["already_matched_count"], 2)
+        self.assertEqual(audit["skipped_no_base_price_count"], 1)
+        self.assertEqual(audit["failed_restored_count"], 2)
+        self.assertEqual(audit["failed_no_remote_change_count"], 1)
+        self.assertEqual(audit["failed_rollback_incomplete_count"], 0)
+        self.assertEqual(woo.rows_by_endpoint["products/1000"]["price"], "110.00")
+        self.assertEqual(woo.rows_by_endpoint["products/1055"]["price"], "100.00")
+        self.assertEqual(woo.rows_by_endpoint["products/1057"]["price"], "100.00")
+        self.assertEqual(result["target_manifest"]["targets"][54]["status"], "SKIPPED_NO_BASE_PRICE")
+
+    def test_001d_target_failure_does_not_stop_following_targets(self):
+        rows = [
+            proposal(f"target-{woo_id}", "product", woo_id, snapshot={"woo_id": woo_id, "type": "simple", "price": 100})
+            for woo_id in range(1, 21)
+        ]
+        woo = MixedTargetOutcomeWoo(
+            {
+                f"products/{woo_id}": {"id": woo_id, "price": "100.00", "regular_price": "100.00", "sale_price": ""}
+                for woo_id in range(1, 21)
+            },
+            restore_product_ids={2},
+        )
+
+        _session, result = self._publish_with_runtime_blackbox(rows, woo, [row["id"] for row in rows])
+
+        self.assertEqual(result["final_status"], "COMPLETED_WITH_ERRORS")
+        self.assertEqual(result["target_manifest"]["targets"][1]["status"], "FAILED_RESTORED")
+        self.assertEqual(woo.rows_by_endpoint["products/2"]["price"], "100.00")
+        self.assertEqual(woo.rows_by_endpoint["products/3"]["price"], "110.00")
+        self.assertEqual(woo.rows_by_endpoint["products/20"]["price"], "110.00")
+
+    def test_001d_direct_inventory_sync_failure_rolls_back_only_that_target(self):
+        rows = [
+            proposal(f"direct-{woo_id}", "product", woo_id, snapshot={"woo_id": woo_id, "type": "simple", "price": 100})
+            for woo_id in (1, 2, 3)
+        ]
+        woo = StatefulWoo({
+            f"products/{woo_id}": {"id": woo_id, "price": "100.00", "regular_price": "100.00", "sale_price": ""}
+            for woo_id in (1, 2, 3)
+        })
+        session = Session(rows)
+        sync_results = [{"ok": True}, RuntimeError("inventory sync failed"), {"ok": True}, {"ok": True}]
+
+        with (
+            patch.object(woocommerce_publish, "acquire_system_lock"),
+            patch.object(woocommerce_publish, "release_system_lock"),
+            patch.object(woocommerce_publish, "sync_woocommerce_price_inventory_state", side_effect=sync_results),
+        ):
+            result = woocommerce_publish.publish_price_proposal_group(
+                session,
+                proposal_ids=[row["id"] for row in rows],
+                settings=settings(),
+                client=woo,
+            )
+
+        self.assertEqual(result["final_status"], "COMPLETED_WITH_ERRORS")
+        self.assertEqual(result["target_manifest"]["targets"][0]["status"], "APPLIED_VERIFIED")
+        self.assertEqual(result["target_manifest"]["targets"][1]["status"], "FAILED_RESTORED")
+        self.assertEqual(result["target_manifest"]["targets"][2]["status"], "APPLIED_VERIFIED")
+        self.assertEqual(woo.rows_by_endpoint["products/1"]["price"], "110.00")
+        self.assertEqual(woo.rows_by_endpoint["products/2"]["price"], "100.00")
+        self.assertEqual(woo.rows_by_endpoint["products/3"]["price"], "110.00")
+
+    def test_001d_no_base_price_skips_without_put_and_continues(self):
+        rows = [
+            proposal("skip", "product", 10, old_price=0, new_price=110, snapshot={"woo_id": 10, "type": "simple", "price": 0}),
+            proposal("apply", "product", 11, snapshot={"woo_id": 11, "type": "simple", "price": 100}),
+        ]
+        woo = StatefulWoo({
+            "products/10": {"id": 10, "price": "", "regular_price": "", "sale_price": ""},
+            "products/11": {"id": 11, "price": "100.00", "regular_price": "100.00", "sale_price": ""},
+        })
+        _session, result = self._publish_with_runtime_blackbox(rows, woo, ["skip", "apply"])
+
+        self.assertEqual(result["final_status"], "COMPLETED_WITH_SKIPS")
+        self.assertEqual(result["audit_counts"]["skipped_no_base_price_count"], 1)
+        self.assertEqual(result["audit_counts"]["applied_verified_count"], 1)
+        self.assertEqual([write[1] for write in woo.writes], [11])
+
+    def test_001d_purchasable_false_with_effective_price_remains_price_eligible(self):
+        row = proposal("p", "product", 10, old_price=150, new_price=160, snapshot={"woo_id": 10, "type": "simple", "price": 150})
+        woo = StatefulWoo({
+            "products/10": {
+                "id": 10,
+                "price": "150.00",
+                "regular_price": "150.00",
+                "sale_price": "",
+                "purchasable": False,
+            },
+        })
+        _session, result = self._publish_with_runtime_blackbox([row], woo, ["p"])
+
+        self.assertEqual(result["final_status"], "SUCCESS_VERIFIED")
+        self.assertEqual(result["target_manifest"]["targets"][0]["status"], "APPLIED_VERIFIED")
+        self.assertEqual(woo.rows_by_endpoint["products/10"]["price"], "160.00")
+
+    def test_001d_descatalogado_with_woo_price_does_not_block_by_status_label(self):
+        row = proposal("p", "product", 10, old_price=150, new_price=155, snapshot={"woo_id": 10, "type": "simple", "price": 150})
+        row["source_row"]["commercial_status"] = "Descatalogado"
+        woo = StatefulWoo({
+            "products/10": {
+                "id": 10,
+                "price": "150.00",
+                "regular_price": "150.00",
+                "sale_price": "",
+                "status": "private",
+            },
+        })
+        _session, result = self._publish_with_runtime_blackbox([row], woo, ["p"])
+
+        self.assertEqual(result["final_status"], "SUCCESS_VERIFIED")
+        self.assertEqual(result["target_manifest"]["targets"][0]["status"], "APPLIED_VERIFIED")
+        self.assertEqual(woo.rows_by_endpoint["products/10"]["price"], "155.00")
+
+    def test_derived_woo_failure_rolls_back_batch_without_inventory_association(self):
+        rows = [
+            derived_proposal("derived-ok", "variation", 20, old_price=100, new_price=101, parent_id=7),
+            derived_proposal("derived-fail", "variation", 21, old_price=100, new_price=101, parent_id=7),
+        ]
+        woo = NonPersistingVariationWoo(
+            {
+                "products/7/variations/20": woo_row(20, 100, parent_id=7, modified="T1"),
+                "products/7/variations/21": woo_row(21, 100, parent_id=7, modified="T1"),
+            },
+            non_persisting_variation_id=21,
+        )
+        session = Session(rows)
+
+        with (
+            patch.object(woocommerce_publish, "acquire_system_lock"),
+            patch.object(woocommerce_publish, "release_system_lock"),
+        ):
+            result = woocommerce_publish.publish_price_proposal_group(
+                session,
+                proposal_ids=["derived-ok", "derived-fail"],
+                settings=settings(),
+                client=woo,
+            )
+
+        audit = result["audit_counts"]
+        self.assertEqual(result["final_status"], "COMPLETED_WITH_ERRORS")
+        self.assertEqual(audit["applied_verified_count"], 1)
+        self.assertEqual(audit["failed_no_remote_change_count"], 1)
+        self.assertEqual(woo.rows_by_endpoint["products/7/variations/20"]["price"], "101.00")
+        self.assertEqual(woo.rows_by_endpoint["products/7/variations/21"]["price"], "100.00")
+        self.assertEqual(session.tables["inventory_items"], [])
+        self.assertEqual(session.tables["inventory_change_history"], [])
+
+    def test_nineteen_targets_with_one_unverified_never_reports_success_and_rolls_back_all_written(self):
+        rows = [
+            proposal(
+                f"target-{woo_id}",
+                "product",
+                woo_id,
+                snapshot={"woo_id": woo_id, "type": "simple", "price": 100},
+            )
+            for woo_id in range(101, 120)
+        ]
+        woo = NonPersistingProductWoo(
+            {
+                f"products/{woo_id}": {"id": woo_id, "price": "100.00", "regular_price": "100.00", "sale_price": ""}
+                for woo_id in range(101, 120)
+            },
+            non_persisting_product_id=119,
+        )
+        session = Session(rows)
+
+        with (
+            patch.object(woocommerce_publish, "acquire_system_lock"),
+            patch.object(woocommerce_publish, "release_system_lock"),
+            patch.object(woocommerce_publish, "sync_woocommerce_price_inventory_state", return_value={"ok": True}),
+        ):
+            result = woocommerce_publish.publish_price_proposal_group(
+                session,
+                proposal_ids=[row["id"] for row in rows],
+                settings=settings(),
+                client=woo,
+            )
+
+        audit = result["audit_counts"]
+        self.assertEqual(result["final_status"], "COMPLETED_WITH_ERRORS")
+        self.assertEqual(audit["target_count"], 19)
+        self.assertEqual(audit["verify_ok_count"], 18)
+        self.assertEqual(audit["verify_fail_count"], 1)
+        self.assertEqual(audit["applied_verified_count"], 18)
+        self.assertEqual(audit["failed_no_remote_change_count"], 1)
+        self.assertEqual(audit["processed_count"], 19)
+        self.assertNotEqual(audit["verify_ok_count"], audit["target_count"])
+        self.assertEqual(woo.rows_by_endpoint["products/101"]["price"], "110.00")
+        self.assertEqual(woo.rows_by_endpoint["products/119"]["price"], "100.00")
+
+    def test_postcheck_old_price_retries_failed_target_and_can_recover(self):
+        row = proposal("p", "product", 10, snapshot={"woo_id": 10, "type": "simple", "price": 100})
+        woo = EventuallyConsistentProductWoo(
+            {
+                "products/10": {"id": 10, "price": "100.00", "regular_price": "100.00", "sale_price": ""},
+            },
+            delayed_product_id=10,
+            stale_gets_after_first_write=2,
+        )
+
+        _session, result = self._publish_with_runtime_blackbox([row], woo, ["p"])
+
+        self.assertEqual(result["final_status"], "SUCCESS_VERIFIED")
+        self.assertEqual(result["audit_counts"]["retry_count"], 1)
+        self.assertEqual(result["audit_counts"]["verify_ok_count"], 1)
+        self.assertEqual(result["audit_counts"]["verify_fail_count"], 1)
+        self.assertEqual(
+            [write for write in woo.writes if write[0] == "product"],
+            [
+                ("product", 10, {"regular_price": "110.00", "sale_price": ""}),
+                ("product", 10, {"regular_price": "110.00", "sale_price": ""}),
+            ],
+        )
+
+    def test_two_already_matched_targets_count_as_satisfied_without_put(self):
+        rows = [
+            proposal(
+                f"already-{woo_id}",
+                "product",
+                woo_id,
+                old_price=110,
+                new_price=110,
+                snapshot={"woo_id": woo_id, "type": "simple", "price": 110},
+            )
+            for woo_id in (10, 11)
+        ]
+        woo = StatefulWoo({
+            f"products/{woo_id}": {"id": woo_id, "price": "110.00", "regular_price": "110.00", "sale_price": ""}
+            for woo_id in (10, 11)
+        })
+
+        _session, result = self._publish_with_runtime_blackbox(rows, woo, ["already-10", "already-11"])
+
+        self.assertEqual(woo.writes, [])
+        self.assertEqual(result["audit_counts"]["target_count"], 2)
+        self.assertEqual(result["audit_counts"]["verify_ok_count"], 2)
+        self.assertEqual(result["audit_counts"]["already_matched_count"], 2)
+        self.assertEqual(result["audit_counts"]["changed_count"], 0)
+        self.assertEqual(result["final_status"], "SUCCESS_VERIFIED")
+
+    def test_response_lost_remote_confirmed_finishes_verified(self):
+        row = proposal("p", "product", 10, snapshot={"woo_id": 10, "type": "simple", "price": 100})
+        woo = ResponseLostProductWoo(
+            {
+                "products/10": {"id": 10, "price": "100.00", "regular_price": "100.00", "sale_price": ""},
+            },
+            lost_product_ids={10},
+        )
+
+        _session, result = self._publish_with_runtime_blackbox([row], woo, ["p"])
+
+        target = result["target_manifest"]["targets"][0]
+        self.assertEqual(result["final_status"], "SUCCESS_VERIFIED")
+        self.assertEqual(target["status"], "APPLIED_VERIFIED")
+        self.assertIn("WRITE_RESPONSE_FAILED_REMOTE_CONFIRMED", target["status_history"])
+        self.assertTrue(target["remote_write_confirmed_by_get"])
+        self.assertFalse(target["put_response_ok"])
+        self.assertEqual(result["audit_counts"]["verify_ok_count"], 1)
+        self.assertEqual(woo.rows_by_endpoint["products/10"]["price"], "110.00")
+
+    def test_ambiguous_put_eventually_confirmed_without_second_put_stays_written(self):
+        row = proposal("p", "product", 10, snapshot={"woo_id": 10, "type": "simple", "price": 100})
+        woo = EventuallyConfirmedLostResponseWoo(
+            {
+                "products/10": {"id": 10, "price": "100.00", "regular_price": "100.00", "sale_price": ""},
+            },
+            lost_product_ids={10},
+        )
+
+        _session, result = self._publish_with_runtime_blackbox([row], woo, ["p"])
+
+        target = result["target_manifest"]["targets"][0]
+        self.assertEqual(result["final_status"], "SUCCESS_VERIFIED")
+        self.assertEqual(target["status"], "APPLIED_VERIFIED")
+        self.assertIn("WRITE_RESPONSE_FAILED_REMOTE_OLD", target["status_history"])
+        self.assertIn("AMBIGUOUS_WRITE_EVENTUALLY_CONFIRMED", target["status_history"])
+        self.assertTrue(target["write_performed"])
+        self.assertTrue(target["may_have_written"])
+        self.assertTrue(target["operation_may_have_written"])
+        self.assertTrue(target["remote_write_confirmed_by_get"])
+        self.assertFalse(target["repair_write_performed"])
+        self.assertEqual(target["write_outcome"], "AMBIGUOUS_WRITE_EVENTUALLY_CONFIRMED")
+        self.assertEqual(
+            woo.writes,
+            [("product", 10, {"regular_price": "110.00", "sale_price": ""})],
+        )
+
+    def test_later_failure_rolls_back_eventually_confirmed_ambiguous_target(self):
+        rows = [
+            proposal("a", "product", 10, snapshot={"woo_id": 10, "type": "simple", "price": 100}),
+            proposal("b", "product", 11, snapshot={"woo_id": 11, "type": "simple", "price": 100}),
+        ]
+        woo = EventuallyConfirmedLostResponseWoo(
+            {
+                "products/10": {"id": 10, "price": "100.00", "regular_price": "100.00", "sale_price": ""},
+                "products/11": {"id": 11, "price": "100.00", "regular_price": "100.00", "sale_price": ""},
+            },
+            lost_product_ids={10},
+            non_persisting_product_ids={11},
+        )
+        session = Session(rows)
+
+        with (
+            patch.object(woocommerce_publish, "acquire_system_lock"),
+            patch.object(woocommerce_publish, "release_system_lock"),
+            patch.object(woocommerce_publish, "sync_woocommerce_price_inventory_state", return_value={"ok": True}),
+        ):
+            result = woocommerce_publish.publish_price_proposal_group(
+                session,
+                proposal_ids=["a", "b"],
+                settings=settings(),
+                client=woo,
+            )
+
+        audit = result["audit_counts"]
+        target_a = next(target for target in result["target_manifest"]["targets"] if target["proposal_id"] == "a")
+        target_b = next(target for target in result["target_manifest"]["targets"] if target["proposal_id"] == "b")
+        self.assertEqual(result["final_status"], "COMPLETED_WITH_ERRORS")
+        self.assertIn("AMBIGUOUS_WRITE_EVENTUALLY_CONFIRMED", target_a["status_history"])
+        self.assertEqual(target_a["status"], "APPLIED_VERIFIED")
+        self.assertEqual(target_b["status"], "FAILED_NO_REMOTE_CHANGE")
+        self.assertEqual(audit["applied_verified_count"], 1)
+        self.assertEqual(audit["failed_no_remote_change_count"], 1)
+        self.assertEqual(woo.rows_by_endpoint["products/10"]["price"], "110.00")
+        writes_for_a = [write for write in woo.writes if write[1] == 10]
+        self.assertEqual(len(writes_for_a), 1)
+        self.assertEqual(writes_for_a[0], ("product", 10, {"regular_price": "110.00", "sale_price": ""}))
+
+    def test_response_lost_then_later_failure_rolls_back_confirmed_target(self):
+        rows = [
+            proposal("a", "product", 10, snapshot={"woo_id": 10, "type": "simple", "price": 100}),
+            proposal("b", "product", 11, snapshot={"woo_id": 11, "type": "simple", "price": 100}),
+        ]
+        woo = ResponseLostAndNonPersistingProductWoo(
+            {
+                "products/10": {"id": 10, "price": "100.00", "regular_price": "100.00", "sale_price": ""},
+                "products/11": {"id": 11, "price": "100.00", "regular_price": "100.00", "sale_price": ""},
+            },
+            lost_product_ids={10},
+            non_persisting_product_ids={11},
+        )
+        session = Session(rows)
+
+        with (
+            patch.object(woocommerce_publish, "acquire_system_lock"),
+            patch.object(woocommerce_publish, "release_system_lock"),
+            patch.object(woocommerce_publish, "sync_woocommerce_price_inventory_state", return_value={"ok": True}),
+        ):
+            result = woocommerce_publish.publish_price_proposal_group(
+                session,
+                proposal_ids=["a", "b"],
+                settings=settings(),
+                client=woo,
+            )
+
+        audit = result["audit_counts"]
+        self.assertEqual(result["final_status"], "COMPLETED_WITH_ERRORS")
+        self.assertEqual(audit["applied_verified_count"], 1)
+        self.assertEqual(audit["failed_no_remote_change_count"], 1)
+        target_a = next(target for target in result["target_manifest"]["targets"] if target["proposal_id"] == "a")
+        self.assertIn("WRITE_RESPONSE_FAILED_REMOTE_CONFIRMED", target_a["status_history"])
+        self.assertNotIn("ROLLBACK_OK", target_a["status_history"])
+        self.assertEqual(woo.rows_by_endpoint["products/10"]["price"], "110.00")
+
+    def test_put_exception_get_old_retries_and_can_recover(self):
+        row = proposal("p", "product", 10, snapshot={"woo_id": 10, "type": "simple", "price": 100})
+        woo = NoApplyThenRetryProductWoo(
+            {
+                "products/10": {"id": 10, "price": "100.00", "regular_price": "100.00", "sale_price": ""},
+            },
+            no_apply_once_product_id=10,
+        )
+
+        _session, result = self._publish_with_runtime_blackbox([row], woo, ["p"])
+
+        target = result["target_manifest"]["targets"][0]
+        self.assertEqual(result["final_status"], "SUCCESS_VERIFIED")
+        self.assertIn("WRITE_RESPONSE_FAILED_REMOTE_OLD", target["status_history"])
+        self.assertEqual(target["status"], "APPLIED_VERIFIED")
+        self.assertEqual(result["audit_counts"]["retry_count"], 1)
+        self.assertEqual(woo.rows_by_endpoint["products/10"]["price"], "110.00")
+
+    def test_put_exception_get_unknown_restores_current_target_and_rolls_back(self):
+        row = proposal("p", "product", 10, snapshot={"woo_id": 10, "type": "simple", "price": 100})
+        woo = UnknownAfterPutExceptionWoo(
+            {
+                "products/10": {"id": 10, "price": "100.00", "regular_price": "100.00", "sale_price": ""},
+            },
+            unknown_product_id=10,
+            unknown_price=105,
+        )
+        session = Session([row])
+
+        with (
+            patch.object(woocommerce_publish, "acquire_system_lock"),
+            patch.object(woocommerce_publish, "release_system_lock"),
+            patch.object(woocommerce_publish, "sync_woocommerce_price_inventory_state", return_value={"ok": True}),
+        ):
+            result = woocommerce_publish.publish_price_proposal_group(
+                session,
+                proposal_ids=["p"],
+                settings=settings(),
+                client=woo,
+            )
+
+        audit = result["audit_counts"]
+        self.assertEqual(result["final_status"], "COMPLETED_WITH_ERRORS")
+        self.assertEqual(audit["failed_restored_count"], 1)
+        target = result["target_manifest"]["targets"][0]
+        self.assertIn("WRITE_RESPONSE_FAILED_REMOTE_UNKNOWN", target["status_history"])
+        self.assertEqual(target["status"], "FAILED_RESTORED")
+        self.assertEqual(woo.rows_by_endpoint["products/10"]["price"], "100.00")
+
+    def test_put_exception_get_failure_attempts_compensation(self):
+        row = proposal("p", "product", 10, snapshot={"woo_id": 10, "type": "simple", "price": 100})
+        woo = GetFailAfterPutExceptionWoo(
+            {
+                "products/10": {"id": 10, "price": "100.00", "regular_price": "100.00", "sale_price": ""},
+            },
+            lost_product_id=10,
+        )
+        session = Session([row])
+
+        with (
+            patch.object(woocommerce_publish, "acquire_system_lock"),
+            patch.object(woocommerce_publish, "release_system_lock"),
+            patch.object(woocommerce_publish, "sync_woocommerce_price_inventory_state", return_value={"ok": True}),
+        ):
+            result = woocommerce_publish.publish_price_proposal_group(
+                session,
+                proposal_ids=["p"],
+                settings=settings(),
+                client=woo,
+            )
+
+        audit = result["audit_counts"]
+        self.assertEqual(result["final_status"], "COMPLETED_WITH_ERRORS")
+        self.assertEqual(audit["failed_restored_count"], 1)
+        target = result["target_manifest"]["targets"][0]
+        self.assertIn("WRITE_RESPONSE_FAILED_GET_FAILED", target["status_history"])
+        self.assertEqual(target["status"], "FAILED_RESTORED")
+        self.assertEqual(woo.rows_by_endpoint["products/10"]["price"], "100.00")
+
+    def test_no_change_live_drift_is_not_reported_success(self):
+        row = proposal("p", "product", 10, old_price=110, new_price=110, snapshot={"woo_id": 10, "type": "simple", "price": 110})
+        target = {
+            "remote_key": "product:10",
+            "endpoint": "products/10",
+            "cloud_item": {},
+            "woo_id": 10,
+            "remote_kind": "product",
+            "canonical_key": "product:10",
+        }
+        preflight = {"blocking": False, "rows": [{
+            "proposal_id": "p",
+            "canonical_key": "product:10",
+            "target": target,
+            "woo_before": {"price": "110.00", "regular_price": "110.00", "sale_price": ""},
+            "woo_before_full": {"id": 10, "price": "110.00", "regular_price": "110.00", "sale_price": ""},
+            "woo_current_price": 110.0,
+            "new_price": 110.0,
+            "old_price_proposal": 110.0,
+            "status": "NO_CHANGE",
+            "pricing_payload": {},
+            "pricing_strategy": "no_change",
+            "proposal": row,
+        }]}
+        woo = StatefulWoo({
+            "products/10": {"id": 10, "price": "112.00", "regular_price": "112.00", "sale_price": ""},
+        })
+        session = Session([row])
+
+        with (
+            patch.object(woocommerce_publish, "preview_price_proposal_group_publish", return_value=preflight),
+            patch.object(woocommerce_publish, "acquire_system_lock"),
+            patch.object(woocommerce_publish, "release_system_lock"),
+            patch.object(woocommerce_publish, "sync_woocommerce_price_inventory_state", return_value={"ok": True}),
+        ):
+            result = woocommerce_publish.publish_price_proposal_group(
+                session,
+                proposal_ids=["p"],
+                settings=settings(),
+                client=woo,
+            )
+
+        audit = result["audit_counts"]
+        self.assertEqual(audit["target_count"], 1)
+        self.assertEqual(audit["verify_ok_count"], 0)
+        self.assertEqual(audit["verify_fail_count"], 1)
+        self.assertEqual(audit["failed_no_remote_change_count"], 1)
+        self.assertEqual(result["target_manifest"]["targets"][0]["status"], "FAILED_NO_REMOTE_CHANGE")
+        self.assertEqual(woo.writes, [])
+
+    def test_no_change_real_uses_live_get_and_zero_put(self):
+        row = proposal("p", "product", 10, old_price=110, new_price=110, snapshot={"woo_id": 10, "type": "simple", "price": 110})
+        woo = StatefulWoo({
+            "products/10": {"id": 10, "price": "110.00", "regular_price": "110.00", "sale_price": ""},
+        })
+
+        _session, result = self._publish_with_runtime_blackbox([row], woo, ["p"])
+
+        target = result["target_manifest"]["targets"][0]
+        self.assertEqual(result["final_status"], "SUCCESS_VERIFIED")
+        self.assertEqual(target["status"], "ALREADY_MATCHED_VERIFIED")
+        self.assertEqual(target["verify_attempts"], 1)
+        self.assertEqual(woo.writes, [])
 
     def test_variation_target_publishes_parent_variation_endpoint(self):
         row = proposal(
@@ -1628,6 +2661,236 @@ class PriceProposalPublicationGroupTests(unittest.TestCase):
 
         self.assertEqual(woo.writes, [("variation", 20, 201, {"regular_price": "504.00", "sale_price": ""})])
         self.assertEqual(result["line_results"][0]["result"], "APPLIED")
+
+    def test_placeholder_101_without_remote_target_is_skipped_individually(self):
+        row = placeholder_derived_proposal()
+        session = Session([row])
+        woo = StatefulWoo({})
+
+        preview = woocommerce_publish.preview_price_proposal_group_publish(
+            session,
+            proposal_ids=["placeholder-101"],
+            settings=settings(),
+            client=woo,
+        )
+
+        preview_row = preview["rows"][0]
+        self.assertFalse(preview["blocking"])
+        self.assertEqual(preview_row["status"], "SKIPPED_UNRESOLVED_REMOTE_TARGET")
+        self.assertEqual(preview_row["functional_status"], "SKIPPED_UNRESOLVED_REMOTE_TARGET")
+        self.assertEqual(preview["counts"]["valid"], 1)
+        self.assertEqual(preview["counts"]["woo_writes"], 0)
+        self.assertEqual(preview_row["placeholder_relation"]["relation_id"], "101")
+        self.assertEqual(woo.writes, [])
+
+    def test_placeholder_between_valid_targets_does_not_abort_group_publish(self):
+        valid_ids = list(range(101, 108)) + list(range(109, 121))
+        rows = [
+            proposal(
+                f"target-{woo_id}",
+                "product",
+                woo_id,
+                snapshot={"woo_id": woo_id, "type": "simple", "price": 100},
+            )
+            for woo_id in valid_ids
+        ]
+        rows.insert(7, placeholder_derived_proposal("placeholder-101"))
+        woo = StatefulWoo({
+            f"products/{woo_id}": woo_row(woo_id, 100, modified="T1")
+            for woo_id in valid_ids
+        })
+
+        _session, result = self._publish_with_runtime_blackbox(
+            rows,
+            woo,
+            [row["id"] for row in rows],
+        )
+
+        self.assertEqual(result["final_status"], "COMPLETED_WITH_SKIPS")
+        self.assertEqual(result["audit_counts"]["target_count"], 20)
+        self.assertEqual(result["audit_counts"]["processed_count"], 20)
+        self.assertEqual(result["audit_counts"]["skipped_unresolved_remote_target_count"], 1)
+        self.assertEqual(result["counts"]["woo_writes"], 19)
+        self.assertEqual(len(woo.writes), 19)
+        placeholder_line = next(line for line in result["line_results"] if line["proposal_id"] == "placeholder-101")
+        self.assertEqual(placeholder_line["result"], "SKIPPED_UNRESOLVED_REMOTE_TARGET")
+        self.assertFalse(placeholder_line["put_attempted"])
+
+    def test_placeholder_real_woo_target_publishes_despite_local_quarantine(self):
+        row = placeholder_derived_proposal(
+            "resolved-placeholder",
+            woo_id=4587,
+            parent_id=3658,
+            resolved=False,
+        )
+        woo = StatefulWoo({
+            "products/3658/variations/4587": woo_row(4587, 100, parent_id=3658, modified="T1"),
+        })
+
+        _session, result = self._publish_with_runtime_blackbox(
+            [row],
+            woo,
+            ["resolved-placeholder"],
+        )
+
+        self.assertEqual(result["final_status"], "SUCCESS_VERIFIED")
+        self.assertEqual(result["line_results"][0]["result"], "APPLIED")
+        self.assertEqual(
+            woo.writes,
+            [("variation", 3658, 4587, {"regular_price": "101.00", "sale_price": ""})],
+        )
+        target = result["target_manifest"]["targets"][0]
+        self.assertEqual(target["remote_key"], "variation:3658:4587")
+        self.assertNotEqual(target["status"], "SKIPPED_PLACEHOLDER_RELATION")
+
+    def test_placeholder_with_exact_sku_resolves_variation_target(self):
+        row = placeholder_derived_proposal(
+            "placeholder-sku-110",
+            woo_id=999999,
+            parent_id=3658,
+            old_price=250,
+            new_price=251,
+        )
+        source = row["source_row"]
+        source["item_snapshot"].pop("woo_parent_id", None)
+        source["item_snapshot"].pop("parent_woo_id", None)
+        source["woo_price_context_at_creation"] = derived_context(4587, 250, parent_id=3658, modified="T1")
+        source["future_pricing_payload"] = {"regular_price": "251.00", "sale_price": ""}
+        live = woo_row(
+            4587,
+            250,
+            parent_id=3658,
+            sku="0201001|0201001|1249001|1249001|0615011|0615011",
+            modified="T1",
+        )
+        woo = ExactSkuSearchWoo(
+            {"products/3658/variations/4587": live},
+            {live["sku"]: [live]},
+        )
+
+        _session, result = self._publish_with_runtime_blackbox([row], woo, ["placeholder-sku-110"])
+
+        self.assertEqual(result["final_status"], "SUCCESS_VERIFIED")
+        self.assertEqual(result["line_results"][0]["result"], "APPLIED")
+        self.assertEqual(woo.writes, [("variation", 3658, 4587, {"regular_price": "251.00", "sale_price": ""})])
+
+    def test_placeholder_out_of_stock_with_price_remains_eligible(self):
+        row = placeholder_derived_proposal("placeholder-outofstock", old_price=250, new_price=251)
+        live = woo_row(4587, 250, parent_id=3658, modified="T1")
+        live.update({"stock_status": "outofstock", "stock_quantity": 0})
+        woo = StatefulWoo({"products/3658/variations/4587": live})
+
+        _session, result = self._publish_with_runtime_blackbox([row], woo, ["placeholder-outofstock"])
+
+        self.assertEqual(result["final_status"], "SUCCESS_VERIFIED")
+        self.assertEqual(result["line_results"][0]["result"], "APPLIED")
+
+    def test_placeholder_purchasable_false_with_price_remains_eligible(self):
+        row = placeholder_derived_proposal("placeholder-purchasable-false", old_price=250, new_price=251)
+        live = woo_row(4587, 250, parent_id=3658, modified="T1")
+        live["purchasable"] = False
+        woo = StatefulWoo({"products/3658/variations/4587": live})
+
+        _session, result = self._publish_with_runtime_blackbox([row], woo, ["placeholder-purchasable-false"])
+
+        self.assertEqual(result["final_status"], "SUCCESS_VERIFIED")
+        self.assertEqual(result["line_results"][0]["result"], "APPLIED")
+
+    def test_placeholder_real_target_without_price_skips_no_base_price(self):
+        row = placeholder_derived_proposal("placeholder-no-price", old_price=250, new_price=251)
+        live = woo_row(4587, 250, parent_id=3658, modified="T1")
+        live.update({"price": "", "regular_price": "", "sale_price": ""})
+        woo = StatefulWoo({"products/3658/variations/4587": live})
+
+        _session, result = self._publish_with_runtime_blackbox([row], woo, ["placeholder-no-price"])
+
+        self.assertEqual(result["final_status"], "COMPLETED_WITH_SKIPS")
+        self.assertEqual(result["audit_counts"]["skipped_no_base_price_count"], 1)
+        self.assertEqual(result["line_results"][0]["result"], "SKIPPED_NO_BASE_PRICE")
+        self.assertEqual(woo.writes, [])
+
+    def test_placeholder_ambiguous_exact_sku_skips_unresolved_remote_target(self):
+        row = placeholder_derived_proposal(
+            "placeholder-ambiguous-sku",
+            woo_id=999999,
+            parent_id=3658,
+            old_price=250,
+            new_price=251,
+        )
+        source = row["source_row"]
+        source["item_snapshot"].pop("woo_parent_id", None)
+        source["item_snapshot"].pop("parent_woo_id", None)
+        sku = source["combination_sku"]
+        woo = ExactSkuSearchWoo(
+            {},
+            {
+                sku: [
+                    woo_row(4587, 250, parent_id=3658, sku=sku, modified="T1"),
+                    woo_row(4588, 250, parent_id=3658, sku=sku, modified="T1"),
+                ]
+            },
+        )
+
+        _session, result = self._publish_with_runtime_blackbox([row], woo, ["placeholder-ambiguous-sku"])
+
+        self.assertEqual(result["final_status"], "COMPLETED_WITH_SKIPS")
+        self.assertEqual(result["audit_counts"]["skipped_unresolved_remote_target_count"], 1)
+        self.assertEqual(result["line_results"][0]["result"], "SKIPPED_UNRESOLVED_REMOTE_TARGET")
+        self.assertEqual(woo.writes, [])
+
+    def test_tatami_80x200_placeholder_regression_processes_real_targets(self):
+        direct = proposal(
+            "tatami-0201001",
+            "product",
+            4548,
+            old_price=100,
+            new_price=102,
+            snapshot={"woo_id": 4548, "type": "simple", "price": 100, "woo_sku": "0201001"},
+        )
+        real_combo = derived_proposal(
+            "combo-3667",
+            "variation",
+            3667,
+            old_price=700,
+            new_price=704,
+            parent_id=3612,
+        )
+        placeholder = placeholder_derived_proposal("placeholder-4587", woo_id=4587, parent_id=3658)
+        woo = StatefulWoo({
+            "products/4548": woo_row(4548, 100, sku="0201001", modified="T1"),
+            "products/3612/variations/3667": woo_row(
+                3667,
+                700,
+                parent_id=3612,
+                sku="0302018|0201001|0201001",
+                modified="T1",
+            ),
+            "products/3658/variations/4587": woo_row(
+                4587,
+                100,
+                parent_id=3658,
+                sku="0201001|0201001|1249001|1249001|0615011|0615011",
+                modified="T1",
+            ),
+        })
+
+        _session, result = self._publish_with_runtime_blackbox(
+            [direct, real_combo, placeholder],
+            woo,
+            ["tatami-0201001", "combo-3667", "placeholder-4587"],
+        )
+
+        self.assertEqual(result["final_status"], "SUCCESS_VERIFIED")
+        self.assertEqual(result["audit_counts"]["processed_count"], 3)
+        self.assertEqual(result["audit_counts"]["applied_verified_count"], 3)
+        self.assertEqual(result["audit_counts"]["skipped_placeholder_relation_count"], 0)
+        self.assertEqual(result["audit_counts"]["skipped_unresolved_remote_target_count"], 0)
+        self.assertEqual([write[0] for write in woo.writes], ["product", "variation", "variation"])
+        placeholder_target = next(
+            target for target in result["target_manifest"]["targets"] if target["proposal_id"] == "placeholder-4587"
+        )
+        self.assertEqual(placeholder_target["status"], "APPLIED_VERIFIED")
+        self.assertTrue(placeholder_target["put_attempted"])
 
     def test_price_publish_preview_does_not_shadow_price_proposal_parameter(self):
         source = inspect.getsource(FutonHubErpPrototype._render_price_publish_preview)

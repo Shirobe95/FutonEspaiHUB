@@ -6,11 +6,24 @@ from typing import Any
 
 from futonhub.cloud.audit import AuditEvent, CloudAuditError, OperationSnapshot, new_operation_id, write_audit_event, write_snapshot
 from futonhub.cloud.locks import acquire_system_lock, release_system_lock
-from futonhub.cloud.services.inventory import sync_woocommerce_price_inventory_state
+from futonhub.cloud.services.inventory import (
+    resolve_inventory_item_id_for_woo_price_event,
+    sync_woocommerce_price_inventory_state,
+)
 from futonhub.cloud.services.price_proposals import fetch_cloud_item_for_price as _fetch_cloud_item_for_price
 from futonhub.cloud.services.prices import money_or_none as _money_or_none, price_safety_preview as _price_safety_preview, short_row_value as _short_row_value
 from gestorwoo.config import Settings, load_settings
 from gestorwoo.woocommerce import WooCommerceClient
+
+MAX_VERIFY_REPAIR_ATTEMPTS = 2
+SKIPPED_PLACEHOLDER_RELATION = "SKIPPED_PLACEHOLDER_RELATION"
+SKIPPED_UNRESOLVED_REMOTE_TARGET = "SKIPPED_UNRESOLVED_REMOTE_TARGET"
+_PLACEHOLDER_RELATION_MARKERS = (
+    "PENDING_BUSINESS_REVIEW_PLACEHOLDER",
+    "PENDING BUSINESS REVIEW PLACEHOLDER",
+    "PLACEHOLDER_RELATION",
+    "PLACEHOLDER_UNRESOLVED",
+)
 
 
 class PriceProposalRevalidationRequired(CloudAuditError):
@@ -281,9 +294,12 @@ def _proposal_literal_sku_candidates(proposal: dict[str, Any]) -> list[str]:
     source = proposal.get("source_row") if isinstance(proposal.get("source_row"), dict) else {}
     snapshot = _proposal_item_snapshot(proposal)
     values = (
+        source.get("combination_sku"),
+        source.get("combination_woo_sku"),
         source.get("physical_sku"),
         source.get("woo_sku"),
         source.get("ui_line_code"),
+        source.get("sku"),
         snapshot.get("physical_sku"),
         snapshot.get("hub_item_code"),
         snapshot.get("heca_reference"),
@@ -362,6 +378,143 @@ def _remote_target_diagnostic(
 def _proposal_entry_origin(proposal: dict[str, Any]) -> str:
     source = proposal.get("source_row") if isinstance(proposal.get("source_row"), dict) else {}
     return str(source.get("entry_origin") or "DIRECT_ITEM").strip().upper()
+
+
+def _has_yes_flag(value: Any) -> bool:
+    return str(value or "").strip().upper() in {"1", "TRUE", "YES", "SI", "Y"}
+
+
+def _contains_placeholder_relation_marker(value: Any) -> bool:
+    if isinstance(value, dict):
+        return any(_contains_placeholder_relation_marker(item) for item in value.values())
+    if isinstance(value, (list, tuple, set)):
+        return any(_contains_placeholder_relation_marker(item) for item in value)
+    text = str(value or "").strip().upper()
+    return bool(text) and any(marker in text for marker in _PLACEHOLDER_RELATION_MARKERS)
+
+
+def _source_row_has_resolved_placeholder_target(source: dict[str, Any]) -> bool:
+    return any(
+        _has_yes_flag(source.get(key))
+        for key in (
+            "placeholder_relation_resolved",
+            "resolved_placeholder_relation",
+            "resolved_to_real_woo_target",
+            "real_woo_target_resolved",
+        )
+    )
+
+
+def _source_row_has_placeholder_relation(source: dict[str, Any]) -> bool:
+    return _contains_placeholder_relation_marker(source)
+
+
+def _source_row_has_unresolved_placeholder_relation(source: dict[str, Any]) -> bool:
+    return (
+        _source_row_has_placeholder_relation(source)
+        and not _source_row_has_resolved_placeholder_target(source)
+    )
+
+
+def _placeholder_relation_metadata(source: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "relation_id": (
+            source.get("placeholder_relation_id")
+            or source.get("relation_id")
+            or source.get("quarantine_group_ids")
+            or source.get("quarantine_group_id")
+            or ""
+        ),
+        "reason": (
+            source.get("quarantine_reason")
+            or source.get("blocking_reason")
+            or source.get("exclusion_reason")
+            or "PENDING_BUSINESS_REVIEW_PLACEHOLDER"
+        ),
+        "sku": source.get("combination_sku") or source.get("ui_line_code") or "",
+        "components": (
+            source.get("component_skus_all")
+            or source.get("modified_components")
+            or source.get("relation_edges")
+            or []
+        ),
+    }
+
+
+def _target_from_live_woo_row(
+    proposal: dict[str, Any],
+    woo_data: dict[str, Any],
+    *,
+    cloud_item: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    source = proposal.get("source_row") if isinstance(proposal.get("source_row"), dict) else {}
+    live_woo_id = _positive_int_or_none(woo_data.get("id"))
+    if live_woo_id is None:
+        raise CloudAuditError("El target Woo resuelto no tiene id positivo.")
+    canonical_kind = str(
+        source.get("ui_canonical_item_kind")
+        or proposal.get("item_kind")
+        or _live_woo_remote_kind(woo_data)
+    ).strip().lower()
+    canonical_woo_id = _positive_int_or_none(
+        source.get("ui_canonical_woo_id")
+        or proposal.get("item_woo_id")
+        or proposal.get("local_id")
+        or live_woo_id
+    )
+    if canonical_woo_id is None:
+        canonical_woo_id = live_woo_id
+    canonical_key = f"{canonical_kind or _live_woo_remote_kind(woo_data)}:{canonical_woo_id}"
+    live_kind = _live_woo_remote_kind(woo_data)
+    payload = {
+        "canonical_key": canonical_key,
+        "canonical_kind": canonical_kind or live_kind,
+        "woo_id": live_woo_id,
+        "remote_kind": live_kind,
+        "cloud_item": cloud_item or {},
+    }
+    if live_kind == "variation":
+        parent_id = _positive_int_or_none(woo_data.get("parent_id"))
+        if parent_id is None:
+            raise CloudAuditError("La variation Woo resuelta no tiene parent_id positivo.")
+        payload.update({
+            "parent_woo_id": parent_id,
+            "remote_key": f"variation:{parent_id}:{live_woo_id}",
+            "endpoint": f"products/{parent_id}/variations/{live_woo_id}",
+        })
+    else:
+        payload.update({
+            "remote_key": f"product:{live_woo_id}",
+            "endpoint": f"products/{live_woo_id}",
+        })
+    return _validate_remote_target_shape(payload)
+
+
+def _resolve_placeholder_target_by_exact_sku(
+    client: WooCommerceClient,
+    proposal: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any], str]:
+    errors: list[str] = []
+    for sku in _proposal_literal_sku_candidates(proposal):
+        try:
+            response = client.get("products", params={"sku": sku, "per_page": 100, "status": "any"})
+            exact_rows = [
+                row for row in _response_rows(response)
+                if str(row.get("sku") or "").strip() == sku
+            ]
+        except Exception as exc:
+            errors.append(f"{sku}: {exc}")
+            continue
+        if len(exact_rows) > 1:
+            raise CloudAuditError(f"SKU literal {sku} devuelve multiples targets Woo exactos.")
+        if len(exact_rows) == 1:
+            woo_data = dict(exact_rows[0])
+            target = _target_from_live_woo_row(proposal, woo_data)
+            return target, woo_data, f"RESOLVED_FROM_PLACEHOLDER_SKU:{sku}"
+    detail = "; ".join(errors[:3])
+    if detail:
+        raise CloudAuditError("No se resolvio target Woo por SKU literal. " + detail)
+    raise CloudAuditError("No se resolvio target Woo por SKU literal.")
 
 
 def _is_revalidatable_publish_row(row: dict[str, Any]) -> bool:
@@ -641,6 +794,991 @@ def _write_remote_target(
         int(target["woo_id"]),
         payload,
     )
+
+
+def _publish_progress(progress, phase: str, index: int, total: int, key: str) -> None:
+    if not progress:
+        return
+    try:
+        progress(index, total, key, phase)
+    except TypeError:
+        progress(index, total, key)
+
+
+def _source_sku_for_publish_row(row: dict[str, Any]) -> str:
+    proposal = row.get("proposal") if isinstance(row.get("proposal"), dict) else {}
+    source = proposal.get("source_row") if isinstance(proposal.get("source_row"), dict) else {}
+    snapshot = source.get("item_snapshot") if isinstance(source.get("item_snapshot"), dict) else {}
+    for key in (
+        "physical_sku",
+        "woo_sku",
+        "ui_line_code",
+        "hub_item_code",
+        "heca_reference",
+    ):
+        value = source.get(key)
+        if str(value or "").strip():
+            return str(value).strip()
+    for key in ("sku", "woo_sku", "hub_item_code", "heca_reference"):
+        value = snapshot.get(key)
+        if str(value or "").strip():
+            return str(value).strip()
+    return str(row.get("code") or row.get("canonical_key") or "").strip()
+
+
+def _source_item_id_for_publish_row(row: dict[str, Any]) -> str:
+    proposal = row.get("proposal") if isinstance(row.get("proposal"), dict) else {}
+    source = proposal.get("source_row") if isinstance(proposal.get("source_row"), dict) else {}
+    snapshot = source.get("item_snapshot") if isinstance(source.get("item_snapshot"), dict) else {}
+    for key in ("physical_item_id", "item_id", "inventory_item_id"):
+        value = source.get(key)
+        if str(value or "").strip():
+            return str(value).strip()
+    for key in ("item_id", "physical_item_id", "inventory_item_id"):
+        value = snapshot.get(key)
+        if str(value or "").strip():
+            return str(value).strip()
+    return ""
+
+
+def _target_record_for_row(row: dict[str, Any], *, operation_id: str, target_index: int) -> dict[str, Any]:
+    target = dict(row.get("target") or {})
+    woo_type = str(target.get("remote_kind") or "").strip().lower()
+    expected_price = _format_price_value(row.get("new_price"))
+    expected_regular = None
+    payload = row.get("pricing_payload") if isinstance(row.get("pricing_payload"), dict) else {}
+    if "regular_price" in payload:
+        expected_regular = _format_price_value(payload.get("regular_price"))
+    elif woo_type == "product" or woo_type == "variation":
+        expected_regular = expected_price
+    return {
+        "operation_id": operation_id,
+        "target_index": target_index,
+        "proposal_id": row.get("proposal_id"),
+        "canonical_key": row.get("canonical_key"),
+        "source_item_id": _source_item_id_for_publish_row(row),
+        "source_sku": _source_sku_for_publish_row(row),
+        "woo_type": woo_type,
+        "woo_product_id": target.get("parent_woo_id") if woo_type == "variation" else target.get("woo_id"),
+        "woo_parent_id": target.get("parent_woo_id") if woo_type == "variation" else None,
+        "woo_variation_id": target.get("woo_id") if woo_type == "variation" else None,
+        "expected_regular_price": expected_regular,
+        "expected_price": expected_price,
+        "snapshot_before": _json_safe(row.get("woo_before_full") or row.get("woo_before") or {}),
+        "endpoint": target.get("endpoint"),
+        "remote_key": target.get("remote_key"),
+        "status": "WRITE_NOT_STARTED",
+        "status_history": ["WRITE_NOT_STARTED"],
+        "entry_origin": row.get("entry_origin"),
+        "skip_reason": row.get("reason") if str(row.get("status") or "").startswith("SKIPPED_") else "",
+        "placeholder_relation": _json_safe(row.get("placeholder_relation") or {}),
+        "write_attempts": 0,
+        "verify_attempts": 0,
+        "retry_count": 0,
+        "last_error": "",
+        "last_live_price": None,
+        "write_performed": False,
+        "put_attempted": False,
+        "put_response_ok": False,
+        "remote_write_confirmed_by_get": False,
+        "write_outcome": "NOT_STARTED",
+        "may_have_written": False,
+        "already_matched": row.get("status") == "NO_CHANGE",
+    }
+
+
+def _build_target_manifest(operation_id: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
+    targets = [
+        _target_record_for_row(row, operation_id=operation_id, target_index=index)
+        for index, row in enumerate(rows, start=1)
+    ]
+    return {
+        "operation_id": operation_id,
+        "target_count": len(targets),
+        "targets": targets,
+    }
+
+
+def _manifest_record_by_proposal_id(manifest: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    return {
+        str(target.get("proposal_id")): target
+        for target in manifest.get("targets") or []
+        if str(target.get("proposal_id") or "").strip()
+    }
+
+
+def _set_target_status(record: dict[str, Any] | None, status: str, **updates: Any) -> None:
+    if record is None:
+        return
+    record["status"] = status
+    history = record.setdefault("status_history", [])
+    if not history or history[-1] != status:
+        history.append(status)
+    for key, value in updates.items():
+        record[key] = _json_safe(value)
+
+
+PUBLISH_TERMINAL_STATUSES = {
+    "APPLIED_VERIFIED",
+    "ALREADY_MATCHED_VERIFIED",
+    "SKIPPED_NO_BASE_PRICE",
+    SKIPPED_PLACEHOLDER_RELATION,
+    SKIPPED_UNRESOLVED_REMOTE_TARGET,
+    "FAILED_RESTORED",
+    "FAILED_NO_REMOTE_CHANGE",
+    "FAILED_ROLLBACK_INCOMPLETE",
+    "BLOCKED_IDENTITY",
+}
+
+PUBLISH_SUCCESS_STATUSES = {"APPLIED_VERIFIED", "ALREADY_MATCHED_VERIFIED"}
+PUBLISH_FAILURE_STATUSES = {
+    "FAILED_RESTORED",
+    "FAILED_NO_REMOTE_CHANGE",
+    "FAILED_ROLLBACK_INCOMPLETE",
+    "BLOCKED_IDENTITY",
+}
+PUBLISH_PREVIEW_PASS_STATUSES = {
+    "VALIDO",
+    "WARNING",
+    "READY",
+    "NO_CHANGE",
+    "SKIPPED_NO_BASE_PRICE",
+    SKIPPED_PLACEHOLDER_RELATION,
+    SKIPPED_UNRESOLVED_REMOTE_TARGET,
+}
+
+
+def _target_terminal_status(target: dict[str, Any] | None) -> str:
+    status = str((target or {}).get("status") or "")
+    return status if status in PUBLISH_TERMINAL_STATUSES else ""
+
+
+def _publish_final_status_from_counts(counts: dict[str, Any]) -> str:
+    if int(counts.get("failed_rollback_incomplete_count") or 0):
+        return "CRITICAL_PARTIAL_STATE"
+    if (
+        int(counts.get("failed_restored_count") or 0)
+        or int(counts.get("failed_no_remote_change_count") or 0)
+        or int(counts.get("blocked_identity_count") or 0)
+    ):
+        return "COMPLETED_WITH_ERRORS"
+    if (
+        int(counts.get("skipped_no_base_price_count") or 0)
+        or int(counts.get("skipped_placeholder_relation_count") or 0)
+        or int(counts.get("skipped_unresolved_remote_target_count") or 0)
+    ):
+        return "COMPLETED_WITH_SKIPS"
+    return "SUCCESS_VERIFIED"
+
+
+def _sync_verified_price_inventory_state(
+    session,
+    *,
+    operation_id: str,
+    row: dict[str, Any],
+    target: dict[str, Any],
+    before_price: Any,
+    verified_price: Any,
+    action: str,
+    message: str,
+    metadata: dict[str, Any] | None = None,
+    target_record: dict[str, Any] | None = None,
+    allow_missing_direct_resolution_after_rollback: bool = False,
+) -> dict[str, Any]:
+    proposal = row.get("proposal") if isinstance(row.get("proposal"), dict) else {}
+    cloud_item = target.get("cloud_item") if isinstance(target.get("cloud_item"), dict) else {}
+    entry_origin = _proposal_entry_origin(proposal)
+    base_metadata = {
+        **(metadata or {}),
+        "entry_origin": entry_origin,
+        "canonical_key": row.get("canonical_key"),
+        "remote_key": target.get("remote_key"),
+        "woo_id": target.get("woo_id"),
+        "parent_woo_id": target.get("parent_woo_id"),
+        "verified_price": _format_price_value(verified_price),
+    }
+
+    if entry_origin == "DERIVED_COMBINATION" or allow_missing_direct_resolution_after_rollback:
+        resolution = resolve_inventory_item_id_for_woo_price_event(
+            session,
+            proposal=proposal,
+            cloud_item=cloud_item,
+            woo_id=target.get("woo_id"),
+        )
+        item_id = _positive_int_or_none(resolution.get("item_id"))
+        if item_id is None:
+            if entry_origin == "DERIVED_COMBINATION":
+                result = {
+                    "ok": True,
+                    "skipped": True,
+                    "inventory_sync_status": "NOT_APPLICABLE_DERIVED_COMBINATION",
+                    "entry_origin": entry_origin,
+                    "canonical_key": row.get("canonical_key"),
+                    "remote_key": target.get("remote_key"),
+                    "woo_id": target.get("woo_id"),
+                    "parent_woo_id": target.get("parent_woo_id"),
+                    "verified_price": _format_price_value(verified_price),
+                    "resolution": _json_safe(resolution),
+                    "reason": "derived_combination_has_no_inventory_item",
+                    "metadata": _json_safe(base_metadata),
+                }
+                if target_record is not None:
+                    target_record["inventory_sync_status"] = result["inventory_sync_status"]
+                    target_record["inventory_sync"] = _json_safe(result)
+                return result
+            result = {
+                "ok": True,
+                "skipped": True,
+                "inventory_sync_status": "SKIPPED_DIRECT_ITEM_NO_INVENTORY_ROW_AFTER_ROLLBACK",
+                "entry_origin": entry_origin,
+                "canonical_key": row.get("canonical_key"),
+                "remote_key": target.get("remote_key"),
+                "woo_id": target.get("woo_id"),
+                "parent_woo_id": target.get("parent_woo_id"),
+                "verified_price": _format_price_value(verified_price),
+                "resolution": _json_safe(resolution),
+                "reason": "direct_item_publish_failed_before_inventory_sync_and_woo_was_restored",
+                "metadata": _json_safe(base_metadata),
+            }
+            if target_record is not None:
+                target_record["rollback_inventory_sync_status"] = result["inventory_sync_status"]
+                target_record["rollback_inventory_sync"] = _json_safe(result)
+            return result
+
+    try:
+        result = sync_woocommerce_price_inventory_state(
+            session,
+            operation_id=operation_id,
+            proposal=proposal,
+            cloud_item=cloud_item,
+            woo_id=target.get("woo_id"),
+            before_price=before_price,
+            verified_price=verified_price,
+            action=action,
+            message=message,
+            metadata=base_metadata,
+        )
+    except Exception as exc:
+        if target_record is not None:
+            target_record["inventory_sync_status"] = f"FAILED_{entry_origin}"
+            target_record["inventory_sync_error"] = str(exc)
+        raise
+
+    status = (
+        "SYNCED_DERIVED_COMBINATION_INVENTORY_ROW"
+        if entry_origin == "DERIVED_COMBINATION"
+        else "SYNCED_DIRECT_ITEM"
+    )
+    result = {**(result or {}), "inventory_sync_status": status, "entry_origin": entry_origin}
+    if target_record is not None:
+        target_record["inventory_sync_status"] = status
+        target_record["inventory_sync"] = _json_safe(result)
+    return result
+
+
+def _verify_remote_pricing(
+    woo: WooCommerceClient,
+    row: dict[str, Any],
+    payload: dict[str, Any],
+    *,
+    record: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], float]:
+    target = row["target"]
+    if record is not None:
+        record["verify_attempts"] = int(record.get("verify_attempts") or 0) + 1
+    verified = _fetch_remote_target(woo, target)
+    verified_price = _effective_woo_price(verified)
+    if record is not None:
+        record["last_live_price"] = _format_price_value(verified_price)
+    if verified_price is None or abs(verified_price - float(row["new_price"])) > 0.009:
+        raise CloudAuditError(
+            f"{row['canonical_key']} no confirmo el precio {float(row['new_price']):.2f}; "
+            f"Woo live devolvio {verified_price!r}."
+        )
+    if not _pricing_payload_matches(payload, verified):
+        raise CloudAuditError(
+            f"{row['canonical_key']} no confirmo el payload de precio exacto enviado."
+        )
+    return verified, verified_price
+
+
+def _remote_matches_expected_pricing(
+    row: dict[str, Any],
+    payload: dict[str, Any],
+    remote: dict[str, Any] | None,
+    expected_price: Any,
+) -> bool:
+    expected = _safe_money(expected_price)
+    remote_price = _effective_woo_price(remote)
+    return (
+        expected is not None
+        and remote_price is not None
+        and abs(remote_price - expected) <= 0.009
+        and _pricing_payload_matches(payload, remote)
+    )
+
+
+def _before_payload_for_row(row: dict[str, Any]) -> dict[str, Any]:
+    return _pricing_restore_payload(row.get("woo_before") or row.get("woo_before_full") or {})
+
+
+def _verify_already_matched_pricing(
+    woo: WooCommerceClient,
+    row: dict[str, Any],
+    *,
+    record: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], float]:
+    target = row["target"]
+    if record is not None:
+        record["verify_attempts"] = int(record.get("verify_attempts") or 0) + 1
+    verified = _fetch_remote_target(woo, target)
+    verified_price = _effective_woo_price(verified)
+    if record is not None:
+        record["last_live_price"] = _format_price_value(verified_price)
+    if verified_price is None or abs(verified_price - float(row["new_price"])) > 0.009:
+        raise CloudAuditError(
+            f"{row['canonical_key']} ya no coincide con el precio previsto "
+            f"{float(row['new_price']):.2f}; Woo live devolvio {verified_price!r}."
+        )
+    expected_context = _before_payload_for_row(row)
+    if expected_context and not _pricing_payload_matches(expected_context, verified):
+        raise CloudAuditError(
+            f"{row['canonical_key']} cambio su contexto Woo desde el preview NO_CHANGE."
+        )
+    return verified, verified_price
+
+
+def _verify_with_repair_attempts(
+    woo: WooCommerceClient,
+    row: dict[str, Any],
+    payload: dict[str, Any],
+    *,
+    record: dict[str, Any] | None,
+    progress=None,
+    index: int,
+    total: int,
+) -> tuple[dict[str, Any], float, int, bool]:
+    last_error: Exception | None = None
+    repair_write_performed = False
+    for attempt in range(1, MAX_VERIFY_REPAIR_ATTEMPTS + 1):
+        if record is not None:
+            record["retry_count"] = int(record.get("retry_count") or 0) + 1
+        _publish_progress(progress, f"Reintentando verificacion Woo ({attempt}/{MAX_VERIFY_REPAIR_ATTEMPTS})", index, total, row["canonical_key"])
+        try:
+            verified, verified_price = _verify_remote_pricing(woo, row, payload, record=record)
+            return verified, verified_price, attempt, repair_write_performed
+        except Exception as get_exc:
+            last_error = get_exc
+        try:
+            repair_write_performed = True
+            _write_remote_target(woo, row["target"], payload)
+            if record is not None:
+                record["write_attempts"] = int(record.get("write_attempts") or 0) + 1
+                record["may_have_written"] = True
+        except Exception as retry_write_exc:
+            last_error = retry_write_exc
+            continue
+        try:
+            verified, verified_price = _verify_remote_pricing(woo, row, payload, record=record)
+            return verified, verified_price, attempt, repair_write_performed
+        except Exception as verify_exc:
+            last_error = verify_exc
+    raise CloudAuditError(str(last_error or "WooCommerce no confirmo el precio tras reintentos."))
+
+
+def _target_manifest_counts(
+    manifest: dict[str, Any],
+    *,
+    final_status: str,
+    rollback: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    targets = list(manifest.get("targets") or [])
+    status_counts: dict[str, int] = {}
+    for target in targets:
+        status = str(target.get("status") or "UNKNOWN")
+        status_counts[status] = status_counts.get(status, 0) + 1
+    rollback_rows = list(rollback or [])
+    skipped_no_base = status_counts.get("SKIPPED_NO_BASE_PRICE", 0)
+    skipped_placeholder = status_counts.get(SKIPPED_PLACEHOLDER_RELATION, 0)
+    skipped_unresolved = status_counts.get(SKIPPED_UNRESOLVED_REMOTE_TARGET, 0)
+    blocked_identity = status_counts.get("BLOCKED_IDENTITY", 0)
+    applied_verified = status_counts.get("APPLIED_VERIFIED", 0)
+    already_matched = status_counts.get("ALREADY_MATCHED_VERIFIED", 0)
+    failed_restored = status_counts.get("FAILED_RESTORED", 0)
+    failed_no_remote = status_counts.get("FAILED_NO_REMOTE_CHANGE", 0)
+    failed_incomplete = status_counts.get("FAILED_ROLLBACK_INCOMPLETE", 0)
+    processed = sum(
+        count
+        for status, count in status_counts.items()
+        if status in PUBLISH_TERMINAL_STATUSES
+    )
+    return {
+        "target_count": len(targets),
+        "eligible_count": len(targets) - skipped_no_base - skipped_placeholder - skipped_unresolved - blocked_identity,
+        "processed_count": processed,
+        "applied_verified_count": applied_verified,
+        "already_matched_count": already_matched,
+        "skipped_no_base_price_count": skipped_no_base,
+        "skipped_placeholder_relation_count": skipped_placeholder,
+        "skipped_unresolved_remote_target_count": skipped_unresolved,
+        "failed_restored_count": failed_restored,
+        "failed_no_remote_change_count": failed_no_remote,
+        "failed_rollback_incomplete_count": failed_incomplete,
+        "blocked_identity_count": blocked_identity,
+        "write_ok_count": sum("WRITE_HTTP_OK" in (target.get("status_history") or []) for target in targets),
+        "verify_ok_count": sum("VERIFY_OK" in (target.get("status_history") or []) for target in targets),
+        "verify_fail_count": sum("VERIFY_FAILED" in (target.get("status_history") or []) for target in targets),
+        "retry_count": sum(int(target.get("retry_count") or 0) for target in targets),
+        "rollback_count": len([row for row in rollback_rows if row.get("write_performed", True)]),
+        "rollback_verified_count": len([row for row in rollback_rows if row.get("restored") is True and row.get("write_performed", True)]),
+        "changed_count": sum(
+            target.get("status") == "APPLIED_VERIFIED"
+            and bool(target.get("write_performed"))
+            for target in targets
+        ),
+        "status_counts": status_counts,
+        "final_status": final_status,
+    }
+
+
+def _rollback_single_failed_publish_target(
+    session,
+    woo: WooCommerceClient,
+    *,
+    operation_id: str,
+    row: dict[str, Any],
+    rollback_row: dict[str, Any],
+    target_record: dict[str, Any] | None,
+    progress=None,
+    index: int,
+    total: int,
+    failure: Exception,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Resolve one failed target without touching any previous successful target."""
+    target = row["target"]
+    before_payload = _pricing_restore_payload(row.get("woo_before") or row.get("woo_before_full") or {})
+    result: dict[str, Any] = {
+        **row,
+        "pricing_payload": rollback_row.get("pricing_payload") or row.get("pricing_payload") or {},
+        "pricing_strategy": rollback_row.get("pricing_strategy") or row.get("pricing_strategy") or "",
+        "write_performed": False,
+        "put_attempted": bool(rollback_row.get("put_attempted")),
+        "put_ok": bool(rollback_row.get("put_ok")),
+        "put_response_ok": bool(rollback_row.get("put_response_ok")),
+        "remote_write_confirmed_by_get": bool(rollback_row.get("remote_write_confirmed_by_get")),
+        "may_have_written": bool(rollback_row.get("may_have_written")),
+        "verify_ok": False,
+        "terminal_status": "FAILED_NO_REMOTE_CHANGE",
+        "failure": str(failure),
+        "rollback": {"canonical_key": row.get("canonical_key"), "restored": True, "write_performed": False},
+    }
+
+    if not rollback_row.get("put_attempted"):
+        _set_target_status(
+            target_record,
+            "FAILED_NO_REMOTE_CHANGE",
+            last_error=str(failure),
+            write_performed=False,
+            put_attempted=False,
+            may_have_written=False,
+            write_outcome="NO_REMOTE_CHANGE_NO_PUT_ATTEMPTED",
+        )
+        return result, result["rollback"]
+
+    try:
+        current = _fetch_remote_target(woo, target)
+        current_price = _effective_woo_price(current)
+        if _remote_matches_expected_pricing(row, before_payload, current, row.get("woo_current_price")):
+            _set_target_status(
+                target_record,
+                "FAILED_NO_REMOTE_CHANGE",
+                last_error=str(failure),
+                write_performed=False,
+                put_attempted=bool(rollback_row.get("put_attempted")),
+                may_have_written=bool(rollback_row.get("may_have_written")),
+                write_outcome="NO_REMOTE_CHANGE_CONFIRMED",
+                last_live_price=_format_price_value(current_price),
+                woo_after_failure=current,
+            )
+            result["woo_after_failure"] = current
+            return result, result["rollback"]
+    except Exception as inspect_exc:
+        result["rollback_inspection_error"] = str(inspect_exc)
+
+    try:
+        _publish_progress(
+            progress,
+            "Restaurando target fallido",
+            index,
+            total,
+            row["canonical_key"],
+        )
+        _write_remote_target(woo, target, before_payload)
+        restored = _fetch_remote_target(woo, target)
+        restored_price = _effective_woo_price(restored)
+        expected = row["woo_current_price"]
+        if expected is None or restored_price is None or abs(restored_price - expected) > 0.009:
+            raise CloudAuditError(
+                f"verificacion devolvio {restored_price!r}; esperado {expected!r}"
+            )
+        if not _pricing_payload_matches(before_payload, restored):
+            raise CloudAuditError("el rollback no confirmo el payload Woo anterior exacto")
+        rollback_inventory_sync = _sync_verified_price_inventory_state(
+            session,
+            operation_id=operation_id,
+            row=row,
+            target=target,
+            before_price=_format_price_value(row.get("new_price")),
+            verified_price=_format_price_value(restored_price),
+            action="admin_publish_price_proposal_group_target_rollback",
+            message="Rollback aislado de target fallido verificado.",
+            metadata={"rollback": True, "target_failure": str(failure)},
+            target_record=target_record,
+            allow_missing_direct_resolution_after_rollback=True,
+        )
+        _set_target_status(
+            target_record,
+            "FAILED_RESTORED",
+            last_error=str(failure),
+            write_performed=True,
+            may_have_written=True,
+            rollback_verified=True,
+            rollback_inventory_sync=rollback_inventory_sync,
+            woo_after_rollback=restored,
+        )
+        rollback = {"canonical_key": row["canonical_key"], "restored": True, "write_performed": True}
+        result.update({
+            "write_performed": True,
+            "may_have_written": True,
+            "terminal_status": "FAILED_RESTORED",
+            "woo_after_rollback": restored,
+            "rollback_inventory_sync": rollback_inventory_sync,
+            "rollback": rollback,
+        })
+        return result, rollback
+    except Exception as rollback_exc:
+        _set_target_status(
+            target_record,
+            "FAILED_ROLLBACK_INCOMPLETE",
+            last_error=str(failure),
+            rollback_error=str(rollback_exc),
+            write_performed=True,
+            may_have_written=True,
+        )
+        rollback = {
+            "canonical_key": row["canonical_key"],
+            "restored": False,
+            "write_performed": True,
+            "error": str(rollback_exc),
+        }
+        result.update({
+            "write_performed": True,
+            "may_have_written": True,
+            "terminal_status": "FAILED_ROLLBACK_INCOMPLETE",
+            "rollback_error": str(rollback_exc),
+            "rollback": rollback,
+        })
+        return result, rollback
+
+
+def _publish_price_targets_partial(
+    session,
+    woo: WooCommerceClient,
+    *,
+    operation_id: str,
+    preflight_rows: list[dict[str, Any]],
+    target_records_by_proposal_id: dict[str, dict[str, Any]],
+    progress=None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    processed: list[dict[str, Any]] = []
+    published: list[dict[str, Any]] = []
+    rollback_candidates: list[dict[str, Any]] = []
+    rollback: list[dict[str, Any]] = []
+    total = len(preflight_rows)
+    for index, row in enumerate(preflight_rows, start=1):
+        _publish_progress(progress, "Publicando precios en WooCommerce", index, total, row["canonical_key"])
+        target = row["target"]
+        target_record = target_records_by_proposal_id.get(str(row.get("proposal_id")))
+        payload = dict(row.get("pricing_payload") or {})
+        strategy = str(row.get("pricing_strategy") or "")
+        if row.get("status") == "SKIPPED_NO_BASE_PRICE":
+            _set_target_status(
+                target_record,
+                "SKIPPED_NO_BASE_PRICE",
+                write_performed=False,
+                put_attempted=False,
+                put_response_ok=False,
+                remote_write_confirmed_by_get=False,
+                write_outcome="SKIPPED_NO_BASE_PRICE",
+            )
+            skipped_row = {
+                **row,
+                "pricing_payload": {},
+                "pricing_strategy": "skipped_no_base_price",
+                "woo_after": row.get("woo_before_full") or row.get("woo_before") or {},
+                "inventory_sync": None,
+                "write_performed": False,
+                "put_attempted": False,
+                "put_ok": False,
+                "put_response_ok": False,
+                "remote_write_confirmed_by_get": False,
+                "verify_ok": False,
+                "terminal_status": "SKIPPED_NO_BASE_PRICE",
+            }
+            processed.append(skipped_row)
+            continue
+        if row.get("status") in {SKIPPED_PLACEHOLDER_RELATION, SKIPPED_UNRESOLVED_REMOTE_TARGET}:
+            skip_status = row.get("status")
+            _set_target_status(
+                target_record,
+                skip_status,
+                write_performed=False,
+                put_attempted=False,
+                put_response_ok=False,
+                remote_write_confirmed_by_get=False,
+                write_outcome=skip_status,
+                placeholder_relation=_json_safe(row.get("placeholder_relation") or {}),
+            )
+            skipped_row = {
+                **row,
+                "pricing_payload": {},
+                "pricing_strategy": row.get("pricing_strategy") or "skipped_unresolved_remote_target",
+                "woo_after": {},
+                "inventory_sync": None,
+                "write_performed": False,
+                "put_attempted": False,
+                "put_ok": False,
+                "put_response_ok": False,
+                "remote_write_confirmed_by_get": False,
+                "verify_ok": False,
+                "terminal_status": skip_status,
+            }
+            processed.append(skipped_row)
+            continue
+        if not payload and row.get("status") != "NO_CHANGE":
+            payload, strategy = _pricing_payload_for_effective_price(
+                row.get("woo_before_full") or {},
+                float(row["new_price"]),
+            )
+        if row.get("status") == "NO_CHANGE":
+            try:
+                _publish_progress(progress, "Verificando WooCommerce", index, total, row["canonical_key"])
+                verified, _verified_price = _verify_already_matched_pricing(woo, row, record=target_record)
+                _set_target_status(target_record, "VERIFY_OK", woo_after=verified, verified_without_write=True)
+                _set_target_status(
+                    target_record,
+                    "ALREADY_MATCHED_VERIFIED",
+                    write_performed=False,
+                    put_attempted=False,
+                    put_response_ok=False,
+                    remote_write_confirmed_by_get=False,
+                    write_outcome="ALREADY_MATCHED_VERIFIED",
+                    woo_after=verified,
+                )
+                result_row = {
+                    **row,
+                    "pricing_payload": {},
+                    "pricing_strategy": "no_change",
+                    "woo_after": verified,
+                    "inventory_sync": None,
+                    "write_performed": False,
+                    "put_attempted": False,
+                    "put_ok": False,
+                    "put_response_ok": False,
+                    "remote_write_confirmed_by_get": False,
+                    "verify_ok": True,
+                    "terminal_status": "ALREADY_MATCHED_VERIFIED",
+                }
+                published.append(result_row)
+                processed.append(result_row)
+            except Exception as verify_exc:
+                _set_target_status(target_record, "VERIFY_FAILED", last_error=str(verify_exc))
+                failed_row, rollback_row = _rollback_single_failed_publish_target(
+                    session,
+                    woo,
+                    operation_id=operation_id,
+                    row=row,
+                    rollback_row={
+                        **row,
+                        "pricing_payload": {},
+                        "pricing_strategy": "no_change",
+                        "write_performed": False,
+                        "put_attempted": False,
+                        "put_ok": False,
+                        "put_response_ok": False,
+                        "remote_write_confirmed_by_get": False,
+                        "may_have_written": False,
+                    },
+                    target_record=target_record,
+                    progress=progress,
+                    index=index,
+                    total=total,
+                    failure=verify_exc,
+                )
+                processed.append(failed_row)
+                rollback.append(rollback_row)
+            continue
+
+        rollback_row = {
+            **row,
+            "pricing_payload": payload,
+            "pricing_strategy": strategy,
+            "write_performed": False,
+            "put_attempted": True,
+            "put_ok": False,
+            "put_response_ok": False,
+            "remote_write_confirmed_by_get": False,
+            "may_have_written": True,
+            "write_outcome": "UNKNOWN",
+        }
+        rollback_candidates.append(rollback_row)
+        verified: dict[str, Any] | None = None
+        verified_price: float | None = None
+        target_failure: Exception | None = None
+        try:
+            _set_target_status(
+                target_record,
+                "WRITE_REQUESTED",
+                put_attempted=True,
+                put_response_ok=False,
+                may_have_written=True,
+                write_outcome="UNKNOWN",
+            )
+            if target_record is not None:
+                target_record["write_attempts"] = int(target_record.get("write_attempts") or 0) + 1
+            _write_remote_target(woo, target, payload)
+            rollback_row.update({
+                "write_performed": True,
+                "put_ok": True,
+                "put_response_ok": True,
+                "write_outcome": "WRITE_HTTP_OK",
+            })
+            _set_target_status(
+                target_record,
+                "WRITE_HTTP_OK",
+                write_performed=True,
+                put_response_ok=True,
+                write_outcome="WRITE_HTTP_OK",
+            )
+        except Exception as write_exc:
+            _set_target_status(
+                target_record,
+                "WRITE_HTTP_FAILED",
+                last_error=str(write_exc),
+                put_attempted=True,
+                put_response_ok=False,
+                may_have_written=True,
+                write_outcome="UNKNOWN",
+            )
+            _publish_progress(progress, "Verificando resultado ambiguo WooCommerce", index, total, row["canonical_key"])
+            try:
+                ambiguous_live = _fetch_remote_target(woo, target)
+                ambiguous_price = _effective_woo_price(ambiguous_live)
+                if target_record is not None:
+                    target_record["verify_attempts"] = int(target_record.get("verify_attempts") or 0) + 1
+                    target_record["last_live_price"] = _format_price_value(ambiguous_price)
+                if _remote_matches_expected_pricing(row, payload, ambiguous_live, row["new_price"]):
+                    rollback_row.update({
+                        "write_performed": True,
+                        "put_ok": False,
+                        "put_response_ok": False,
+                        "remote_write_confirmed_by_get": True,
+                        "write_outcome": "WRITE_RESPONSE_FAILED_REMOTE_CONFIRMED",
+                        "woo_after": ambiguous_live,
+                    })
+                    _set_target_status(
+                        target_record,
+                        "WRITE_RESPONSE_FAILED_REMOTE_CONFIRMED",
+                        write_performed=True,
+                        remote_write_confirmed_by_get=True,
+                        put_response_ok=False,
+                        write_outcome="WRITE_RESPONSE_FAILED_REMOTE_CONFIRMED",
+                        woo_after=ambiguous_live,
+                    )
+                    verified = ambiguous_live
+                    verified_price = float(ambiguous_price)
+                elif _remote_matches_expected_pricing(
+                    row,
+                    _before_payload_for_row(row),
+                    ambiguous_live,
+                    row.get("woo_current_price"),
+                ):
+                    rollback_row.update({
+                        "write_performed": True,
+                        "write_outcome": "RETRY_OUTCOME_UNKNOWN",
+                        "may_have_written": True,
+                        "operation_may_have_written": True,
+                    })
+                    _set_target_status(
+                        target_record,
+                        "WRITE_RESPONSE_FAILED_REMOTE_OLD",
+                        write_performed=True,
+                        may_have_written=True,
+                        operation_may_have_written=True,
+                        write_outcome="WRITE_RESPONSE_FAILED_REMOTE_OLD",
+                        woo_after=ambiguous_live,
+                    )
+                    verified, verified_price, _repair_attempts, repair_write_performed = _verify_with_repair_attempts(
+                        woo,
+                        row,
+                        payload,
+                        record=target_record,
+                        progress=progress,
+                        index=index,
+                        total=total,
+                    )
+                    if repair_write_performed:
+                        rollback_row.update({
+                            "write_performed": True,
+                            "put_ok": True,
+                            "put_response_ok": True,
+                            "repair_write_performed": True,
+                            "write_outcome": "RETRY_APPLIED_VERIFIED",
+                            "woo_after": verified,
+                        })
+                    else:
+                        rollback_row.update({
+                            "write_performed": True,
+                            "put_ok": False,
+                            "put_response_ok": False,
+                            "repair_write_performed": False,
+                            "remote_write_confirmed_by_get": True,
+                            "may_have_written": True,
+                            "operation_may_have_written": True,
+                            "write_outcome": "AMBIGUOUS_WRITE_EVENTUALLY_CONFIRMED",
+                            "woo_after": verified,
+                        })
+                        _set_target_status(
+                            target_record,
+                            "AMBIGUOUS_WRITE_EVENTUALLY_CONFIRMED",
+                            write_performed=True,
+                            remote_write_confirmed_by_get=True,
+                            may_have_written=True,
+                            operation_may_have_written=True,
+                            put_response_ok=False,
+                            repair_write_performed=False,
+                            write_outcome="AMBIGUOUS_WRITE_EVENTUALLY_CONFIRMED",
+                            woo_after=verified,
+                        )
+                else:
+                    rollback_row.update({
+                        "write_performed": True,
+                        "write_outcome": "WRITE_RESPONSE_FAILED_REMOTE_UNKNOWN",
+                        "woo_after_ambiguous": ambiguous_live,
+                    })
+                    _set_target_status(
+                        target_record,
+                        "WRITE_RESPONSE_FAILED_REMOTE_UNKNOWN",
+                        write_performed=True,
+                        may_have_written=True,
+                        write_outcome="WRITE_RESPONSE_FAILED_REMOTE_UNKNOWN",
+                        woo_after_ambiguous=ambiguous_live,
+                    )
+                    raise CloudAuditError(
+                        f"{row['canonical_key']} quedo en estado Woo indeterminado tras PUT ambiguo."
+                    ) from write_exc
+            except Exception as ambiguous_exc:
+                history = list((target_record or {}).get("status_history") or [])
+                if "WRITE_RESPONSE_FAILED_REMOTE_UNKNOWN" not in history:
+                    rollback_row.update({
+                        "write_performed": True,
+                        "write_outcome": "WRITE_RESPONSE_FAILED_GET_FAILED",
+                    })
+                    _set_target_status(
+                        target_record,
+                        "WRITE_RESPONSE_FAILED_GET_FAILED",
+                        write_performed=True,
+                        may_have_written=True,
+                        write_outcome="WRITE_RESPONSE_FAILED_GET_FAILED",
+                        last_error=str(ambiguous_exc),
+                    )
+                target_failure = ambiguous_exc
+        if target_failure is None:
+            try:
+                _publish_progress(progress, "Verificando WooCommerce", index, total, row["canonical_key"])
+                if verified is None:
+                    try:
+                        verified, verified_price = _verify_remote_pricing(woo, row, payload, record=target_record)
+                    except Exception as verify_exc:
+                        _set_target_status(target_record, "VERIFY_FAILED", last_error=str(verify_exc))
+                        verified, verified_price, _repair_attempts, repair_write_performed = _verify_with_repair_attempts(
+                            woo,
+                            row,
+                            payload,
+                            record=target_record,
+                            progress=progress,
+                            index=index,
+                            total=total,
+                        )
+                        if repair_write_performed:
+                            rollback_row.update({
+                                "write_performed": True,
+                                "may_have_written": True,
+                                "write_outcome": "RETRY_APPLIED_VERIFIED",
+                            })
+                _set_target_status(target_record, "VERIFY_OK", woo_after=verified)
+                _set_target_status(
+                    target_record,
+                    "APPLIED_VERIFIED",
+                    write_performed=bool(rollback_row.get("write_performed")),
+                    put_attempted=True,
+                    put_response_ok=bool(rollback_row.get("put_response_ok")),
+                    remote_write_confirmed_by_get=bool(rollback_row.get("remote_write_confirmed_by_get")),
+                    write_outcome=rollback_row.get("write_outcome") or "APPLIED_VERIFIED",
+                    woo_after=verified,
+                )
+                rollback_row["woo_after"] = verified
+                inventory_sync = _sync_verified_price_inventory_state(
+                    session,
+                    operation_id=operation_id,
+                    row=row,
+                    target=target,
+                    before_price=_format_price_value(row["woo_current_price"]),
+                    verified_price=_format_price_value(verified_price),
+                    action="admin_publish_price_proposal_group",
+                    message="Precio Woo publicado y verificado desde propuesta logica.",
+                    metadata={
+                        "proposal_id": row["proposal_id"],
+                        "pricing_strategy": strategy,
+                    },
+                    target_record=target_record,
+                )
+                result_row = {
+                    **row,
+                    "pricing_payload": payload,
+                    "pricing_strategy": strategy,
+                    "woo_after": verified,
+                    "inventory_sync": inventory_sync,
+                    "write_performed": bool(rollback_row.get("write_performed")),
+                    "put_attempted": True,
+                    "put_ok": bool(rollback_row.get("put_ok")),
+                    "put_response_ok": bool(rollback_row.get("put_response_ok")),
+                    "remote_write_confirmed_by_get": bool(rollback_row.get("remote_write_confirmed_by_get")),
+                    "verify_ok": True,
+                    "terminal_status": "APPLIED_VERIFIED",
+                }
+                published.append(result_row)
+                processed.append(result_row)
+                continue
+            except Exception as publish_exc:
+                target_failure = publish_exc
+                _set_target_status(target_record, "VERIFY_FAILED", last_error=str(publish_exc))
+
+        failed_row, rollback_entry = _rollback_single_failed_publish_target(
+            session,
+            woo,
+            operation_id=operation_id,
+            row=row,
+            rollback_row=rollback_row,
+            target_record=target_record,
+            progress=progress,
+            index=index,
+            total=total,
+            failure=target_failure or CloudAuditError("Fallo de publicacion no especificado."),
+        )
+        processed.append(failed_row)
+        rollback.append(rollback_entry)
+    return processed, published, rollback_candidates, rollback
 
 
 def _proposal_is_deleted(proposal: dict[str, Any]) -> bool:
@@ -1233,6 +2371,12 @@ def preview_price_proposal_group_publish(
         woo_price = None
         messages: list[str] = []
         entry_origin = _proposal_entry_origin(proposal)
+        placeholder_relation = (
+            _placeholder_relation_metadata(source)
+            if entry_origin == "DERIVED_COMBINATION" and _source_row_has_placeholder_relation(source)
+            else {}
+        )
+        placeholder_remote_resolution = ""
         pricing_payload: dict[str, Any] = {}
         pricing_strategy = ""
         functional_status = "READY"
@@ -1247,18 +2391,125 @@ def preview_price_proposal_group_publish(
                 raise CloudAuditError("Falta el precio registrado en la propuesta.")
             if new_price is None or new_price <= 0:
                 raise CloudAuditError("El precio nuevo debe ser numerico y mayor que 0.")
-            target = _remote_target_for_proposal(session, proposal)
-            targets.setdefault(str(target["remote_key"]), []).append(canonical_key)
             try:
-                woo_data = _fetch_remote_target(woo, target)
-            except Exception:
-                recovered = _recover_legacy_product_target_by_exact_sku(woo, target, proposal)
-                if recovered is None:
+                target = _remote_target_for_proposal(session, proposal)
+            except Exception as target_exc:
+                if not placeholder_relation:
                     raise
-                woo_data = recovered
+                try:
+                    target, woo_data, placeholder_remote_resolution = _resolve_placeholder_target_by_exact_sku(
+                        woo,
+                        proposal,
+                    )
+                except Exception as sku_exc:
+                    status = SKIPPED_UNRESOLVED_REMOTE_TARGET
+                    functional_status = SKIPPED_UNRESOLVED_REMOTE_TARGET
+                    reason = (
+                        "Relacion placeholder sin target Woo remoto resoluble de forma exacta; "
+                        f"se omite sin PUT. Detalle: {sku_exc or target_exc}"
+                    )
+                    messages = [reason]
+                    result_rows.append({
+                        "proposal_id": str(proposal.get("id") or ""),
+                        "canonical_key": canonical_key,
+                        "item_kind": str(source.get("ui_canonical_item_kind") or proposal.get("item_kind") or ""),
+                        "code": str(source.get("ui_line_code") or canonical_key),
+                        "name": str(source.get("ui_line_name") or proposal.get("name") or canonical_key),
+                        "proposal_status": str(proposal.get("status") or ""),
+                        "entry_origin": entry_origin,
+                        "functional_status": functional_status,
+                        "old_price_proposal": old_price,
+                        "woo_current_price": None,
+                        "new_price": new_price,
+                        "delta": None,
+                        "status": status,
+                        "reason": reason,
+                        "messages": messages,
+                        "target": {},
+                        "woo_before": {},
+                        "woo_before_full": {},
+                        "pricing_payload": {},
+                        "pricing_strategy": "skipped_unresolved_remote_target",
+                        "component_summary": component_summary,
+                        "quantity_summary": quantity_summary,
+                        "placeholder_relation": _json_safe(placeholder_relation),
+                        "remote_resolution": "UNRESOLVED_REMOTE_TARGET",
+                        "proposal": proposal,
+                    })
+                    continue
+            if woo_data is None:
+                try:
+                    woo_data = _fetch_remote_target(woo, target)
+                except Exception as fetch_exc:
+                    if placeholder_relation:
+                        try:
+                            target, woo_data, placeholder_remote_resolution = _resolve_placeholder_target_by_exact_sku(
+                                woo,
+                                proposal,
+                            )
+                        except Exception as sku_exc:
+                            status = SKIPPED_UNRESOLVED_REMOTE_TARGET
+                            functional_status = SKIPPED_UNRESOLVED_REMOTE_TARGET
+                            reason = (
+                                "Relacion placeholder sin target Woo remoto resoluble de forma exacta; "
+                                f"se omite sin PUT. Detalle: {sku_exc or fetch_exc}"
+                            )
+                            messages = [reason]
+                            result_rows.append({
+                                "proposal_id": str(proposal.get("id") or ""),
+                                "canonical_key": canonical_key,
+                                "item_kind": str(source.get("ui_canonical_item_kind") or proposal.get("item_kind") or ""),
+                                "code": str(source.get("ui_line_code") or canonical_key),
+                                "name": str(source.get("ui_line_name") or proposal.get("name") or canonical_key),
+                                "proposal_status": str(proposal.get("status") or ""),
+                                "entry_origin": entry_origin,
+                                "functional_status": functional_status,
+                                "old_price_proposal": old_price,
+                                "woo_current_price": None,
+                                "new_price": new_price,
+                                "delta": None,
+                                "status": status,
+                                "reason": reason,
+                                "messages": messages,
+                                "target": {},
+                                "woo_before": {},
+                                "woo_before_full": {},
+                                "pricing_payload": {},
+                                "pricing_strategy": "skipped_unresolved_remote_target",
+                                "component_summary": component_summary,
+                                "quantity_summary": quantity_summary,
+                                "placeholder_relation": _json_safe(placeholder_relation),
+                                "remote_resolution": "UNRESOLVED_REMOTE_TARGET",
+                                "proposal": proposal,
+                            })
+                            continue
+                    else:
+                        recovered = _recover_legacy_product_target_by_exact_sku(woo, target, proposal)
+                        if recovered is None:
+                            raise
+                        woo_data = recovered
+            if placeholder_relation:
+                live_identity_target = _target_from_live_woo_row(
+                    proposal,
+                    woo_data,
+                    cloud_item=target.get("cloud_item") or {},
+                )
+                if live_identity_target.get("remote_key") != target.get("remote_key"):
+                    target = live_identity_target
+                if not placeholder_remote_resolution:
+                    placeholder_remote_resolution = "RESOLVED_FROM_PLACEHOLDER_IDS"
+            targets.setdefault(str(target["remote_key"]), []).append(canonical_key)
             woo_price = _effective_woo_price(woo_data)
-            if woo_price is None:
-                raise CloudAuditError("WooCommerce no devuelve un precio efectivo.")
+            if woo_price is None or woo_price <= 0:
+                status = "SKIPPED_NO_BASE_PRICE"
+                functional_status = "SKIPPED_NO_BASE_PRICE"
+                reason = "WooCommerce no devuelve precio efectivo mayor que cero; se omite sin PUT."
+            placeholder_remote_resolved = bool(
+                placeholder_relation
+                and woo_price is not None
+                and woo_price > 0
+                and target
+            )
             remote_identity_update = _remote_identity_revalidation_from_live(target, woo_data)
             if remote_identity_update:
                 status = (
@@ -1272,12 +2523,19 @@ def preview_price_proposal_group_publish(
                     else "BLOCKED_REMOTE_IDENTITY_MISMATCH"
                 )
                 reason = str(remote_identity_update.get("reason") or "")
-            if entry_origin == "DERIVED_COMBINATION":
+            if status == "SKIPPED_NO_BASE_PRICE":
+                pass
+            elif entry_origin == "DERIVED_COMBINATION":
                 persisted_status = str(source.get("derived_status") or "").strip().upper()
                 if source.get("publication_allowed") != "YES" or persisted_status not in {"READY", "NO_CHANGE"}:
-                    status = persisted_status if persisted_status.startswith("BLOCKED_") else "BLOCKED_TRACEABILITY_ERROR"
-                    functional_status = status
-                    reason = str(source.get("blocking_reason") or "La linea derivada no esta autorizada para publicacion.")
+                    if placeholder_remote_resolved:
+                        messages.append(
+                            "INFO: relacion local placeholder/quarantine resuelta contra target Woo real con precio."
+                        )
+                    else:
+                        status = persisted_status if persisted_status.startswith("BLOCKED_") else "BLOCKED_TRACEABILITY_ERROR"
+                        functional_status = status
+                        reason = str(source.get("blocking_reason") or "La linea derivada no esta autorizada para publicacion.")
                 stored_context = source.get("woo_price_context_at_creation")
                 if status.startswith("BLOCKED_"):
                     pass
@@ -1313,7 +2571,9 @@ def preview_price_proposal_group_publish(
                             status = "BLOCKED_INVALID_PAYLOAD"
                             functional_status = status
                             reason = "El contexto Woo cambio desde el preview: " + ", ".join(sorted(changed))
-            if str(status).startswith("BLOCKED_") or str(functional_status).startswith("BLOCKED_"):
+            if status == "SKIPPED_NO_BASE_PRICE":
+                pass
+            elif str(status).startswith("BLOCKED_") or str(functional_status).startswith("BLOCKED_"):
                 pass
             elif abs(float(old_price) - float(woo_price)) > 0.009:
                 status = "DESACTUALIZADA"
@@ -1383,12 +2643,14 @@ def preview_price_proposal_group_publish(
             "target": target,
             "woo_before": _pricing_snapshot(woo_data),
             "woo_before_full": woo_data,
-            "pricing_payload": pricing_payload,
-            "pricing_strategy": pricing_strategy,
-            "component_summary": component_summary,
-            "quantity_summary": quantity_summary,
-            "proposal": proposal,
-        })
+                    "pricing_payload": pricing_payload,
+                    "pricing_strategy": pricing_strategy,
+                    "component_summary": component_summary,
+                    "quantity_summary": quantity_summary,
+                    "placeholder_relation": _json_safe(placeholder_relation),
+                    "remote_resolution": placeholder_remote_resolution,
+                    "proposal": proposal,
+                })
 
     duplicate_keys = {
         remote_key: canonical_keys
@@ -1420,9 +2682,9 @@ def preview_price_proposal_group_publish(
     }
     for row in result_rows:
         state = row["status"]
-        if state in {"VALIDO", "READY", "NO_CHANGE"}:
+        if state in {"VALIDO", "READY", "NO_CHANGE", "SKIPPED_NO_BASE_PRICE", SKIPPED_PLACEHOLDER_RELATION, SKIPPED_UNRESOLVED_REMOTE_TARGET}:
             counts["valid"] += 1
-            if state != "NO_CHANGE":
+            if state not in {"NO_CHANGE", "SKIPPED_NO_BASE_PRICE", SKIPPED_PLACEHOLDER_RELATION, SKIPPED_UNRESOLVED_REMOTE_TARGET}:
                 counts["woo_writes"] += 1
         elif state == "WARNING":
             counts["warnings"] += 1
@@ -1434,7 +2696,7 @@ def preview_price_proposal_group_publish(
     blocked_rows = [
         row
         for row in result_rows
-        if row["status"] not in {"VALIDO", "WARNING", "READY", "NO_CHANGE"}
+        if row["status"] not in PUBLISH_PREVIEW_PASS_STATUSES
     ]
     return {
         "rows": result_rows,
@@ -1476,7 +2738,7 @@ def publish_price_proposal_group(
         blocked_rows = [
             row
             for row in candidate.get("rows") or []
-            if row.get("status") not in {"VALIDO", "WARNING", "READY", "NO_CHANGE"}
+            if row.get("status") not in PUBLISH_PREVIEW_PASS_STATUSES
         ]
         if not blocked_rows or any(not _is_revalidatable_publish_row(row) for row in blocked_rows):
             return
@@ -1550,7 +2812,7 @@ def publish_price_proposal_group(
         blocked = [
             f"{row['canonical_key']}: {row['status']} - {row['reason']}"
             for row in preflight["rows"]
-            if row["status"] not in {"VALIDO", "WARNING", "READY", "NO_CHANGE"}
+            if row["status"] not in PUBLISH_PREVIEW_PASS_STATUSES
         ]
         raise CloudAuditError("Publicacion bloqueada antes de escribir:\n" + "\n".join(blocked[:10]))
 
@@ -1560,8 +2822,12 @@ def publish_price_proposal_group(
     lock_acquired = False
     marked_ids: list[str] = []
     published: list[dict[str, Any]] = []
+    processed: list[dict[str, Any]] = []
+    rollback_candidates: list[dict[str, Any]] = []
     rollback: list[dict[str, Any]] = []
     failed_write: dict[str, Any] | None = None
+    target_manifest: dict[str, Any] = {"operation_id": operation_id, "target_count": 0, "targets": []}
+    target_records_by_proposal_id: dict[str, dict[str, Any]] = {}
     try:
         acquire_system_lock(
             session,
@@ -1588,7 +2854,7 @@ def publish_price_proposal_group(
             changed = [
                 f"{row['canonical_key']}: {row['status']} - {row['reason']}"
                 for row in locked_preflight["rows"]
-                if row["status"] not in {"VALIDO", "WARNING", "READY", "NO_CHANGE"}
+                if row["status"] not in PUBLISH_PREVIEW_PASS_STATUSES
             ]
             raise CloudAuditError(
                 "La revalidacion detecto cambios; revisa solo estas diferencias:\n"
@@ -1612,6 +2878,8 @@ def publish_price_proposal_group(
                 + "\n".join(changed_rows[:20])
             )
         preflight = locked_preflight
+        target_manifest = _build_target_manifest(operation_id, list(preflight["rows"]))
+        target_records_by_proposal_id = _manifest_record_by_proposal_id(target_manifest)
 
         snapshot_data = [{
             "canonical_key": row["canonical_key"],
@@ -1622,6 +2890,9 @@ def publish_price_proposal_group(
             "proposal_id": row["proposal_id"],
             "entry_origin": row.get("entry_origin"),
             "pricing_payload": row.get("pricing_payload"),
+            "target_manifest_record": _json_safe(
+                target_records_by_proposal_id.get(str(row.get("proposal_id"))) or {}
+            ),
         } for row in preflight["rows"]]
         _ensure_snapshot_persisted(session, OperationSnapshot(
             operation_id=operation_id,
@@ -1657,36 +2928,111 @@ def publish_price_proposal_group(
                 raise CloudAuditError(f"No se pudo bloquear la linea {row_id} como publishing.")
             marked_ids.append(row_id)
 
-        total = len(preflight["rows"])
-        for index, row in enumerate(preflight["rows"], start=1):
-            if progress:
-                progress(index, total, row["canonical_key"])
+        processed, published, rollback_candidates, rollback = _publish_price_targets_partial(
+            session,
+            woo,
+            operation_id=operation_id,
+            preflight_rows=list(preflight["rows"]),
+            target_records_by_proposal_id=target_records_by_proposal_id,
+            progress=progress,
+        )
+
+        total = 0
+        for index, row in enumerate([], start=1):
+            _publish_progress(progress, "Publicando precios en WooCommerce", index, total, row["canonical_key"])
             target = row["target"]
             payload = dict(row.get("pricing_payload") or {})
             strategy = str(row.get("pricing_strategy") or "")
+            target_record = target_records_by_proposal_id.get(str(row.get("proposal_id")))
             if not payload:
                 payload, strategy = _pricing_payload_for_effective_price(
                     row.get("woo_before_full") or {},
                     float(row["new_price"]),
                 )
             if row.get("status") == "NO_CHANGE":
+                _publish_progress(progress, "Verificando WooCommerce", index, total, row["canonical_key"])
+                try:
+                    verified, verified_price = _verify_already_matched_pricing(woo, row, record=target_record)
+                except Exception as verify_exc:
+                    _set_target_status(target_record, "VERIFY_FAILED", last_error=str(verify_exc))
+                    raise CloudAuditError(
+                        f"{row['canonical_key']} no confirmo NO_CHANGE live: {verify_exc}"
+                    ) from verify_exc
+                _set_target_status(target_record, "VERIFY_OK", woo_after=verified, verified_without_write=True)
+                _set_target_status(
+                    target_record,
+                    "ALREADY_MATCHED_VERIFIED",
+                    write_performed=False,
+                    put_attempted=False,
+                    put_response_ok=False,
+                    remote_write_confirmed_by_get=False,
+                    write_outcome="ALREADY_MATCHED_VERIFIED",
+                    woo_after=verified,
+                )
                 published.append({
                     **row,
                     "pricing_payload": {},
                     "pricing_strategy": "no_change",
-                    "woo_after": row.get("woo_before_full") or {},
+                    "woo_after": verified,
                     "inventory_sync": None,
                     "write_performed": False,
                     "put_attempted": False,
                     "put_ok": False,
+                    "put_response_ok": False,
+                    "remote_write_confirmed_by_get": False,
                     "verify_ok": True,
                 })
                 continue
-            put_attempted = False
-            put_attempted = True
+            rollback_row = {
+                **row,
+                "pricing_payload": payload,
+                "pricing_strategy": strategy,
+                "write_performed": False,
+                "put_attempted": True,
+                "put_ok": False,
+                "put_response_ok": False,
+                "remote_write_confirmed_by_get": False,
+                "may_have_written": True,
+                "write_outcome": "UNKNOWN",
+            }
+            rollback_candidates.append(rollback_row)
+            verified: dict[str, Any] | None = None
+            verified_price: float | None = None
             try:
+                _set_target_status(
+                    target_record,
+                    "WRITE_REQUESTED",
+                    put_attempted=True,
+                    put_response_ok=False,
+                    may_have_written=True,
+                    write_outcome="UNKNOWN",
+                )
+                if target_record is not None:
+                    target_record["write_attempts"] = int(target_record.get("write_attempts") or 0) + 1
                 _write_remote_target(woo, target, payload)
+                rollback_row.update({
+                    "write_performed": True,
+                    "put_ok": True,
+                    "put_response_ok": True,
+                    "write_outcome": "WRITE_HTTP_OK",
+                })
+                _set_target_status(
+                    target_record,
+                    "WRITE_HTTP_OK",
+                    write_performed=True,
+                    put_response_ok=True,
+                    write_outcome="WRITE_HTTP_OK",
+                )
             except Exception as write_exc:
+                _set_target_status(
+                    target_record,
+                    "WRITE_HTTP_FAILED",
+                    last_error=str(write_exc),
+                    put_attempted=True,
+                    put_response_ok=False,
+                    may_have_written=True,
+                    write_outcome="UNKNOWN",
+                )
                 failed_write = {
                     "proposal_id": row.get("proposal_id"),
                     "entry_origin": row.get("entry_origin"),
@@ -1695,8 +3041,11 @@ def publish_price_proposal_group(
                     "pricing_payload": _json_safe(payload),
                     "put_attempted": True,
                     "put_ok": False,
+                    "put_response_ok": False,
                     "put_confirmed": False,
+                    "remote_write_confirmed_by_get": False,
                     "write_performed": False,
+                    "write_outcome": "UNKNOWN",
                     "diagnostic": _remote_target_diagnostic(
                         row,
                         target,
@@ -1704,36 +3053,211 @@ def publish_price_proposal_group(
                         put_confirmed=False,
                     ),
                 }
-                raise CloudAuditError(
-                    f"{row['canonical_key']} fallo PUT Woo: {write_exc}. "
-                    + failed_write["diagnostic"]
-                ) from write_exc
-            verified = _fetch_remote_target(woo, target)
-            verified_price = _effective_woo_price(verified)
-            if verified_price is None or abs(verified_price - float(row["new_price"])) > 0.009:
-                raise CloudAuditError(
-                    f"{row['canonical_key']} no confirmo el precio {row['new_price']:.2f}."
-                )
-            if not _pricing_payload_matches(payload, verified):
-                raise CloudAuditError(
-                    f"{row['canonical_key']} no confirmo el payload de precio exacto enviado."
-                )
-            inventory_sync = sync_woocommerce_price_inventory_state(
+                _publish_progress(progress, "Verificando resultado ambiguo WooCommerce", index, total, row["canonical_key"])
+                try:
+                    ambiguous_live = _fetch_remote_target(woo, target)
+                    ambiguous_price = _effective_woo_price(ambiguous_live)
+                    if target_record is not None:
+                        target_record["verify_attempts"] = int(target_record.get("verify_attempts") or 0) + 1
+                        target_record["last_live_price"] = _format_price_value(ambiguous_price)
+                    if _remote_matches_expected_pricing(row, payload, ambiguous_live, row["new_price"]):
+                        rollback_row.update({
+                            "write_performed": True,
+                            "put_ok": False,
+                            "put_response_ok": False,
+                            "remote_write_confirmed_by_get": True,
+                            "write_outcome": "WRITE_RESPONSE_FAILED_REMOTE_CONFIRMED",
+                            "woo_after": ambiguous_live,
+                        })
+                        failed_write["put_confirmed"] = True
+                        failed_write["remote_write_confirmed_by_get"] = True
+                        failed_write["write_performed"] = True
+                        failed_write["write_outcome"] = "WRITE_RESPONSE_FAILED_REMOTE_CONFIRMED"
+                        _set_target_status(
+                            target_record,
+                            "WRITE_RESPONSE_FAILED_REMOTE_CONFIRMED",
+                            write_performed=True,
+                            remote_write_confirmed_by_get=True,
+                            put_response_ok=False,
+                            write_outcome="WRITE_RESPONSE_FAILED_REMOTE_CONFIRMED",
+                            woo_after=ambiguous_live,
+                        )
+                        verified = ambiguous_live
+                        verified_price = float(ambiguous_price)
+                    elif _remote_matches_expected_pricing(
+                        row,
+                        _before_payload_for_row(row),
+                        ambiguous_live,
+                        row.get("woo_current_price"),
+                    ):
+                        rollback_row.update({
+                            "write_performed": True,
+                            "write_outcome": "WRITE_RESPONSE_FAILED_REMOTE_OLD",
+                            "may_have_written": True,
+                            "operation_may_have_written": True,
+                        })
+                        failed_write["write_outcome"] = "WRITE_RESPONSE_FAILED_REMOTE_OLD"
+                        _set_target_status(
+                            target_record,
+                            "WRITE_RESPONSE_FAILED_REMOTE_OLD",
+                            write_performed=True,
+                            may_have_written=True,
+                            operation_may_have_written=True,
+                            write_outcome="WRITE_RESPONSE_FAILED_REMOTE_OLD",
+                            woo_after=ambiguous_live,
+                        )
+                        rollback_row.update({
+                            "write_performed": True,
+                            "may_have_written": True,
+                            "write_outcome": "RETRY_OUTCOME_UNKNOWN",
+                        })
+                        try:
+                            verified, verified_price, _repair_attempts, repair_write_performed = _verify_with_repair_attempts(
+                                woo,
+                                row,
+                                payload,
+                                record=target_record,
+                                progress=progress,
+                                index=index,
+                                total=total,
+                            )
+                        except Exception as repaired_exc:
+                            _set_target_status(target_record, "VERIFY_FAILED", last_error=str(repaired_exc))
+                            raise CloudAuditError(
+                                f"{row['canonical_key']} fallo PUT Woo y no confirmo el precio tras "
+                                f"{MAX_VERIFY_REPAIR_ATTEMPTS} reintentos: {repaired_exc}"
+                            ) from repaired_exc
+                        if repair_write_performed:
+                            rollback_row.update({
+                                "write_performed": True,
+                                "put_ok": True,
+                                "put_response_ok": True,
+                                "repair_write_performed": True,
+                                "write_outcome": "RETRY_APPLIED_VERIFIED",
+                                "woo_after": verified,
+                            })
+                        else:
+                            rollback_row.update({
+                                "write_performed": True,
+                                "put_ok": False,
+                                "put_response_ok": False,
+                                "repair_write_performed": False,
+                                "remote_write_confirmed_by_get": True,
+                                "may_have_written": True,
+                                "operation_may_have_written": True,
+                                "write_outcome": "AMBIGUOUS_WRITE_EVENTUALLY_CONFIRMED",
+                                "woo_after": verified,
+                            })
+                            _set_target_status(
+                                target_record,
+                                "AMBIGUOUS_WRITE_EVENTUALLY_CONFIRMED",
+                                write_performed=True,
+                                remote_write_confirmed_by_get=True,
+                                may_have_written=True,
+                                operation_may_have_written=True,
+                                put_response_ok=False,
+                                repair_write_performed=False,
+                                write_outcome="AMBIGUOUS_WRITE_EVENTUALLY_CONFIRMED",
+                                woo_after=verified,
+                            )
+                    else:
+                        rollback_row.update({
+                            "write_performed": True,
+                            "write_outcome": "WRITE_RESPONSE_FAILED_REMOTE_UNKNOWN",
+                            "woo_after_ambiguous": ambiguous_live,
+                        })
+                        failed_write["write_performed"] = True
+                        failed_write["write_outcome"] = "WRITE_RESPONSE_FAILED_REMOTE_UNKNOWN"
+                        _set_target_status(
+                            target_record,
+                            "WRITE_RESPONSE_FAILED_REMOTE_UNKNOWN",
+                            write_performed=True,
+                            may_have_written=True,
+                            write_outcome="WRITE_RESPONSE_FAILED_REMOTE_UNKNOWN",
+                            woo_after_ambiguous=ambiguous_live,
+                        )
+                        _set_target_status(target_record, "VERIFY_FAILED", last_error="Woo live no coincide ni con before ni con new.")
+                        raise CloudAuditError(
+                            f"{row['canonical_key']} quedo en estado Woo indeterminado tras PUT ambiguo."
+                        ) from write_exc
+                except CloudAuditError:
+                    raise
+                except Exception as get_exc:
+                    rollback_row.update({
+                        "write_performed": True,
+                        "write_outcome": "WRITE_RESPONSE_FAILED_GET_FAILED",
+                    })
+                    failed_write["write_performed"] = True
+                    failed_write["write_outcome"] = "WRITE_RESPONSE_FAILED_GET_FAILED"
+                    failed_write["get_after_put_error"] = str(get_exc)
+                    _set_target_status(
+                        target_record,
+                        "WRITE_RESPONSE_FAILED_GET_FAILED",
+                        write_performed=True,
+                        may_have_written=True,
+                        write_outcome="WRITE_RESPONSE_FAILED_GET_FAILED",
+                        last_error=str(get_exc),
+                    )
+                    _set_target_status(target_record, "VERIFY_FAILED", last_error=str(get_exc))
+                    raise CloudAuditError(
+                        f"{row['canonical_key']} fallo PUT Woo y tambien fallo GET de verificacion: {get_exc}"
+                    ) from write_exc
+                else:
+                    failed_write = None
+            _publish_progress(progress, "Verificando WooCommerce", index, total, row["canonical_key"])
+            if verified is None:
+                try:
+                    verified, verified_price = _verify_remote_pricing(woo, row, payload, record=target_record)
+                except Exception as verify_exc:
+                    _set_target_status(target_record, "VERIFY_FAILED", last_error=str(verify_exc))
+                    try:
+                        verified, verified_price, _repair_attempts, repair_write_performed = _verify_with_repair_attempts(
+                            woo,
+                            row,
+                            payload,
+                            record=target_record,
+                            progress=progress,
+                            index=index,
+                            total=total,
+                        )
+                        if repair_write_performed:
+                            rollback_row.update({
+                                "write_performed": True,
+                                "may_have_written": True,
+                                "write_outcome": "RETRY_APPLIED_VERIFIED",
+                            })
+                    except Exception as repaired_exc:
+                        _set_target_status(target_record, "VERIFY_FAILED", last_error=str(repaired_exc))
+                        raise CloudAuditError(
+                            f"{row['canonical_key']} no confirmo el precio tras "
+                            f"{MAX_VERIFY_REPAIR_ATTEMPTS} reintentos: {repaired_exc}"
+                        ) from repaired_exc
+            _set_target_status(target_record, "VERIFY_OK", woo_after=verified)
+            _set_target_status(
+                target_record,
+                "APPLIED_VERIFIED",
+                write_performed=bool(rollback_row.get("write_performed")),
+                put_attempted=True,
+                put_response_ok=bool(rollback_row.get("put_response_ok")),
+                remote_write_confirmed_by_get=bool(rollback_row.get("remote_write_confirmed_by_get")),
+                write_outcome=rollback_row.get("write_outcome") or "APPLIED_VERIFIED",
+                woo_after=verified,
+            )
+            rollback_row["woo_after"] = verified
+            inventory_sync = _sync_verified_price_inventory_state(
                 session,
                 operation_id=operation_id,
-                proposal=row["proposal"],
-                cloud_item=target["cloud_item"],
-                woo_id=target["woo_id"],
+                row=row,
+                target=target,
                 before_price=_format_price_value(row["woo_current_price"]),
                 verified_price=_format_price_value(verified_price),
                 action="admin_publish_price_proposal_group",
                 message="Precio Woo publicado y verificado desde propuesta logica.",
                 metadata={
-                    "canonical_key": row["canonical_key"],
-                    "remote_key": target["remote_key"],
                     "proposal_id": row["proposal_id"],
                     "pricing_strategy": strategy,
                 },
+                target_record=target_record,
             )
             published.append({
                 **row,
@@ -1741,43 +3265,84 @@ def publish_price_proposal_group(
                 "pricing_strategy": strategy,
                 "woo_after": verified,
                 "inventory_sync": inventory_sync,
-                "write_performed": True,
-                "put_attempted": put_attempted,
-                "put_ok": True,
+                "write_performed": bool(rollback_row.get("write_performed")),
+                "put_attempted": True,
+                "put_ok": bool(rollback_row.get("put_ok")),
+                "put_response_ok": bool(rollback_row.get("put_response_ok")),
+                "remote_write_confirmed_by_get": bool(rollback_row.get("remote_write_confirmed_by_get")),
                 "verify_ok": True,
             })
+            verified = None
+            verified_price = None
 
         now = datetime.now(timezone.utc).isoformat()
         published_by_id = {str(row.get("proposal_id")): row for row in published}
+        provisional_counts = _target_manifest_counts(
+            target_manifest,
+            final_status="PENDING_FINAL_STATUS",
+            rollback=rollback,
+        )
+        final_publish_status = _publish_final_status_from_counts(provisional_counts)
+        audit_counts = _target_manifest_counts(
+            target_manifest,
+            final_status=final_publish_status,
+            rollback=rollback,
+        )
+        if audit_counts["processed_count"] != audit_counts["target_count"]:
+            raise CloudAuditError(
+                "La publicacion no proceso todos los targets del manifest: "
+                f"{audit_counts['processed_count']}/{audit_counts['target_count']}."
+            )
+        processed_by_id = {str(row.get("proposal_id")): row for row in processed}
         for row in preflight["rows"]:
             proposal = row["proposal"]
             source = proposal.get("source_row") if isinstance(proposal.get("source_row"), dict) else {}
             published_row = published_by_id.get(str(row.get("proposal_id"))) or {}
+            processed_row = processed_by_id.get(str(row.get("proposal_id"))) or published_row
+            published_target_record = target_records_by_proposal_id.get(str(row.get("proposal_id"))) or {}
+            terminal_status = _target_terminal_status(published_target_record) or processed_row.get("terminal_status") or "UNKNOWN"
+            row_success = terminal_status in PUBLISH_SUCCESS_STATUSES
+            row_skipped = terminal_status in {
+                "SKIPPED_NO_BASE_PRICE",
+                SKIPPED_PLACEHOLDER_RELATION,
+                SKIPPED_UNRESOLVED_REMOTE_TARGET,
+            }
+            row_status = "published" if row_success else "pending" if row_skipped else "error"
+            workflow_state = "APPLIED" if row_success else terminal_status
             update = {
-                "status": "published",
-                "published_at": now,
-                "error_message": None,
+                "status": row_status,
+                "published_at": now if row_success else None,
+                "error_message": None if row_success else terminal_status,
                 "source_row": {
                     **source,
-                    "woo_publish": True,
+                    "woo_publish": row_success,
                     "publish_operation_id": operation_id,
                     "published_by_email": session.email,
                     "published_machine": settings.machine_name,
-                    "workflow_state": "APPLIED",
+                    "workflow_state": workflow_state,
                     "applied_by_user_id": actor["user_id"],
                     "applied_by_user_name": actor["user_name"],
-                    "applied_at_utc": now,
+                    "applied_at_utc": now if row_success else None,
                     "applied_machine": settings.machine_name,
                     "snapshot_operation_id": operation_id,
                     "entry_origin": row.get("entry_origin") or _proposal_entry_origin(proposal),
                     "remote_target": _json_safe(row["target"]),
                     "woo_before_apply": _json_safe(row.get("woo_before_full") or row.get("woo_before") or {}),
-                    "pricing_payload_sent": _json_safe(published_row.get("pricing_payload") or row.get("pricing_payload") or {}),
-                    "pricing_strategy_applied": published_row.get("pricing_strategy") or row.get("pricing_strategy"),
-                    "woo_after_verified": _json_safe(published_row.get("woo_after") or {}),
-                    "woo_write_performed": bool(published_row.get("write_performed")),
+                    "pricing_payload_sent": _json_safe(processed_row.get("pricing_payload") or row.get("pricing_payload") or {}),
+                    "pricing_strategy_applied": processed_row.get("pricing_strategy") or row.get("pricing_strategy"),
+                    "woo_after_verified": _json_safe(processed_row.get("woo_after") or {}),
+                    "inventory_sync": _json_safe(processed_row.get("inventory_sync") or {}),
+                    "inventory_sync_status": (processed_row.get("inventory_sync") or {}).get("inventory_sync_status"),
+                    "woo_write_performed": bool(processed_row.get("write_performed")),
+                    "publish_target_status": published_target_record.get("status") or "VERIFY_OK",
+                    "publish_final_status": final_publish_status,
+                    "publish_target_manifest_count": target_manifest.get("target_count"),
+                    "publish_audit_counts": _json_safe(audit_counts),
                     "price_before_publish": row["woo_current_price"],
-                    "published_price": row["new_price"],
+                    "published_price": row["new_price"] if row_success else None,
+                    "target_terminal_status": terminal_status,
+                    "target_failure": processed_row.get("failure") or processed_row.get("rollback_error") or "",
+                    "target_rollback": _json_safe(processed_row.get("rollback") or {}),
                 },
             }
             update_response = (
@@ -1805,19 +3370,57 @@ def publish_price_proposal_group(
             "put_attempted": bool(row.get("put_attempted")),
             "put_ok": bool(row.get("put_ok")),
             "verify_ok": bool(row.get("verify_ok")),
-            "result": "APPLIED" if row.get("write_performed") else "NO_ACTION_ALREADY_CURRENT",
-        } for row in published]
+            "inventory_sync_status": (row.get("inventory_sync") or {}).get("inventory_sync_status"),
+            "terminal_status": row.get("terminal_status") or _target_terminal_status(
+                target_records_by_proposal_id.get(str(row.get("proposal_id")))
+            ),
+            "result": (
+                "APPLIED"
+                if (row.get("terminal_status") or _target_terminal_status(target_records_by_proposal_id.get(str(row.get("proposal_id"))))) == "APPLIED_VERIFIED"
+                else "NO_ACTION_ALREADY_CURRENT"
+                if (row.get("terminal_status") or _target_terminal_status(target_records_by_proposal_id.get(str(row.get("proposal_id"))))) == "ALREADY_MATCHED_VERIFIED"
+                else row.get("terminal_status") or _target_terminal_status(target_records_by_proposal_id.get(str(row.get("proposal_id")))) or "UNKNOWN"
+            ),
+            "failure": row.get("failure") or row.get("rollback_error") or "",
+            "rollback": _json_safe(row.get("rollback") or {}),
+        } for row in processed]
         _ensure_audit_persisted(session, AuditEvent(
             operation_id=operation_id,
             module="woocommerce_publish",
             action="admin_publish_price_proposal_group",
-            status="OK",
-            severity="INFO",
+            status="OK" if final_publish_status in {"SUCCESS_VERIFIED", "COMPLETED_WITH_SKIPS"} else "ERROR",
+            severity=(
+                "INFO"
+                if final_publish_status == "SUCCESS_VERIFIED"
+                else "WARNING"
+                if final_publish_status in {"COMPLETED_WITH_SKIPS", "COMPLETED_WITH_ERRORS"}
+                else "CRITICAL"
+            ),
             entity_type="price_proposal_group",
             entity_id=lock_digest,
             before_data=_json_safe(snapshot_data),
             after_data=_json_safe({
+                "target_count": audit_counts["target_count"],
                 "published_count": len(published),
+                "processed_count": audit_counts["processed_count"],
+                "eligible_count": audit_counts["eligible_count"],
+                "applied_verified_count": audit_counts["applied_verified_count"],
+                "skipped_no_base_price_count": audit_counts["skipped_no_base_price_count"],
+                "skipped_placeholder_relation_count": audit_counts["skipped_placeholder_relation_count"],
+                "skipped_unresolved_remote_target_count": audit_counts["skipped_unresolved_remote_target_count"],
+                "failed_restored_count": audit_counts["failed_restored_count"],
+                "failed_no_remote_change_count": audit_counts["failed_no_remote_change_count"],
+                "failed_rollback_incomplete_count": audit_counts["failed_rollback_incomplete_count"],
+                "blocked_identity_count": audit_counts["blocked_identity_count"],
+                "write_ok_count": audit_counts["write_ok_count"],
+                "verify_ok_count": audit_counts["verify_ok_count"],
+                "verify_fail_count": audit_counts["verify_fail_count"],
+                "retry_count": audit_counts["retry_count"],
+                "rollback_count": audit_counts["rollback_count"],
+                "rollback_verified_count": audit_counts["rollback_verified_count"],
+                "already_matched_count": audit_counts["already_matched_count"],
+                "changed_count": audit_counts["changed_count"],
+                "final_status": audit_counts["final_status"],
                 "direct_count": preflight.get("counts", {}).get("direct", 0),
                 "derived_count": preflight.get("counts", {}).get("derived", 0),
                 "woo_write_count": sum(bool(row.get("write_performed")) for row in published),
@@ -1826,34 +3429,63 @@ def publish_price_proposal_group(
                 "applied_machine": settings.machine_name,
                 "proposal_ids": ids,
                 "line_results": line_results,
+                "target_manifest": target_manifest,
                 "exclusions": _json_safe(preflight.get("exclusions") or []),
             }),
-            message="Propuesta logica publicada y verificada completamente en WooCommerce.",
+            message=(
+                f"{audit_counts['processed_count']} de {audit_counts['target_count']} "
+                f"targets procesados. Estado final: {final_publish_status}."
+            ),
         ), settings)
         return {
             "operation_id": operation_id,
             "published": published,
-            "rollback": [],
-            "rollback_complete": False,
+            "processed": processed,
+            "rollback": rollback,
+            "rollback_complete": audit_counts["failed_rollback_incomplete_count"] == 0,
             "already_published": False,
             "line_results": line_results,
+            "target_manifest": target_manifest,
+            "audit_counts": audit_counts,
+            "final_status": audit_counts["final_status"],
             "counts": {
                 "direct": preflight.get("counts", {}).get("direct", 0),
                 "derived": preflight.get("counts", {}).get("derived", 0),
                 "woo_writes": sum(bool(row.get("write_performed")) for row in published),
+                "target_count": audit_counts["target_count"],
+                "verify_ok": audit_counts["verify_ok_count"],
+                "verify_failed": audit_counts["verify_fail_count"],
+                "changed": audit_counts["changed_count"],
+                "already_matched": audit_counts["already_matched_count"],
+                "skipped_no_base_price": audit_counts["skipped_no_base_price_count"],
+                "skipped_placeholder_relation": audit_counts["skipped_placeholder_relation_count"],
+                "skipped_unresolved_remote_target": audit_counts["skipped_unresolved_remote_target_count"],
+                "failed_restored": audit_counts["failed_restored_count"],
+                "failed_no_remote_change": audit_counts["failed_no_remote_change_count"],
+                "failed_rollback_incomplete": audit_counts["failed_rollback_incomplete_count"],
+                "retry_count": audit_counts["retry_count"],
             },
         }
     except Exception as exc:
         if isinstance(exc, PriceProposalRevalidationRequired):
             raise
         rollback_failures: list[str] = []
-        for row in reversed(published):
+        rollback_source = rollback_candidates or published
+        for row in reversed(rollback_source):
             if not row.get("write_performed", True):
                 rollback.append({"canonical_key": row["canonical_key"], "restored": True, "write_performed": False})
                 continue
             target = row["target"]
+            target_record = target_records_by_proposal_id.get(str(row.get("proposal_id")))
             before_payload = _pricing_restore_payload(row.get("woo_before") or {})
             try:
+                _publish_progress(
+                    progress,
+                    "Restaurando precios anteriores",
+                    len(rollback) + 1,
+                    len(rollback_source),
+                    row["canonical_key"],
+                )
                 _write_remote_target(woo, target, before_payload)
                 restored = _fetch_remote_target(woo, target)
                 restored_price = _effective_woo_price(restored)
@@ -1865,26 +3497,39 @@ def publish_price_proposal_group(
                 if not _pricing_payload_matches(before_payload, restored):
                     raise CloudAuditError("el rollback no confirmo el payload Woo anterior exacto")
                 row["woo_after_rollback"] = restored
-                sync_woocommerce_price_inventory_state(
+                row["rollback_inventory_sync"] = _sync_verified_price_inventory_state(
                     session,
                     operation_id=operation_id,
-                    proposal=row["proposal"],
-                    cloud_item=target["cloud_item"],
-                    woo_id=target["woo_id"],
+                    row=row,
+                    target=target,
                     before_price=_format_price_value(row["new_price"]),
                     verified_price=_format_price_value(restored_price),
                     action="admin_publish_price_proposal_group_rollback",
                     message="Rollback compensatorio verificado.",
-                    metadata={"canonical_key": row["canonical_key"], "remote_key": target["remote_key"]},
+                    metadata={"rollback": True},
+                    target_record=target_record,
+                    allow_missing_direct_resolution_after_rollback=True,
                 )
+                _set_target_status(target_record, "ROLLBACK_OK", woo_after_rollback=restored)
                 rollback.append({"canonical_key": row["canonical_key"], "restored": True})
             except Exception as rollback_exc:
+                _set_target_status(target_record, "ROLLBACK_FAILED", last_error=str(rollback_exc))
                 rollback_failures.append(f"{row['canonical_key']}: {rollback_exc}")
                 rollback.append({"canonical_key": row["canonical_key"], "restored": False})
 
-        rollback_complete = bool(published) and not rollback_failures
+        rollback_complete = bool(rollback_source) and not rollback_failures
+        final_publish_status = (
+            "FAILED_ROLLBACK_INCOMPLETE"
+            if rollback_failures
+            else "FAILED_ROLLED_BACK"
+        )
+        audit_counts = _target_manifest_counts(
+            target_manifest,
+            final_status=final_publish_status,
+            rollback=rollback,
+        )
         final_status = "pending" if not rollback_failures else "error"
-        if not published:
+        if not rollback_source:
             error_message = f"Fallo antes de la primera escritura Woo: {exc}"
         elif rollback_complete:
             error_message = f"Fallo de publicacion revertido: {exc}"
@@ -1922,6 +3567,9 @@ def publish_price_proposal_group(
                         **refreshed_context,
                         "rollback_complete": rollback_complete,
                         "rollback_failures": rollback_failures,
+                        "publish_final_status": final_publish_status,
+                        "publish_target_manifest": _json_safe(target_manifest),
+                        "publish_audit_counts": _json_safe(audit_counts),
                         **({"publish_failed_write": failed_write} if failed_write else {}),
                     },
                 }).eq("id", row_id).execute()
@@ -1938,13 +3586,25 @@ def publish_price_proposal_group(
                 entity_id=lock_digest,
                 before_data=_json_safe(preflight),
                 after_data=_json_safe({
+                    "target_count": audit_counts["target_count"],
+                    "write_ok_count": audit_counts["write_ok_count"],
+                    "verify_ok_count": audit_counts["verify_ok_count"],
+                    "verify_fail_count": audit_counts["verify_fail_count"],
+                    "retry_count": audit_counts["retry_count"],
+                    "rollback_count": audit_counts["rollback_count"],
+                    "rollback_verified_count": audit_counts["rollback_verified_count"],
+                    "already_matched_count": audit_counts["already_matched_count"],
+                    "changed_count": audit_counts["changed_count"],
+                    "final_status": audit_counts["final_status"],
                     "published": published,
+                    "rollback_candidates": rollback_source,
                     "rollback": rollback,
                     "exclusions": preflight.get("exclusions") or [],
                     "failed_by_user_id": actor["user_id"],
                     "failed_by_user_name": actor["user_name"],
                     "failed_machine": settings.machine_name,
                     "failed_write": failed_write,
+                    "target_manifest": target_manifest,
                 }),
                 message="Fallo la publicacion del lote; se ejecuto rollback compensatorio.",
                 error_detail=error_message,
@@ -1995,19 +3655,19 @@ def sync_price_proposal_inventory_prices(
         effective_price = _effective_woo_price(current)
         if effective_price is None:
             raise CloudAuditError(f"{canonical_key}: WooCommerce no devuelve precio efectivo.")
-        inventory_sync = sync_woocommerce_price_inventory_state(
+        inventory_sync = _sync_verified_price_inventory_state(
             session,
             operation_id=operation_id,
-            proposal=proposal,
-            cloud_item=target["cloud_item"],
-            woo_id=target["woo_id"],
+            row={
+                "proposal": proposal,
+                "canonical_key": canonical_key,
+            },
+            target=target,
             before_price=None,
             verified_price=_format_price_value(effective_price),
             action="sync_price_proposal_inventory_prices",
             message="Precio Woo sincronizado al entrar o actualizar Cambio de Precios.",
             metadata={
-                "canonical_key": canonical_key,
-                "remote_key": remote_key,
                 "proposal_id": proposal.get("id"),
             },
         )
@@ -2310,19 +3970,16 @@ def restore_price_proposal_group(
                 raise CloudAuditError(
                     f"{row['canonical_key']} no confirmo el payload historico exacto."
                 )
-            inventory_sync = sync_woocommerce_price_inventory_state(
+            inventory_sync = _sync_verified_price_inventory_state(
                 session,
                 operation_id=operation_id,
-                proposal=row["proposal"],
-                cloud_item=target["cloud_item"],
-                woo_id=target["woo_id"],
+                row=row,
+                target=target,
                 before_price=_format_price_value(row["woo_current_price"]),
                 verified_price=_format_price_value(verified_price),
                 action="admin_restore_price_proposal_group",
                 message="Precio Woo restaurado desde snapshot y verificado.",
                 metadata={
-                    "canonical_key": row["canonical_key"],
-                    "remote_key": target["remote_key"],
                     "proposal_id": row["proposal_id"],
                     "source_publish_operation_id": publish_operation_id,
                 },
@@ -2448,21 +4105,19 @@ def restore_price_proposal_group(
                     )
                 if not _pricing_payload_matches(payload, verified):
                     raise CloudAuditError("la compensacion no confirmo el payload exacto")
-                sync_woocommerce_price_inventory_state(
+                row["restore_compensation_inventory_sync"] = _sync_verified_price_inventory_state(
                     session,
                     operation_id=operation_id,
-                    proposal=row["proposal"],
-                    cloud_item=target["cloud_item"],
-                    woo_id=target["woo_id"],
+                    row=row,
+                    target=target,
                     before_price=_format_price_value(row["restore_price"]),
                     verified_price=_format_price_value(verified_price),
                     action="admin_restore_price_proposal_group_compensation",
                     message="Compensacion de restauracion verificada.",
                     metadata={
-                        "canonical_key": row["canonical_key"],
-                        "remote_key": target["remote_key"],
                         "source_publish_operation_id": publish_operation_id,
                     },
+                    allow_missing_direct_resolution_after_rollback=True,
                 )
                 compensation.append({"canonical_key": row["canonical_key"], "restored": True})
             except Exception as compensation_exc:

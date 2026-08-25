@@ -107,7 +107,7 @@ class WooMap001A83PreApplyTests(unittest.TestCase):
         self.assertEqual(by_sku["0402014"]["woo_id"], "")
         self.assertNotEqual(by_sku["0402014"]["woo_id"], by_sku["0302009"]["woo_id"])
 
-    def test_private_relation_is_retained_but_derived_target_is_not_publishable(self) -> None:
+    def test_private_relation_with_effective_price_is_ready_for_price_change_preview(self) -> None:
         status, reason = _reconciliation_status(
             {
                 "combination_woo_id": "4557",
@@ -126,8 +126,8 @@ class WooMap001A83PreApplyTests(unittest.TestCase):
             "",
             duplicate=False,
         )
-        self.assertEqual(status, "NOT_PUBLISHED")
-        self.assertIn("private", reason)
+        self.assertEqual(status, "VALID")
+        self.assertIn("Validacion live exacta completada", reason)
 
     def test_macao_remains_separate_and_missing_64_have_no_relation_action(self) -> None:
         master = read_csv(AUDIT_ROOT / "woo_map_001a_7_1_1" / "WOO_MAP_001A_7_1_1_MASTER_254.csv")

@@ -232,8 +232,10 @@ def restore_preview(rows: list[dict], targets: list[dict]) -> dict:
 class PriceProposalRestoreAndSyncTests(unittest.TestCase):
     def test_publish_updates_inventory_price_through_existing_helper(self):
         source = inspect.getsource(woocommerce_publish.publish_price_proposal_group)
-        self.assertIn("sync_woocommerce_price_inventory_state", source)
-        self.assertLess(source.index("_fetch_remote_target"), source.index("sync_woocommerce_price_inventory_state"))
+        helper_source = inspect.getsource(woocommerce_publish._sync_verified_price_inventory_state)
+        self.assertIn("_sync_verified_price_inventory_state", source)
+        self.assertIn("sync_woocommerce_price_inventory_state", helper_source)
+        self.assertLess(source.index("_verify_remote_pricing"), source.index("_sync_verified_price_inventory_state"))
 
     def test_publish_does_not_mutate_historical_old_price(self):
         source = inspect.getsource(woocommerce_publish.publish_price_proposal_group)

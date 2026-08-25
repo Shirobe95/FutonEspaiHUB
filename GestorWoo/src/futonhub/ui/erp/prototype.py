@@ -4008,6 +4008,9 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         win.grab_set()
 
         counts = preview.get("counts") or {}
+        eligible_with_price = int(counts.get("woo_writes") or 0)
+        no_base_price = sum(1 for row in preview.get("rows") or [] if row.get("status") == "SKIPPED_NO_BASE_PRICE")
+        unresolved_remote = sum(1 for row in preview.get("rows") or [] if row.get("status") == "SKIPPED_UNRESOLVED_REMOTE_TARGET")
         summary = tk.Frame(win, bg=CARD, highlightbackground=LINE, highlightthickness=1)
         summary.grid(row=0, column=0, sticky="ew", padx=16, pady=(16, 10))
         tk.Label(
@@ -4018,7 +4021,10 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 f"Warnings: {counts.get('warnings', 0)} - Errores: {counts.get('errors', 0)} - "
                 f"Desactualizadas: {counts.get('stale', 0)}\n"
                 f"Directas: {counts.get('direct', 0)} - Derivadas: {counts.get('derived', 0)} - "
-                f"Excluidas: {counts.get('excluded', 0)} - Escrituras Woo: {counts.get('woo_writes', 0)}"
+                f"Excluidas: {counts.get('excluded', 0)} - Escrituras Woo: {counts.get('woo_writes', 0)}\n"
+                f"Elegibles Woo con precio: {eligible_with_price} - "
+                f"Sin precio base: {no_base_price} - "
+                f"Sin identidad Woo resoluble: {unresolved_remote}"
             ),
             bg=CARD,
             fg=TEXT,
@@ -4158,9 +4164,9 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             cancel_button.configure(state=tk.DISABLED)
             progress_label.configure(text="Publicando precios en WooCommerce...")
 
-            def report(index: int, total: int, key: str) -> None:
+            def report(index: int, total: int, key: str, phase: str = "Publicando precios en WooCommerce") -> None:
                 self.after(0, lambda: progress_label.configure(
-                    text=f"Publicando precios en WooCommerce... {index}/{total} - {key}"
+                    text=f"{phase}... {index}/{total} - {key}"
                 ))
 
             def publish_worker() -> None:
@@ -4204,11 +4210,54 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                     )
                 return
             operation_id = (result or {}).get("operation_id") or "-"
-            close_preview()
-            messagebox.showinfo(
-                "Cambio de Precios",
-                f"Cambios de precio aplicados y verificados.\nOperacion: {operation_id}",
+            audit_counts = (result or {}).get("audit_counts") or {}
+            target_count = int(audit_counts.get("target_count") or 0)
+            verify_ok = int(audit_counts.get("verify_ok_count") or 0)
+            verify_failed = int(audit_counts.get("verify_fail_count") or 0)
+            changed = int(audit_counts.get("changed_count") or 0)
+            already_matched = int(audit_counts.get("already_matched_count") or 0)
+            skipped_no_base = int(audit_counts.get("skipped_no_base_price_count") or 0)
+            skipped_placeholder = int(audit_counts.get("skipped_placeholder_relation_count") or 0)
+            skipped_unresolved = int(audit_counts.get("skipped_unresolved_remote_target_count") or 0)
+            failed_restored = int(audit_counts.get("failed_restored_count") or 0)
+            failed_no_remote = int(audit_counts.get("failed_no_remote_change_count") or 0)
+            failed_rollback = int(audit_counts.get("failed_rollback_incomplete_count") or 0)
+            blocked_identity = int(audit_counts.get("blocked_identity_count") or 0)
+            final_status = (
+                (result or {}).get("final_status")
+                or audit_counts.get("final_status")
+                or "SUCCESS_VERIFIED"
             )
+            close_preview()
+            if final_status == "SUCCESS_VERIFIED":
+                messagebox.showinfo(
+                    "Cambio de Precios",
+                    (
+                        f"{verify_ok} de {target_count} precios actualizados y verificados en WooCommerce.\n"
+                        f"Actualizados: {changed}\n"
+                        f"Ya estaban correctos: {already_matched}\n"
+                        f"Errores: {verify_failed}\n"
+                        f"Operacion: {operation_id}"
+                    ),
+                )
+            else:
+                messagebox.showwarning(
+                    "Cambio de Precios",
+                    (
+                        f"Publicacion finalizada con estado {final_status}.\n"
+                        f"Targets procesados: {int(audit_counts.get('processed_count') or 0)} de {target_count}\n"
+                        f"Actualizados y verificados: {changed}\n"
+                        f"Ya estaban correctos: {already_matched}\n"
+                        f"Sin precio base: {skipped_no_base}\n"
+                        f"Omitidos por relacion sin identidad Woo: {skipped_placeholder}\n"
+                        f"Sin identidad Woo resoluble: {skipped_unresolved}\n"
+                        f"Fallaron y fueron restaurados: {failed_restored}\n"
+                        f"Fallaron sin cambio remoto: {failed_no_remote}\n"
+                        f"Rollback incompleto: {failed_rollback}\n"
+                        f"Identidad bloqueada: {blocked_identity}\n"
+                        f"Operacion: {operation_id}"
+                    ),
+                )
             # Characterization guard: success still calls _invalidate_price_inventory_caches
             # and _invalidate_price_proposal_caches via
             # _finish_successful_price_publication_navigation before

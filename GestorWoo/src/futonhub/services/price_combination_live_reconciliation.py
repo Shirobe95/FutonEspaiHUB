@@ -24,7 +24,6 @@ from futonhub.services.combination_price_impact import (
 
 
 _CENT = Decimal("0.01")
-_PUBLISHED_STATUSES = frozenset({"publish"})
 _MUTATION_METHODS = frozenset({"insert", "update", "upsert", "delete", "rpc"})
 ProgressCallback = Callable[[dict[str, Any]], None]
 
@@ -228,6 +227,73 @@ def _read_woo_entity(woo_client: Any, candidate: Mapping[str, Any]) -> tuple[dic
     if _text(entity.get("sku")) != _text(candidate.get("woo_sku")):
         raise ValueError("Woo returned a different literal SKU.")
     return entity, endpoint
+
+
+def _live_woo_kind(row: Mapping[str, Any]) -> str:
+    row_type = _text(row.get("type")).lower()
+    try:
+        parent_value = int(str(row.get("parent_id")).strip()) if _text(row.get("parent_id")) else 0
+    except (TypeError, ValueError):
+        parent_value = 0
+    return "variation" if row_type == "variation" or parent_value > 0 else "product"
+
+
+def _read_exact_combination_target(
+    woo_client: Any,
+    row: Mapping[str, Any],
+) -> tuple[dict[str, Any] | None, str, str, str]:
+    """Resolve a derived Woo target exactly for preview-only price eligibility."""
+    woo_id = _text(row.get("combination_woo_id"))
+    parent_id = _text(row.get("combination_parent_woo_id"))
+    sku = _text(row.get("combination_sku"))
+    endpoint_error = ""
+    if woo_id and parent_id:
+        try:
+            endpoint = f"products/{_positive_int(parent_id, 'combination_parent_woo_id')}/variations/{_positive_int(woo_id, 'combination_woo_id')}"
+            rows = _response_rows(woo_client.get(endpoint))
+            if len(rows) != 1:
+                endpoint_error = "WOO_NOT_FOUND: Woo no devolvio una variation unica."
+            else:
+                entity = dict(rows[0])
+                if _positive_int(entity.get("id"), "Woo variation id") != int(woo_id):
+                    endpoint_error = "WOO_NOT_FOUND: Woo devolvio un id distinto."
+                else:
+                    return entity, endpoint, "WOO_ID_PARENT_EXACT", ""
+        except Exception as exc:
+            endpoint_error = f"READ_ERROR: {exc}"
+
+    if not sku:
+        return None, "", "", endpoint_error or "UNRESOLVED_REMOTE_TARGET: falta SKU literal."
+    try:
+        rows = [
+            dict(candidate)
+            for candidate in _response_rows(
+                woo_client.get("products", params={"sku": sku, "per_page": 100, "status": "any"})
+            )
+            if _text(candidate.get("sku")) == sku
+        ]
+    except Exception as exc:
+        return None, "", "", endpoint_error or f"READ_ERROR: {exc}"
+    if len(rows) != 1:
+        reason = (
+            f"AMBIGUOUS_REMOTE_IDENTITY: SKU literal {sku} devolvio {len(rows)} targets."
+            if rows
+            else f"UNRESOLVED_REMOTE_TARGET: no hay target Woo exacto para SKU {sku}."
+        )
+        return None, "", "", endpoint_error or reason
+    entity = dict(rows[0])
+    try:
+        live_id = _positive_int(entity.get("id"), "Woo id")
+        if woo_id and live_id != int(woo_id):
+            return None, "", "", "AMBIGUOUS_REMOTE_IDENTITY: Woo ID live no coincide con el grafo."
+        if _live_woo_kind(entity) == "variation":
+            live_parent = _positive_int(entity.get("parent_id"), "Woo parent_id")
+            endpoint = f"products/{live_parent}/variations/{live_id}"
+        else:
+            endpoint = f"products/{live_id}"
+        return entity, endpoint, "WOO_SKU_EXACT_UNIQUE", ""
+    except Exception as exc:
+        return None, "", "", f"AMBIGUOUS_REMOTE_IDENTITY: {exc}"
 
 
 def resolve_live_direct_identity(
@@ -440,31 +506,32 @@ def _reconciliation_status(
     *,
     duplicate: bool,
 ) -> tuple[str, str]:
-    if str(row.get("excluded") or "").upper() == "YES":
-        return "QUARANTINED", _text(row.get("exclusion_reason")) or "Destino excluido por cuarentena."
     if duplicate:
         return "DUPLICATE", "La misma variacion Woo aparece mas de una vez en el resultado combinado."
     if not _text(row.get("combination_woo_id")) or not _text(row.get("combination_parent_woo_id")):
-        return "INVALID_COMPONENT_EDGE", "Falta identidad exacta de variacion o producto padre en el grafo."
+        return "UNRESOLVED_REMOTE_TARGET", "Falta identidad exacta de variacion o producto padre en el grafo."
     if not list(row.get("modified_components") or []):
-        return "INVALID_COMPONENT_EDGE", "El destino no conserva componentes modificados exactos."
+        return "UNRESOLVED_COMPOSITION", "El destino no conserva componentes modificados exactos."
     if any(not _positive_quantity(component.get("quantity")) for component in row.get("modified_components") or []):
-        return "INVALID_COMPONENT_EDGE", "El grafo contiene una cantidad de componente vacia o no positiva."
+        return "UNRESOLVED_COMPOSITION", "El grafo contiene una cantidad de componente vacia o no positiva."
     if entity is None:
-        if endpoint_error.startswith("WOO_NOT_FOUND"):
-            return "WOO_NOT_FOUND", endpoint_error
+        if "AMBIGUOUS_REMOTE_IDENTITY" in endpoint_error:
+            return "AMBIGUOUS_REMOTE_IDENTITY", endpoint_error
+        if endpoint_error.startswith("WOO_NOT_FOUND") or "UNRESOLVED_REMOTE_TARGET" in endpoint_error:
+            return "UNRESOLVED_REMOTE_TARGET", endpoint_error
         return "READ_ERROR", endpoint_error or "No se pudo leer la variacion Woo exacta."
     if _text(entity.get("sku")) != _text(row.get("combination_sku")):
-        return "SKU_MISMATCH", "El SKU live de Woo no coincide con el SKU literal del grafo."
+        return "AMBIGUOUS_REMOTE_IDENTITY", "El SKU live de Woo no coincide con el SKU literal del grafo."
     try:
         if _positive_int(entity.get("parent_id"), "Woo parent_id") != _positive_int(row.get("combination_parent_woo_id"), "graph parent id"):
-            return "PARENT_MISMATCH", "El parent_id live de Woo no coincide con el parent_id del grafo."
+            return "AMBIGUOUS_REMOTE_IDENTITY", "El parent_id live de Woo no coincide con el parent_id del grafo."
     except ValueError:
-        return "PARENT_MISMATCH", "Woo no devolvio un parent_id valido para la variacion."
-    if _text(entity.get("status")).lower() not in _PUBLISHED_STATUSES:
-        return "NOT_PUBLISHED", f"Estado Woo no publicable: {_text(entity.get('status')) or 'vacio'}."
-    if _effective_woo_price(dict(entity)) is None:
-        return "PRICE_MISSING", "Woo no devolvio un precio efectivo para la variacion."
+        return "AMBIGUOUS_REMOTE_IDENTITY", "Woo no devolvio un parent_id valido para la variacion."
+    effective = _effective_woo_price(dict(entity))
+    if effective is None or effective <= 0:
+        return "NO_BASE_PRICE", "Woo no devolvio un precio efectivo mayor que cero para la variacion."
+    if str(row.get("excluded") or "").upper() == "YES":
+        return "VALID", "Target Woo real resuelto; validacion live exacta completada."
     return "VALID", "Validacion live exacta completada."
 
 
@@ -524,21 +591,7 @@ def reconcile_live_combination_plan(
         endpoint = ""
         entity: dict[str, Any] | None = None
         endpoint_error = ""
-        if str(row.get("excluded") or "").upper() != "YES":
-            try:
-                woo_id = _positive_int(row.get("combination_woo_id"), "combination_woo_id")
-                parent_id = _positive_int(row.get("combination_parent_woo_id"), "combination_parent_woo_id")
-                endpoint = f"products/{parent_id}/variations/{woo_id}"
-                rows = _response_rows(woo_client.get(endpoint))
-                if len(rows) != 1:
-                    endpoint_error = "WOO_NOT_FOUND: Woo no devolvio una variation unica."
-                else:
-                    entity = dict(rows[0])
-                    if _positive_int(entity.get("id"), "Woo variation id") != woo_id:
-                        endpoint_error = "WOO_NOT_FOUND: Woo devolvio un id distinto."
-                        entity = None
-            except Exception as exc:
-                endpoint_error = f"READ_ERROR: {exc}"
+        entity, endpoint, remote_resolution_source, endpoint_error = _read_exact_combination_target(woo_client, row)
         status, reason = _reconciliation_status(
             row,
             entity,
@@ -574,6 +627,14 @@ def reconcile_live_combination_plan(
                 reason = "No se pudo calcular el delta derivado exacto."
         row.update({
             "woo_endpoint": endpoint,
+            "remote_resolution_source": remote_resolution_source,
+            "resolved_remote_key": (
+                f"variation:{row.get('combination_parent_woo_id')}:{row.get('combination_woo_id')}"
+                if status == "VALID"
+                else ""
+            ),
+            "resolved_woo_id": _text(row.get("combination_woo_id")) if status == "VALID" else "",
+            "resolved_parent_id": _text(row.get("combination_parent_woo_id")) if status == "VALID" else "",
             "woo_status": _text((entity or {}).get("status")),
             "combination_sku_woo": _text((entity or {}).get("sku")),
             "regular_price": _text((entity or {}).get("regular_price")),
@@ -587,7 +648,17 @@ def reconcile_live_combination_plan(
             "status": "READY" if status == "VALID" else f"BLOCKED_{status}",
             "publication_allowed": "YES" if status == "VALID" else "NO",
             "blocking_reason": "" if status == "VALID" else reason,
-            "impact_display_status": "VALID" if status == "VALID" else f"BLOCKED_{status}",
+            "impact_display_status": "READY" if status == "VALID" else f"BLOCKED_{status}",
+            "placeholder_relation_resolved": (
+                "YES"
+                if status == "VALID" and str(row.get("excluded") or "").upper() == "YES"
+                else "NO"
+            ),
+            "quarantine_resolved_via_live_woo": (
+                "YES"
+                if status == "VALID" and str(row.get("excluded") or "").upper() == "YES"
+                else "NO"
+            ),
             "future_pricing_payload": dict(future_pricing_payload),
             "pricing_strategy": pricing_strategy,
             "woo_price_context": {
@@ -619,8 +690,19 @@ def reconcile_live_combination_plan(
             })
 
     valid = [row for row in all_lines if row.get("validation_status") == "VALID"]
-    excluded = [row for row in all_lines if row.get("validation_status") == "QUARANTINED"]
-    blocked = [row for row in all_lines if row.get("validation_status") not in {"VALID", "QUARANTINED"}]
+    excluded = [
+        row for row in all_lines
+        if row.get("validation_status") == "QUARANTINED"
+        or (
+            str(row.get("excluded") or "").upper() == "YES"
+            and row.get("validation_status") != "VALID"
+        )
+    ]
+    blocked = [
+        row for row in all_lines
+        if row.get("validation_status") != "VALID"
+        and str(row.get("excluded") or "").upper() != "YES"
+    ]
     return {
         "derived_lines": valid,
         "blocked_lines": blocked,
@@ -635,10 +717,14 @@ def reconcile_live_combination_plan(
             "blocked": len(blocked),
             "excluded": len(excluded),
             "errors": sum(row.get("validation_status") == "READ_ERROR" for row in all_lines),
-            "price_missing": sum(row.get("validation_status") == "PRICE_MISSING" for row in all_lines),
-            "not_found": sum(row.get("validation_status") == "WOO_NOT_FOUND" for row in all_lines),
+            "price_missing": sum(row.get("validation_status") in {"PRICE_MISSING", "NO_BASE_PRICE"} for row in all_lines),
+            "no_base_price": sum(row.get("validation_status") == "NO_BASE_PRICE" for row in all_lines),
+            "not_found": sum(row.get("validation_status") in {"WOO_NOT_FOUND", "UNRESOLVED_REMOTE_TARGET"} for row in all_lines),
+            "unresolved_remote": sum(row.get("validation_status") == "UNRESOLVED_REMOTE_TARGET" for row in all_lines),
+            "unresolved_composition": sum(row.get("validation_status") == "UNRESOLVED_COMPOSITION" for row in all_lines),
             "not_published": sum(row.get("validation_status") == "NOT_PUBLISHED" for row in all_lines),
             "duplicates": sum(row.get("validation_status") == "DUPLICATE" for row in all_lines),
+            "quarantine_resolved": sum(row.get("quarantine_resolved_via_live_woo") == "YES" for row in all_lines),
             "quarantined": len(excluded),
         },
     }

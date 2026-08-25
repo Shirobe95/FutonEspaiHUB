@@ -352,8 +352,10 @@ class PriceProposalPersistenceRehydrationTests(unittest.TestCase):
         source = inspect.getsource(
             woocommerce_publish.sync_price_proposal_inventory_prices
         )
+        helper_source = inspect.getsource(woocommerce_publish._sync_verified_price_inventory_state)
         self.assertNotIn('table("price_change_proposals").update', source)
-        self.assertIn("sync_woocommerce_price_inventory_state", source)
+        self.assertIn("_sync_verified_price_inventory_state", source)
+        self.assertIn("sync_woocommerce_price_inventory_state", helper_source)
 
     def test_publish_records_distinct_publish_prices(self):
         source = inspect.getsource(

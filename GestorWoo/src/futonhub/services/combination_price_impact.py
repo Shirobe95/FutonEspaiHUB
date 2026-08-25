@@ -431,6 +431,9 @@ class CombinationPriceImpactService:
         self.combination_by_id = {
             _text(row.get("combination_woo_id")): dict(row) for row in self.price_combinations
         }
+        self.quarantined_combination_by_id = {
+            _text(row.get("combination_woo_id")): dict(row) for row in self.quarantined_combinations
+        }
         self.exclusion_by_id = {
             _text(row.get("combination_woo_id")): dict(row) for row in self.exclusions
         }
@@ -839,39 +842,91 @@ class CombinationPriceImpactService:
                 raise CombinationPriceImpactError(
                     f"Quarantined combination {combination_id} is missing from 001A.4 exclusions."
                 )
+            quarantine = self.quarantined_combination_by_id.get(combination_id, {})
             components: list[dict[str, Any]] = []
+            total_delta = Decimal("0")
+            trace_keys: set[str] = set()
+            unresolved_composition = False
             for edge_key in sorted(quarantine_hits[combination_id]):
                 edge, change = quarantine_hits[combination_id][edge_key]
+                quantity_text = _text(edge.get("quantity"))
+                try:
+                    quantity = _decimal(quantity_text, field="quarantine_component_quantity")
+                    if quantity <= 0:
+                        raise CombinationPriceImpactError("quarantine component quantity must be positive")
+                    weighted_delta = change["unit_delta"] * quantity
+                    total_delta += weighted_delta
+                except Exception:
+                    unresolved_composition = True
+                    weighted_delta = None
+                trace_keys.add(change["trace_key"])
                 components.append({
                     "component_item_id": _text(edge.get("component_item_id"))
                     or _text(edge.get("physical_item_id")),
                     "component_woo_id": _text(edge.get("component_woo_id")),
                     "component_sku": _text(edge.get("component_sku")),
-                    "quantity": _text(edge.get("quantity")),
+                    "quantity": quantity_text,
+                    "old_price": _money_text(change["old_price"]),
+                    "new_price": _money_text(change["new_price"]),
+                    "unit_delta": _money_text(change["unit_delta"]),
+                    "weighted_delta": _money_text(weighted_delta) if weighted_delta is not None else "",
                     "proposal_trace_key": change["trace_key"],
+                    "relationship_type": "QUARANTINED_EDGE",
+                    "relation": {
+                        "historical_edge_status": _text(edge.get("edge_status")),
+                        "effective_edge_status": effective_edge_status(edge),
+                        "historical_resolution_status": _text(edge.get("resolution_status")),
+                        "effective_resolution_status": effective_resolution_status(edge),
+                        "rule_used": _text(edge.get("rule_used")),
+                        "confidence": _text(edge.get("resolution_confidence")),
+                    },
                 })
+            current_price: Decimal | None = None
+            simulated: Decimal | None = None
+            try:
+                current_price = _money(_decimal(
+                    exclusion.get("current_price") or quarantine.get("effective_price"),
+                    field="quarantined_effective_price",
+                ))
+                simulated = _money(current_price + _money(total_delta))
+            except Exception:
+                current_price = None
+                simulated = None
+            total_delta = _money(total_delta)
             excluded.append({
                 "combination_woo_id": combination_id,
-                "combination_parent_woo_id": "",
+                "combination_parent_woo_id": _text(quarantine.get("combination_parent_woo_id")),
                 "combination_sku": _text(exclusion.get("combination_sku")),
                 "combination_name": _text(exclusion.get("combination_name")),
-                "effective_current_price": _text(exclusion.get("current_price")),
-                "component_delta": "",
-                "simulated_effective_price": "",
+                "woo_status": _text(quarantine.get("woo_status")),
+                "regular_price": _text(quarantine.get("regular_price")),
+                "sale_price": _text(quarantine.get("sale_price")),
+                "effective_current_price": _money_text(current_price),
+                "component_delta": "" if unresolved_composition else _money_text(total_delta),
+                "simulated_effective_price": "" if simulated is None or unresolved_composition else _money_text(simulated),
                 "modified_component_count": len(components),
                 "modified_components": components,
-                "proposal_trace_keys": sorted({row[1]["trace_key"] for row in quarantine_hits[combination_id].values()}),
-                "relationships": [],
-                "relation_rules": [],
+                "proposal_trace_keys": sorted(trace_keys),
+                "relationships": ["QUARANTINED_EDGE"],
+                "relation_rules": sorted({
+                    _text(component.get("relation", {}).get("rule_used"))
+                    for component in components
+                    if _text(component.get("relation", {}).get("rule_used"))
+                }),
                 "inclusion_reason": "",
                 "propagation_status": "BLOCKED_QUARANTINE",
                 "visual_state": "EXCLUIDA POR CUARENTENA",
                 "excluded": "YES",
                 "exclusion_reason": _text(exclusion.get("quarantine_reason")),
                 "quarantine_group_ids": sorted(_split_group_ids(exclusion.get("quarantine_group_ids"))),
-                "price_context": "NOT_EVALUATED_QUARANTINE",
-                "price_simulation_status": "BLOCKED",
-                "price_policy_reason": "Quarantined combinations cannot enter simulation or propagation.",
+                "quarantine_reason": _text(exclusion.get("quarantine_reason")),
+                "quarantine_status": _text(quarantine.get("quarantine_status")),
+                "worker_review_status": _text(quarantine.get("worker_review_status")),
+                "price_context": "QUARANTINE_REQUIRES_LIVE_WOO_RECONCILIATION",
+                "price_simulation_status": "UNRESOLVED_COMPOSITION" if unresolved_composition else "BLOCKED",
+                "price_policy_reason": (
+                    "Local quarantine retained as metadata; price-change eligibility requires live Woo target resolution."
+                ),
                 "publication_allowed": "NO",
             })
 
