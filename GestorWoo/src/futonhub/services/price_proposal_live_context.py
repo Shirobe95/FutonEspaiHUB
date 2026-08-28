@@ -13,6 +13,7 @@ from futonhub.services.price_combination_live_reconciliation import (
     make_read_only_session,
     reconcile_live_combination_plan,
 )
+from futonhub.services.price_woo_catalog_index import approved_local_combination_link_identity
 
 
 _CENT = Decimal("0.01")
@@ -166,6 +167,25 @@ def resolve_direct_woo_target(
         local_kind = _text(source.get("woo_item_kind") or source.get("item_kind") or snapshot.get("woo_item_kind")).lower()
         local_sku = _text(source.get("woo_sku") or snapshot.get("woo_sku") or snapshot.get("sku"))
         local_id = source.get("woo_id") or snapshot.get("woo_id")
+        local_parent = _text(source.get("woo_parent_id") or source.get("parent_woo_id") or snapshot.get("woo_parent_id") or snapshot.get("parent_woo_id"))
+        if approved_local_combination_link_identity(
+            item_id=item_id,
+            sku=sku,
+            local_kind=local_kind,
+            local_id=_text(local_id),
+            local_parent=local_parent,
+            local_woo_sku=local_sku,
+        ):
+            return {
+                "resolution_status": "RESOLVED",
+                "resolution_source": "APPROVED_LOCAL_COMBINATION_LINK",
+                "physical_item_id": item_id,
+                "physical_sku": sku,
+                "woo_id": _positive_int(local_id, "woo_id"),
+                "woo_parent_id": local_parent,
+                "woo_item_kind": local_kind,
+                "woo_sku": local_sku,
+            }
         if local_kind in {"product", "variation"} and local_sku == sku and local_id not in (None, ""):
             resolved = _source_identities(source, sku)
             return {"resolution_status": "RESOLVED", "resolution_source": "LOCAL_GRAPH_EXACT", **resolved}
@@ -300,7 +320,20 @@ def _graph_coverage_for_changes(
     for change in changes:
         physical_item_id = _text(change.get("physical_item_id"))
         physical_sku = _text(change.get("physical_sku"))
-        expectation = dict(resolver({"physical_item_id": physical_item_id, "physical_sku": physical_sku}))
+        try:
+            expectation = dict(resolver({"physical_item_id": physical_item_id, "physical_sku": physical_sku}))
+        except Exception as exc:
+            coverage.append({
+                "physical_item_id": physical_item_id,
+                "physical_sku": physical_sku,
+                "expected_count": 0,
+                "returned_count": 0,
+                "resolution_status": "GRAPH_LOAD_FAILED",
+                "status": "BLOCKED_GRAPH_COVERAGE",
+                "blocking_reason": f"No se pudo cargar la cobertura de combinaciones esperadas: {exc}",
+                "expected_count_source": "GRAPH_LOAD_FAILED",
+            })
+            continue
         expected_ids = {
             _text(row.get("combination_woo_id"))
             for row in expectation.get("destinations") or []
@@ -316,15 +349,22 @@ def _graph_coverage_for_changes(
         if status == "NO_COMBINATIONS_BY_DESIGN":
             outcome = "NO_COMBINATIONS_BY_DESIGN"
             blocking_reason = "No participa en combinaciones Woo. Solo se modificara el articulo directo."
+            expected_count_source = "GRAPH_LOADED_EMPTY"
+        elif _direct_target_allows_empty_graph(change, expectation):
+            outcome = "NO_DERIVED_COMBINATIONS"
+            blocking_reason = "Destino Woo directo resuelto; no hay combinaciones derivadas esperadas."
+            expected_count_source = "DIRECT_TARGET_VALID_GRAPH_EMPTY"
         elif status != "HAS_AFFECTED" or returned_ids != expected_ids or len(returned_ids) != expected_count:
             outcome = "BLOCKED_GRAPH_COVERAGE"
             blocking_reason = (
                 "No se pudieron recuperar las combinaciones esperadas "
                 f"para item_id={physical_item_id}, SKU={physical_sku}, esperadas={expected_count}."
             )
+            expected_count_source = _text(expectation.get("resolution_status") or status or "GRAPH_UNKNOWN")
         else:
             outcome = "HAS_AFFECTED"
             blocking_reason = ""
+            expected_count_source = "GRAPH_LOADED_WITH_EXPECTED"
         coverage.append({
             "physical_item_id": physical_item_id,
             "physical_sku": physical_sku,
@@ -333,8 +373,25 @@ def _graph_coverage_for_changes(
             "resolution_status": _text(expectation.get("resolution_status")),
             "status": outcome,
             "blocking_reason": blocking_reason,
+            "expected_count_source": expected_count_source,
         })
     return coverage
+
+
+def _direct_target_allows_empty_graph(
+    change: Mapping[str, Any],
+    expectation: Mapping[str, Any],
+) -> bool:
+    return (
+        int(expectation.get("expected_count") or 0) == 0
+        and _text(expectation.get("status")) == "IDENTITY_MISMATCH"
+        and _text(expectation.get("resolution_status")) == "IDENTITY_NOT_FOUND"
+        and _text(change.get("direct_target_status")) == "READY"
+        and _text(change.get("direct_resolution_source")) == "APPROVED_LOCAL_COMBINATION_LINK"
+        and _text(change.get("woo_id"))
+        and _text(change.get("woo_item_kind")).lower() in {"product", "variation"}
+        and _text(change.get("woo_sku"))
+    )
 
 
 def _existing_direct_changes(entries: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
@@ -692,6 +749,7 @@ def prepare_price_addition(
             trace = live_price_trace(
                 physical["physical_item_id"],
                 physical["physical_sku"],
+                source=source,
                 displayed_price=row.get("cached_price"),
                 supabase_cached_price=row.get("cached_price"),
                 woo_client=woo_client,
@@ -777,6 +835,12 @@ def prepare_price_addition(
                 "old_price": old_price,
                 "new_price": new_price,
                 "proposal_key": _text(row.get("key") or code),
+                "direct_target_status": "READY",
+                "direct_resolution_source": context.get("direct_resolution_source"),
+                "woo_id": identities.get("woo_id"),
+                "woo_parent_id": identities.get("woo_parent_id"),
+                "woo_item_kind": identities.get("woo_item_kind"),
+                "woo_sku": identities.get("woo_sku"),
             })
         if progress_callback is not None:
             progress_callback({

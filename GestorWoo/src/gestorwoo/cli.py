@@ -88,7 +88,7 @@ def main() -> int:
     rollback_parser.add_argument("--confirm", default="", help="Debe ser REVERTIR para ejecutar.")
     list_real_parser = subparsers.add_parser("cloud-list-real-price-proposals", help="Lista propuestas reales internas. No toca WooCommerce.")
     list_real_parser.add_argument("--status", default="pending", help="pending, approved, publishing, rejected, published, error, cancelled o all.")
-    list_real_parser.add_argument("--limit", type=int, default=50)
+    list_real_parser.add_argument("--limit", type=int, default=0, help="0 carga todo el historial accesible.")
     real_review_parser = subparsers.add_parser("cloud-review-real-price-proposal", help="Aprueba/rechaza propuesta real interna. Admin y worker. No publica WooCommerce.")
     real_review_parser.add_argument("decision", choices=["approved", "rejected"])
     real_review_parser.add_argument("--proposal-id", default="", help="Opcional. Si se omite, revisa la última propuesta pendiente no TEST.")

@@ -31,6 +31,14 @@ SESSION_USABLE_STATUSES = frozenset({
     "RECOVERED_BY_EXACT_VARIATION_SKU",
 })
 
+APPROVED_LOCAL_COMBINATION_LINKS = {
+    # Human-confirmed Tatami plegable + futon portatil commercial rows. These
+    # ERP physical identities have literal business SKUs, while Woo exposes the
+    # sellable variation with its exact component SKU.
+    ("208001", "0208001"): ("variation", "4558", "3657", "0201011|0808001"),
+    ("216001", "0216001"): ("variation", "4561", "3657", "0201011|0816001"),
+}
+
 
 def _text(value: Any) -> str:
     return "" if value is None else str(value).strip()
@@ -268,6 +276,45 @@ def _terminal_context(item_id: str, sku: str, status: str, reason: str) -> dict[
     }
 
 
+def approved_local_combination_link_identity(
+    *,
+    item_id: str,
+    sku: str,
+    local_kind: str,
+    local_id: str,
+    local_parent: str,
+    local_woo_sku: str,
+) -> bool:
+    expected = APPROVED_LOCAL_COMBINATION_LINKS.get((item_id, sku))
+    if expected is None:
+        return False
+    return (
+        _text(local_kind).lower(),
+        _text(local_id),
+        _text(local_parent),
+        _text(local_woo_sku),
+    ) == expected
+
+
+def _approved_local_combination_link(
+    *,
+    item_id: str,
+    sku: str,
+    local_kind: str,
+    local_id: str,
+    local_parent: str,
+    local_woo_sku: str,
+) -> bool:
+    return approved_local_combination_link_identity(
+        item_id=item_id,
+        sku=sku,
+        local_kind=local_kind,
+        local_id=local_id,
+        local_parent=local_parent,
+        local_woo_sku=local_woo_sku,
+    )
+
+
 def resolve_physical_woo_identity(
     row: Mapping[str, Any],
     *,
@@ -295,6 +342,7 @@ def resolve_physical_woo_identity(
     local_kind = _text(source.get("woo_item_kind") or row.get("woo_item_kind")).lower()
     local_id = _text(source.get("woo_id") or row.get("woo_id"))
     local_parent = _text(source.get("woo_parent_id") or row.get("woo_parent_id"))
+    local_woo_sku = _text(source.get("woo_sku") or row.get("woo_sku"))
     local_error = ""
     if local_kind in {"product", "variation"} and local_id:
         local = woo_index.entity(kind=local_kind, woo_id=local_id, parent_woo_id=local_parent)
@@ -303,6 +351,27 @@ def resolve_physical_woo_identity(
                 item_id=item_id, physical_sku=sku, entity=local,
                 resolution_source="LOCAL_LINK_WOO_INDEX_VERIFIED", resolution_status="LOCAL_LINK_VERIFIED",
             )
+        if (
+            local is not None
+            and _text(local.get("woo_sku")) == local_woo_sku
+            and _approved_local_combination_link(
+                item_id=item_id,
+                sku=sku,
+                local_kind=local_kind,
+                local_id=local_id,
+                local_parent=local_parent,
+                local_woo_sku=local_woo_sku,
+            )
+        ):
+            context = _context_from_entity(
+                item_id=item_id,
+                physical_sku=sku,
+                entity=local,
+                resolution_source="APPROVED_LOCAL_COMBINATION_LINK",
+                resolution_status="LOCAL_LINK_VERIFIED",
+            )
+            context["approved_combination_link"] = "YES"
+            return context
         local_error = "El enlace Woo local no coincide con el objeto o SKU literal live."
 
     approved = dict((approved_edges_by_item_id or {}).get(item_id) or {})

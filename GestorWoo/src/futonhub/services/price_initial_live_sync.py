@@ -13,6 +13,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, Callable, Iterable, Mapping
 
 from futonhub.cloud.services.woocommerce_publish import _effective_woo_price
+from futonhub.services.price_woo_catalog_index import approved_local_combination_link_identity
 
 
 ProgressCallback = Callable[[dict[str, Any]], None]
@@ -118,11 +119,24 @@ def _exact_destination_key(identity: Mapping[str, Any]) -> str:
     physical_sku = _text(identity.get("physical_sku"))
     woo_sku = _text(identity.get("woo_sku"))
     parent_id = _text(identity.get("woo_parent_id"))
-    if kind not in {"product", "variation"} or not woo_id or not physical_sku or woo_sku != physical_sku:
+    if kind not in {"product", "variation"} or not woo_id or not physical_sku:
         return ""
     if kind == "variation" and not parent_id:
         return ""
+    if woo_sku != physical_sku and not _is_approved_combination_link(identity):
+        return ""
     return f"{kind}:{woo_id}:{parent_id}"
+
+
+def _is_approved_combination_link(identity: Mapping[str, Any]) -> bool:
+    return approved_local_combination_link_identity(
+        item_id=_text(identity.get("physical_item_id")),
+        sku=_text(identity.get("physical_sku")),
+        local_kind=_text(identity.get("woo_item_kind")).lower(),
+        local_id=_text(identity.get("woo_id")),
+        local_parent=_text(identity.get("woo_parent_id")),
+        local_woo_sku=_text(identity.get("woo_sku")),
+    )
 
 
 def _error_context(
@@ -173,12 +187,13 @@ def _linked_live_price_trace(identity: Mapping[str, Any], woo_client: Any) -> di
     woo_id = _text(identity.get("woo_id"))
     parent_id = _text(identity.get("woo_parent_id"))
     kind = _text(identity.get("woo_item_kind")).lower()
-    sku = _text(identity.get("physical_sku"))
+    physical_sku = _text(identity.get("physical_sku"))
+    expected_woo_sku = _text(identity.get("woo_sku")) if _is_approved_combination_link(identity) else physical_sku
     endpoint = f"products/{woo_id}" if kind == "product" else f"products/{parent_id}/variations/{woo_id}"
     entity = _response_object(woo_client.get(endpoint))
     if _text(entity.get("id")) != woo_id:
         raise RuntimeError("Woo devolvio un id distinto del enlace exacto solicitado.")
-    if _text(entity.get("sku")) != sku:
+    if _text(entity.get("sku")) != expected_woo_sku:
         raise RuntimeError("Woo devolvio un SKU distinto del articulo fisico exacto.")
     if kind == "variation" and _text(entity.get("parent_id")) != parent_id:
         raise RuntimeError("Woo devolvio una variacion con parent_id distinto.")
@@ -188,7 +203,7 @@ def _linked_live_price_trace(identity: Mapping[str, Any], woo_client: Any) -> di
     return {
         "status": "READY",
         "physical_item_id": _text(identity.get("physical_item_id")),
-        "physical_sku": sku,
+        "physical_sku": physical_sku,
         "resolved_woo_id": int(woo_id),
         "resolved_parent_woo_id": parent_id or None,
         "resolved_item_kind": kind,
@@ -198,12 +213,12 @@ def _linked_live_price_trace(identity: Mapping[str, Any], woo_client: Any) -> di
         "woo_effective_price": f"{Decimal(str(effective)).quantize(Decimal('0.01')):.2f}",
         "final_old_price": float(Decimal(str(effective))),
         "read_at": datetime.now(timezone.utc).isoformat(),
-        "resolution_source": "LOCAL_LINK_WOO_GET_VERIFIED",
+        "resolution_source": "APPROVED_LOCAL_COMBINATION_LINK" if expected_woo_sku != physical_sku else "LOCAL_LINK_WOO_GET_VERIFIED",
         "resolution": {
             "woo_id": int(woo_id),
             "woo_parent_id": parent_id or None,
             "woo_item_kind": kind,
-            "woo_sku": sku,
+            "woo_sku": expected_woo_sku,
             "entity": entity,
         },
     }

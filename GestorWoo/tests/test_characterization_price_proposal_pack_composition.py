@@ -1491,7 +1491,8 @@ class PriceProposalPackCompositionTests(unittest.TestCase):
         source = inspect.getsource(FutonHubErpPrototype._refresh_price_proposals)
         before_worker, worker = source.split("def worker()", 1)
 
-        self.assertIn('limit=200', worker)
+        self.assertIn('diagnose_real_price_proposals(self._cloud_session, status="all")', worker)
+        self.assertNotIn('limit=200', worker)
         active_refresh = before_worker.split('overlay = self._price_start_working_overlay', 1)[1]
         self.assertNotIn('self._show_view("precios")', active_refresh)
         self.assertIn("_finish_price_proposals_refresh", worker)

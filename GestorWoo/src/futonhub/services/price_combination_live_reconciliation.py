@@ -21,6 +21,7 @@ from futonhub.services.combination_price_impact import (
     CombinationPriceImpactError,
     CombinationPriceImpactService,
 )
+from futonhub.services.price_woo_catalog_index import approved_local_combination_link_identity
 
 
 _CENT = Decimal("0.01")
@@ -229,6 +230,46 @@ def _read_woo_entity(woo_client: Any, candidate: Mapping[str, Any]) -> tuple[dic
     return entity, endpoint
 
 
+def _approved_source_candidate(
+    item_id: str,
+    sku: str,
+    source: Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
+    raw_source = dict(source or {})
+    snapshot = raw_source.get("item_snapshot") if isinstance(raw_source.get("item_snapshot"), Mapping) else {}
+    local_kind = _text(
+        raw_source.get("woo_item_kind")
+        or raw_source.get("item_kind")
+        or snapshot.get("woo_item_kind")
+    ).lower()
+    local_id = _text(raw_source.get("woo_id") or snapshot.get("woo_id"))
+    local_parent = _text(
+        raw_source.get("woo_parent_id")
+        or raw_source.get("parent_woo_id")
+        or snapshot.get("woo_parent_id")
+        or snapshot.get("parent_woo_id")
+    )
+    local_woo_sku = _text(raw_source.get("woo_sku") or snapshot.get("woo_sku") or snapshot.get("sku"))
+    if not approved_local_combination_link_identity(
+        item_id=item_id,
+        sku=sku,
+        local_kind=local_kind,
+        local_id=local_id,
+        local_parent=local_parent,
+        local_woo_sku=local_woo_sku,
+    ):
+        return None
+    return {
+        "woo_id": int(local_id),
+        "woo_parent_id": local_parent,
+        "woo_item_kind": local_kind,
+        "woo_sku": local_woo_sku,
+        "name": "",
+        "replica_status": "",
+        "resolution_source": "APPROVED_LOCAL_COMBINATION_LINK",
+    }
+
+
 def _live_woo_kind(row: Mapping[str, Any]) -> str:
     row_type = _text(row.get("type")).lower()
     try:
@@ -300,6 +341,7 @@ def resolve_live_direct_identity(
     physical_item_id: Any,
     physical_sku: Any,
     *,
+    source: Mapping[str, Any] | None = None,
     session: ReadOnlySession | None,
     woo_client: Any,
 ) -> dict[str, Any]:
@@ -325,6 +367,32 @@ def resolve_live_direct_identity(
     }
     if not item_id or not sku:
         return {**base, "resolution_status": "NOT_FOUND", "reason": "Falta item_id o SKU fisico exacto."}
+
+    approved_candidate = _approved_source_candidate(item_id, sku, source)
+    if approved_candidate is not None:
+        try:
+            entity, endpoint = _read_woo_entity(woo_client, approved_candidate)
+        except Exception as exc:
+            return {
+                **base,
+                **approved_candidate,
+                "resolution_status": "LOOKUP_ERROR",
+                "reason": str(exc),
+            }
+        return {
+            **base,
+            **approved_candidate,
+            "woo_id": int(approved_candidate["woo_id"]),
+            "woo_parent_id": _text(approved_candidate.get("woo_parent_id")) or None,
+            "woo_sku": _text(entity.get("sku")),
+            "woo_name": _text(entity.get("name")),
+            "woo_status": _text(entity.get("status")),
+            "woo_endpoint": endpoint,
+            "entity": entity,
+            "resolution_status": "RESOLVED",
+            "reason": "",
+            "approved_combination_link": "YES",
+        }
 
     replica = _replica_exact_candidates(session, sku)
     product_candidates: list[dict[str, Any]] = []
@@ -386,6 +454,7 @@ def live_price_trace(
     physical_item_id: Any,
     physical_sku: Any,
     *,
+    source: Mapping[str, Any] | None = None,
     displayed_price: Any = None,
     supabase_cached_price: Any = None,
     session: ReadOnlySession | None,
@@ -395,6 +464,7 @@ def live_price_trace(
     resolution = resolve_live_direct_identity(
         physical_item_id,
         physical_sku,
+        source=source,
         session=session,
         woo_client=woo_client,
     )

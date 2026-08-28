@@ -78,7 +78,15 @@ class ReadOnlyWoo:
         yield from self.variations.get(parent_id, [])
 
 
-def sync_row(item_id: str, sku: str, *, local_id: str = "", local_kind: str = "", parent_id: str = "") -> dict[str, object]:
+def sync_row(
+    item_id: str,
+    sku: str,
+    *,
+    local_id: str = "",
+    local_kind: str = "",
+    parent_id: str = "",
+    local_woo_sku: str = "",
+) -> dict[str, object]:
     return {
         "item_id": item_id,
         "physical_item_id": item_id,
@@ -91,6 +99,7 @@ def sync_row(item_id: str, sku: str, *, local_id: str = "", local_kind: str = ""
             "woo_id": local_id,
             "woo_item_kind": local_kind,
             "woo_parent_id": parent_id,
+            "woo_sku": local_woo_sku,
             "item_snapshot": {"item_id": item_id, "item_record_type": "simple", "is_pack": False},
         },
     }
@@ -143,6 +152,61 @@ class PriceComb001B83CatalogueReconciliationTests(unittest.TestCase):
         index = build_woo_read_only_index(ReadOnlyWoo([product(10, "0201001")]))
         result = reconcile_woo_contexts([sync_row("1", "0201001", local_id="10", local_kind="product")], woo_index=index)
         self.assertEqual(result["live_price_context_by_physical_item"]["1"]["sync_status"], "LOCAL_LINK_VERIFIED")
+
+    def test_approved_tatami_portable_combination_links_are_verified(self):
+        variations = {
+            3657: [
+                product(4558, "0201011|0808001", price="232.00"),
+                product(4561, "0201011|0816001", price="232.00"),
+            ]
+        }
+        index = build_woo_read_only_index(ReadOnlyWoo([product(3657, "", kind="variable")], variations))
+        result = reconcile_woo_contexts(
+            [
+                sync_row(
+                    "208001",
+                    "0208001",
+                    local_id="4558",
+                    local_kind="variation",
+                    parent_id="3657",
+                    local_woo_sku="0201011|0808001",
+                ),
+                sync_row(
+                    "216001",
+                    "0216001",
+                    local_id="4561",
+                    local_kind="variation",
+                    parent_id="3657",
+                    local_woo_sku="0201011|0816001",
+                ),
+            ],
+            woo_index=index,
+        )
+        contexts = result["live_price_context_by_physical_item"]
+        self.assertEqual(contexts["208001"]["sync_status"], "LOCAL_LINK_VERIFIED")
+        self.assertEqual(contexts["208001"]["resolution_source"], "APPROVED_LOCAL_COMBINATION_LINK")
+        self.assertEqual(contexts["208001"]["woo_sku"], "0201011|0808001")
+        self.assertEqual(contexts["216001"]["sync_status"], "LOCAL_LINK_VERIFIED")
+        self.assertEqual(contexts["216001"]["resolution_source"], "APPROVED_LOCAL_COMBINATION_LINK")
+        self.assertEqual(contexts["216001"]["woo_sku"], "0201011|0816001")
+
+    def test_unapproved_combination_sku_local_link_still_requires_recovery(self):
+        variations = {3657: [product(4558, "0201011|0808001", price="232.00")]}
+        index = build_woo_read_only_index(ReadOnlyWoo([product(3657, "", kind="variable")], variations))
+        result = reconcile_woo_contexts(
+            [
+                sync_row(
+                    "999001",
+                    "0999001",
+                    local_id="4558",
+                    local_kind="variation",
+                    parent_id="3657",
+                    local_woo_sku="0201011|0808001",
+                )
+            ],
+            woo_index=index,
+        )
+        self.assertEqual(result["live_price_context_by_physical_item"]["999001"]["sync_status"], "LINK_RECOVERY_REQUIRED")
 
     def test_broken_local_link_recovers_only_exact_product_sku(self):
         index = build_woo_read_only_index(ReadOnlyWoo([product(10, "0201001")]))

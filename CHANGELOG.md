@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.6.0 · Proposal History & Price Impact Catalogue
+
+- Cambio de Precios: refuerza la resolucion Woo de Tatamis Plegables con
+  identidad remota exacta compartida entre catalogo, impactos y publicacion.
+- Cambio de Precios: corrige el coverage del grafo para targets directos sin
+  derivados, manteniendo comportamiento fail-closed ante fallos de carga.
+- Cambio de Precios: excluye `208001` y `216001` del catalogo seleccionable de
+  Nueva Propuesta sin perderlos como targets derivados publicables/verificables.
+- Cambio de Precios: preserva impactos derivados del Tatami Plegable 90 hacia
+  Crudo, Negro y Marron Chocolate.
+- Propuestas: elimina limites fijos ocultos en el historial y carga todas las
+  propuestas accesibles en orden mas reciente primero.
+- Propuestas: una nueva propuesta guardada no sobrescribe otra pendiente del
+  mismo target salvo actualizacion explicita por `proposal_id`.
+- Woo/Fundas: mantiene los mappings corregidos durante mantenimiento y las
+  regresiones de publicacion, sale_price, rollback, partial success y
+  verificacion live.
+- Smoke humano: `HUMAN_PLEGABLE_SELECTABLE_SMOKE=PASS_REAL` y
+  `HUMAN_PROPOSAL_HISTORY_SMOKE=PASS_REAL`.
+
 ## 0.5.1 · Price Publication Reliability
 
 - Cambio de Precios: consolida la publicacion fiable de precios WooCommerce con

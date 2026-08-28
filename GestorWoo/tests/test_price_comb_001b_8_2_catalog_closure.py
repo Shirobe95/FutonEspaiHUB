@@ -33,6 +33,42 @@ class Woo:
         return dict(self.entities[endpoint])
 
 
+def expected_destination(woo_id: str, item_id: str = "208001", sku: str = "0208001") -> dict:
+    return {
+        "combination_woo_id": woo_id,
+        "modified_components": [{
+            "component_item_id": item_id,
+            "component_sku": sku,
+            "quantity": "1",
+        }],
+    }
+
+
+class EmptyApprovedDirectGraph:
+    def affected_destinations_for_identity(self, _identity: dict) -> dict:
+        return {
+            "status": "IDENTITY_MISMATCH",
+            "resolution_status": "IDENTITY_NOT_FOUND",
+            "destinations": [],
+            "expected_count": 0,
+        }
+
+
+class PartialCoverageGraph:
+    def affected_destinations_for_identity(self, _identity: dict) -> dict:
+        return {
+            "status": "HAS_AFFECTED",
+            "resolution_status": "RESOLVED_EXACT",
+            "destinations": [expected_destination("10"), expected_destination("11")],
+            "expected_count": 2,
+        }
+
+
+class FailingGraph:
+    def affected_destinations_for_identity(self, _identity: dict) -> dict:
+        raise RuntimeError("runtime graph unavailable")
+
+
 def product(woo_id: int, sku: str) -> dict:
     return {
         "id": woo_id,
@@ -276,6 +312,55 @@ class UniversalCombinationIndexTests(unittest.TestCase):
         )
         self.assertEqual(no_combo[0]["status"], "NO_COMBINATIONS_BY_DESIGN")
         self.assertEqual(missing[0]["status"], "BLOCKED_GRAPH_COVERAGE")
+
+    def test_loaded_empty_graph_allows_approved_direct_target(self):
+        coverage = _graph_coverage_for_changes(
+            EmptyApprovedDirectGraph(),
+            [{
+                "physical_item_id": "208001",
+                "physical_sku": "0208001",
+                "direct_target_status": "READY",
+                "direct_resolution_source": "APPROVED_LOCAL_COMBINATION_LINK",
+                "woo_id": "4558",
+                "woo_item_kind": "variation",
+                "woo_sku": "0201011|0808001",
+            }],
+            {"included_combinations": []},
+        )
+
+        self.assertEqual(coverage[0]["status"], "NO_DERIVED_COMBINATIONS")
+        self.assertEqual(coverage[0]["expected_count"], 0)
+        self.assertEqual(coverage[0]["expected_count_source"], "DIRECT_TARGET_VALID_GRAPH_EMPTY")
+
+    def test_partial_expected_graph_coverage_still_blocks(self):
+        coverage = _graph_coverage_for_changes(
+            PartialCoverageGraph(),
+            [{
+                "physical_item_id": "208001",
+                "physical_sku": "0208001",
+                "direct_target_status": "READY",
+                "direct_resolution_source": "APPROVED_LOCAL_COMBINATION_LINK",
+                "woo_id": "4558",
+                "woo_item_kind": "variation",
+                "woo_sku": "0201011|0808001",
+            }],
+            {"included_combinations": [expected_destination("10")]},
+        )
+
+        self.assertEqual(coverage[0]["status"], "BLOCKED_GRAPH_COVERAGE")
+        self.assertEqual(coverage[0]["expected_count"], 2)
+        self.assertEqual(coverage[0]["returned_count"], 1)
+
+    def test_graph_load_failure_still_blocks_fail_closed(self):
+        coverage = _graph_coverage_for_changes(
+            FailingGraph(),
+            [{"physical_item_id": "208001", "physical_sku": "0208001"}],
+            {"included_combinations": []},
+        )
+
+        self.assertEqual(coverage[0]["status"], "BLOCKED_GRAPH_COVERAGE")
+        self.assertEqual(coverage[0]["resolution_status"], "GRAPH_LOAD_FAILED")
+        self.assertEqual(coverage[0]["expected_count_source"], "GRAPH_LOAD_FAILED")
 
     def test_index_and_audit_path_have_no_family_specific_logic_or_clients(self):
         source = inspect.getsource(sys.modules[CombinationPriceImpactService.__module__])

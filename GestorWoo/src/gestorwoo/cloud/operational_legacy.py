@@ -1638,31 +1638,8 @@ def review_latest_real_price_proposal(session, decision: str, proposal_id: str |
 
 
 
-def list_real_price_proposals(session, status: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
+def list_real_price_proposals(session, status: str | None = None, limit: int | None = None) -> list[dict[str, Any]]:
     return price_proposal_service.list_real_price_proposals(session, status, limit)
-    """Lista propuestas reales internas para bandeja operativa.
-
-    Excluye propuestas de test marcadas en source_row.test.
-    """
-    normalized_status = (status or "").strip().lower()
-    if normalized_status and normalized_status != "all" and normalized_status not in PRICE_PROPOSAL_STATUSES:
-        raise CloudAuditError(
-            "Estado invalido. Usa: "
-            + ", ".join(sorted(PRICE_PROPOSAL_STATUSES))
-            + " o all."
-        )
-    query = session.client.table("price_change_proposals").select("*").order("created_at", desc=True).limit(max(1, min(int(limit or 50), 200)))
-    if normalized_status and normalized_status != "all":
-        query = query.eq("status", normalized_status)
-    resp = query.execute()
-    rows = getattr(resp, "data", None) or []
-    result: list[dict[str, Any]] = []
-    for row in rows:
-        source = row.get("source_row") or {}
-        if source.get("test") is True:
-            continue
-        result.append(row)
-    return result
 
 
 def format_real_price_proposals(rows: list[dict[str, Any]]) -> str:
@@ -1701,7 +1678,7 @@ def format_real_price_proposals(rows: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
-def run_cloud_list_real_price_proposals(status: str = "pending", limit: int = 50) -> int:
+def run_cloud_list_real_price_proposals(status: str = "pending", limit: int | None = None) -> int:
     try:
         session, _settings = _login_from_console()
         rows = list_real_price_proposals(session, status=status, limit=limit)

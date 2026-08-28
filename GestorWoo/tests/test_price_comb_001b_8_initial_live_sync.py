@@ -32,6 +32,13 @@ def product(woo_id: int, sku: str, price: str = "134.90") -> dict:
     }
 
 
+def variation(woo_id: int, parent_id: int, sku: str, price: str = "134.90") -> dict:
+    row = product(woo_id, sku, price)
+    row["type"] = "variation"
+    row["parent_id"] = parent_id
+    return row
+
+
 class Query:
     def __init__(self, rows):
         self.rows = [dict(row) for row in rows]
@@ -99,6 +106,29 @@ def row(item_id="201001", sku="0201001", woo_id=4548, cached_price="99.00") -> d
     }
 
 
+def approved_plegable_row(
+    item_id="208001",
+    sku="0208001",
+    woo_id=4558,
+    parent_id=3657,
+    woo_sku="0201011|0808001",
+) -> dict:
+    return {
+        "code": sku,
+        "name": f"Plegable {sku}",
+        "cached_price": "99.00",
+        "source": {
+            "physical_item_id": item_id,
+            "physical_sku": sku,
+            "woo_id": str(woo_id),
+            "woo_parent_id": str(parent_id),
+            "woo_item_kind": "variation",
+            "woo_sku": woo_sku,
+            "item_snapshot": {"item_id": item_id, "item_record_type": "simple", "is_pack": False},
+        },
+    }
+
+
 class PriceComb001B8InitialLiveSyncTests(unittest.TestCase):
     def _sync(self, rows, woo=None, events=None):
         woo = woo or Woo({"products/4548": product(4548, "0201001")})
@@ -133,6 +163,40 @@ class PriceComb001B8InitialLiveSyncTests(unittest.TestCase):
         self.assertEqual(context["sale_price"], "134.90")
         self.assertEqual(context["price_source"], "WOO_LIVE")
         self.assertEqual(context["sync_status"], "READY")
+
+    def test_approved_plegable_link_uses_compound_remote_sku(self):
+        woo = Woo({
+            "products/3657/variations/4558": variation(4558, 3657, "0201011|0808001", "232.00"),
+        })
+
+        result, woo = self._sync([approved_plegable_row()], woo)
+
+        context = result["live_price_context_by_physical_item"]["208001"]
+        self.assertEqual(context["sync_status"], "READY")
+        self.assertEqual(context["physical_sku"], "0208001")
+        self.assertEqual(context["woo_id"], 4558)
+        self.assertEqual(context["woo_parent_id"], "3657")
+        self.assertEqual(context["woo_sku"], "0201011|0808001")
+        self.assertEqual(context["effective_price"], "232.00")
+        self.assertEqual(context["price_source_trace"]["resolution_source"], "APPROVED_LOCAL_COMBINATION_LINK")
+        self.assertEqual(woo.reads, [("products/3657/variations/4558", {})])
+
+    def test_unapproved_compound_link_remains_no_woo_link(self):
+        unapproved = approved_plegable_row(
+            item_id="999001",
+            sku="0999001",
+            woo_id=4558,
+            parent_id=3657,
+            woo_sku="0201011|0808001",
+        )
+
+        result, woo = self._sync([unapproved], Woo({
+            "products/3657/variations/4558": variation(4558, 3657, "0201011|0808001", "232.00"),
+        }))
+
+        context = result["live_price_context_by_physical_item"]["999001"]
+        self.assertEqual(context["sync_status"], "NO_WOO_LINK")
+        self.assertEqual(woo.reads, [])
 
     # 4. Progress exposes processed and total counters.
     def test_progress_exposes_processed_and_total(self):

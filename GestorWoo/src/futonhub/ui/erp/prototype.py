@@ -130,7 +130,11 @@ from futonhub.services.price_catalog_audit import (
     write_filter_performance,
 )
 from futonhub.services.inventory_visibility import InventoryVisibilityOverrides
-from futonhub.services.price_catalog_reconciliation import operational_price_catalogue_rows, reconcile_canonical_catalogue
+from futonhub.services.price_catalog_reconciliation import (
+    operational_price_catalogue_rows,
+    price_proposal_selectable_catalogue_rows,
+    reconcile_canonical_catalogue,
+)
 from futonhub.services.price_woo_catalog_index import (
     SESSION_USABLE_STATUSES,
     build_woo_read_only_index,
@@ -3089,7 +3093,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
 
         def worker() -> None:
             try:
-                diagnostic = diagnose_real_price_proposals(self._cloud_session, status="all", limit=200)
+                diagnostic = diagnose_real_price_proposals(self._cloud_session, status="all")
                 rows = list(diagnostic.get("rows") or [])
                 proposals = self._price_group_cloud_proposals(rows)
                 self.after(0, lambda: self._finish_price_proposals_refresh(
@@ -4537,6 +4541,21 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             normalized["filter_family"] = "Camas"
         return normalized
 
+    def _price_selectable_catalog_items(self, items: list[InventoryItem]) -> list[InventoryItem]:
+        """Keep impact-only operational rows out of the main proposal picker."""
+        selectable: list[InventoryItem] = []
+        for item in items:
+            raw = dict(item.raw or {})
+            item_id = str(raw.get("item_id") or raw.get("physical_item_id") or "").strip()
+            row = {
+                **raw,
+                "item_id": item_id or str(item.code or "").strip(),
+                "physical_item_id": str(raw.get("physical_item_id") or item_id or item.code or "").strip(),
+            }
+            if price_proposal_selectable_catalogue_rows([row]):
+                selectable.append(item)
+        return selectable
+
     def _price_prepare_catalog_filter_cache(self, items: list[InventoryItem], generation: int) -> None:
         """Resolve hierarchy metadata once for the current catalogue generation."""
         if int(self.__dict__.get("_price_filter_metadata_generation", 0) or 0) == generation:
@@ -4990,12 +5009,13 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 self._show_view("precios")
             return
         self._price_catalog_items = list(items)
+        selectable_items = self._price_selectable_catalog_items(items)
         self._price_catalog_loaded_once = True
-        self._price_available_items = list(items)
+        self._price_available_items = list(selectable_items)
         self._price_catalog_stage_counts = dict(stage_counts or {"unified_rows": len(items)})
         self._price_catalog_reconciliation = dict(reconciliation or {})
         try:
-            self._price_prepare_catalog_filter_cache(list(items), generation)
+            self._price_prepare_catalog_filter_cache(list(selectable_items), generation)
         except CatalogFilterConfigurationError as exc:
             self._price_filter_metadata_by_physical_item = {}
             self._price_filter_options_cache = {}
@@ -5218,10 +5238,12 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             self.__dict__.setdefault("_price_filter_performance", {})["audit_write_error"] = str(exc)
         self._price_live_sync_completed = True
         items = list(self._price_catalog_items or self._price_available_items or self._inventory_items)
-        self._price_search_results = self._price_results_from_items(items)
+        selectable_items = self._price_selectable_catalog_items(items)
+        self._price_available_items = list(selectable_items)
+        self._price_search_results = self._price_results_from_items(selectable_items)
         self._price_line_sources = {
             item.code: self._price_source_from_inventory_item(item)
-            for item in items
+            for item in selectable_items
             if self._price_source_from_inventory_item(item)
         }
         final_counts = dict((self._price_live_sync_summary or {}).get("counts") or {})
@@ -5446,9 +5468,10 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
     def _finish_price_edit_items(self, items: list[InventoryItem], error: str, generation: int | None = None) -> None:
         if generation is not None and generation != int(getattr(self, "_price_items_generation", 0) or 0):
             return
-        self._price_available_items = list(items)
+        selectable_items = self._price_selectable_catalog_items(items)
+        self._price_available_items = list(selectable_items)
         self._price_live_sync_required = self._cloud_session is not None
-        self._price_search_results = self._price_results_from_items(items)
+        self._price_search_results = self._price_results_from_items(selectable_items)
         self._price_items_error = error
         self._price_items_loading = False
         self._price_candidate_page = 0
@@ -5456,13 +5479,13 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         self._price_selected_candidate_ids = set()
         self._price_line_sources = {
             item.code: self._price_source_from_inventory_item(item)
-            for item in items
+            for item in selectable_items
             if self._price_source_from_inventory_item(item)
         }
-        if not self._price_edit_selected_code and items:
-            self._price_edit_selected_code = items[0].code
+        if not self._price_edit_selected_code and selectable_items:
+            self._price_edit_selected_code = selectable_items[0].code
         missing_context_items = [
-            item for item in self._price_live_sync_candidate_items(items)
+            item for item in self._price_live_sync_candidate_items(selectable_items)
             if self._price_physical_context_key(
                 self._price_source_from_inventory_item(item),
                 item.code,

@@ -238,6 +238,48 @@ class PriceComb001B7LiveReconciliationTests(unittest.TestCase):
         self.assertEqual(result["woo_endpoint"], "products/900/variations/12345")
         self.assertNotIn(("products/12345", {}), woo.reads)
 
+    def test_approved_plegable_208001_uses_shared_remote_identity(self):
+        source = {
+            "physical_item_id": "208001",
+            "physical_sku": "0208001",
+            "woo_id": "4558",
+            "woo_parent_id": "3657",
+            "woo_item_kind": "variation",
+            "woo_sku": "0201011|0808001",
+        }
+        woo = Woo(variations={
+            "products/3657/variations/4558": variation(4558, 3657, "0201011|0808001", "232.00"),
+        })
+
+        trace = live_price_trace("208001", "0208001", source=source, session=None, woo_client=woo)
+
+        self.assertEqual(trace["status"], "READY")
+        self.assertEqual(trace["resolution_source"], "APPROVED_LOCAL_COMBINATION_LINK")
+        self.assertEqual(trace["resolution"]["woo_id"], 4558)
+        self.assertEqual(trace["resolution"]["woo_sku"], "0201011|0808001")
+        self.assertEqual(trace["woo_endpoint"], "products/3657/variations/4558")
+        self.assertEqual(trace["woo_effective_price"], "232.00")
+        self.assertEqual(woo.reads, [("products/3657/variations/4558", {})])
+
+    def test_unapproved_similar_compound_link_still_blocks_direct_resolution(self):
+        source = {
+            "physical_item_id": "999001",
+            "physical_sku": "0999001",
+            "woo_id": "4558",
+            "woo_parent_id": "3657",
+            "woo_item_kind": "variation",
+            "woo_sku": "0201011|0808001",
+        }
+        woo = Woo(variations={
+            "products/3657/variations/4558": variation(4558, 3657, "0201011|0808001", "232.00"),
+        })
+
+        trace = live_price_trace("999001", "0999001", source=source, session=None, woo_client=woo)
+
+        self.assertEqual(trace["status"], "BLOCKED_DIRECT_WOO_NOT_FOUND")
+        self.assertIn("No hay destino Woo exacto para SKU 0999001", trace["reason"])
+        self.assertNotIn(("products/3657/variations/4558", {}), woo.reads)
+
     # 3. The exact Woo endpoint is retained in the trace.
     def test_endpoint_is_logged(self):
         trace = live_price_trace("201001", "0201001", session=self.session, woo_client=self._with_product_lookup())

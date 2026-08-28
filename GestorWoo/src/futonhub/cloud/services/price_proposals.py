@@ -736,7 +736,7 @@ def create_real_price_proposal(
     source_row_updates: dict[str, Any] | None = None,
     item_snapshot: dict[str, Any] | None = None,
     price_at_creation: float | None = None,
-    force_insert: bool = False,
+    force_insert: bool = True,
 ) -> dict[str, Any]:
     """Crea/actualiza una propuesta interna real sobre producto migrado.
 
@@ -1164,7 +1164,56 @@ def delete_real_price_proposal_group(
             pass
         raise
 
-def list_real_price_proposals(session, status: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
+def _normalized_history_limit(limit: int | None) -> int | None:
+    if limit in (None, ""):
+        return None
+    try:
+        parsed = int(limit)
+    except Exception as exc:
+        raise CloudAuditError("Limit invalido para historial de propuestas.") from exc
+    return parsed if parsed > 0 else None
+
+
+def _fetch_price_proposal_history_rows(
+    session,
+    normalized_status: str,
+    *,
+    limit: int | None = None,
+    page_size: int = 200,
+) -> list[dict[str, Any]]:
+    """Fetch proposal rows newest-first without imposing a hidden history cap."""
+    max_rows = _normalized_history_limit(limit)
+    rows: list[dict[str, Any]] = []
+    offset = 0
+    page_size = max(1, int(page_size or 200))
+    while True:
+        remaining = max_rows - len(rows) if max_rows is not None else page_size
+        if remaining <= 0:
+            break
+        chunk_size = min(page_size, remaining)
+        query = session.client.table("price_change_proposals").select("*")
+        if normalized_status and normalized_status != "all":
+            query = query.eq("status", normalized_status)
+        query = query.order("created_at", desc=True)
+        range_method = getattr(query, "range", None)
+        if callable(range_method):
+            query = range_method(offset, offset + chunk_size - 1)
+            paginated = True
+        else:
+            query = query.limit(chunk_size)
+            paginated = False
+        resp = query.execute()
+        chunk = [dict(row) for row in (getattr(resp, "data", None) or [])]
+        rows.extend(chunk)
+        if max_rows is not None and len(rows) >= max_rows:
+            break
+        if len(chunk) < chunk_size or not paginated:
+            break
+        offset += chunk_size
+    return rows
+
+
+def list_real_price_proposals(session, status: str | None = None, limit: int | None = None) -> list[dict[str, Any]]:
     """Lista propuestas reales internas para bandeja operativa.
 
     Excluye propuestas de test marcadas en source_row.test.
@@ -1176,11 +1225,7 @@ def list_real_price_proposals(session, status: str | None = None, limit: int = 5
             + ", ".join(sorted(PRICE_PROPOSAL_STATUSES))
             + " o all."
         )
-    query = session.client.table("price_change_proposals").select("*").order("created_at", desc=True).limit(max(1, min(int(limit or 50), 200)))
-    if normalized_status and normalized_status != "all":
-        query = query.eq("status", normalized_status)
-    resp = query.execute()
-    rows = getattr(resp, "data", None) or []
+    rows = _fetch_price_proposal_history_rows(session, normalized_status, limit=limit)
     result: list[dict[str, Any]] = []
     for row in rows:
         source = _source_row_dict(row)
@@ -1190,7 +1235,7 @@ def list_real_price_proposals(session, status: str | None = None, limit: int = 5
     return result
 
 
-def diagnose_real_price_proposals(session, status: str | None = None, limit: int = 200) -> dict[str, Any]:
+def diagnose_real_price_proposals(session, status: str | None = None, limit: int | None = None) -> dict[str, Any]:
     """Lectura autoritativa con conteos y motivos de filtrado, sin exponer secretos."""
     normalized_status = (status or "").strip().lower()
     if normalized_status and normalized_status != "all" and normalized_status not in PRICE_PROPOSAL_STATUSES:
@@ -1199,11 +1244,7 @@ def diagnose_real_price_proposals(session, status: str | None = None, limit: int
             + ", ".join(sorted(PRICE_PROPOSAL_STATUSES))
             + " o all."
         )
-    query = session.client.table("price_change_proposals").select("*").order("created_at", desc=True).limit(max(1, min(int(limit or 200), 200)))
-    if normalized_status and normalized_status != "all":
-        query = query.eq("status", normalized_status)
-    resp = query.execute()
-    raw_rows = list(getattr(resp, "data", None) or [])
+    raw_rows = _fetch_price_proposal_history_rows(session, normalized_status, limit=limit)
     visible_rows: list[dict[str, Any]] = []
     discarded: list[dict[str, str]] = []
     ui_deleted_distribution: dict[str, int] = {}
@@ -1326,7 +1367,7 @@ def format_real_price_proposals(rows: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
-def run_cloud_list_real_price_proposals(status: str = "pending", limit: int = 50) -> int:
+def run_cloud_list_real_price_proposals(status: str = "pending", limit: int | None = None) -> int:
     try:
         session, _settings = _login_from_console()
         rows = list_real_price_proposals(session, status=status, limit=limit)

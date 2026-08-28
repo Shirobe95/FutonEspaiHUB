@@ -186,6 +186,7 @@ class CloudPriceBoardMixin:
                 notes,
                 load_settings(),
                 acknowledge_price_warning=ack,
+                force_insert=True,
             )
         except CloudAuditError as exc:
             messagebox.showerror("Propuesta real interna", str(exc), parent=parent)
@@ -196,7 +197,7 @@ class CloudPriceBoardMixin:
         prop = result["proposal"]
         messagebox.showinfo(
             "Propuesta creada",
-            "Propuesta real interna creada/actualizada correctamente.\n\n"
+            "Propuesta real interna creada correctamente.\n\n"
             f"Operacion: {result['operation_id']}\n"
             f"Item: [{prop.get('item_kind')}] {prop.get('item_woo_id')} - {prop.get('name')}\n"
             f"Precio anterior: {result['old_price']}\n"
@@ -331,7 +332,7 @@ class CloudPriceBoardMixin:
 
         def reload_rows() -> None:
             try:
-                rows = list_real_price_proposals(self._cloud_session, status=status_var.get(), limit=100)
+                rows = list_real_price_proposals(self._cloud_session, status=status_var.get())
             except Exception as exc:
                 messagebox.showerror("Propuestas", f"No se pudieron cargar propuestas.\n\n{exc}", parent=win)
                 return

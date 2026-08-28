@@ -38,6 +38,8 @@ FILTER_COVERAGE_COLUMNS = (
     "visible_in_family", "visible_in_group", "visible_in_size", "visible_in_gama", "status", "reason",
 )
 
+PRICE_PROPOSAL_NON_SELECTABLE_ITEM_IDS = frozenset({"208001", "216001"})
+
 
 def _text(value: Any) -> str:
     return "" if value is None else str(value).strip()
@@ -259,8 +261,19 @@ def filter_coverage_audit_rows(
 
 
 def operational_price_catalogue_rows(rows: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
-    """Return rows allowed to enter new price-change selection surfaces."""
+    """Return operational rows allowed to enter the price module context."""
     return [dict(row) for row in rows if is_operationally_active(row)]
+
+
+def is_price_proposal_selectable_catalogue_row(row: Mapping[str, Any]) -> bool:
+    """Return whether a row may be selected as a main proposal item."""
+    item_id = _text(row.get("physical_item_id") or row.get("item_id"))
+    return is_operationally_active(row) and item_id not in PRICE_PROPOSAL_NON_SELECTABLE_ITEM_IDS
+
+
+def price_proposal_selectable_catalogue_rows(rows: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """Exclude impact-only rows from the New Proposal selectable catalogue."""
+    return [dict(row) for row in rows if is_price_proposal_selectable_catalogue_row(row)]
 
 
 def write_csv(path: Path, columns: tuple[str, ...], rows: Iterable[Mapping[str, Any]]) -> Path:

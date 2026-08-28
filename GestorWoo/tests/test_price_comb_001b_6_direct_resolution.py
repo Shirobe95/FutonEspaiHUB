@@ -136,6 +136,24 @@ class FixedImpact:
         }
 
 
+class EmptyGraphImpact:
+    def impact_for_changes(self, _changes):
+        return {
+            "included_combinations": [],
+            "excluded_combinations": [],
+            "unmatched_changes": [],
+            "counts": {},
+        }
+
+    def affected_destinations_for_identity(self, _identity):
+        return {
+            "status": "IDENTITY_MISMATCH",
+            "resolution_status": "IDENTITY_NOT_FOUND",
+            "destinations": [],
+            "expected_count": 0,
+        }
+
+
 class PriceComb001B6DirectResolutionTests(unittest.TestCase):
     def source(self, *, woo_id=9001, sku="0201001"):
         return {
@@ -156,6 +174,38 @@ class PriceComb001B6DirectResolutionTests(unittest.TestCase):
         source = self.source(sku="0201001")
         source["woo_sku"] = "0201001-X"
         result = resolve_direct_woo_target("201001", "0201001", source=source)
+        self.assertEqual(result["resolution_status"], "NOT_FOUND")
+
+    def test_approved_plegable_208001_direct_target_uses_remote_woo_sku(self):
+        source = {
+            "physical_item_id": "208001",
+            "physical_sku": "0208001",
+            "woo_id": "4558",
+            "woo_parent_id": "3657",
+            "woo_item_kind": "variation",
+            "woo_sku": "0201011|0808001",
+        }
+
+        result = resolve_direct_woo_target("208001", "0208001", source=source)
+
+        self.assertEqual(result["resolution_status"], "RESOLVED")
+        self.assertEqual(result["resolution_source"], "APPROVED_LOCAL_COMBINATION_LINK")
+        self.assertEqual(result["woo_id"], 4558)
+        self.assertEqual(result["woo_parent_id"], "3657")
+        self.assertEqual(result["woo_sku"], "0201011|0808001")
+
+    def test_unapproved_compound_link_is_not_a_direct_target(self):
+        source = {
+            "physical_item_id": "999001",
+            "physical_sku": "0999001",
+            "woo_id": "4558",
+            "woo_parent_id": "3657",
+            "woo_item_kind": "variation",
+            "woo_sku": "0201011|0808001",
+        }
+
+        result = resolve_direct_woo_target("999001", "0999001", source=source)
+
         self.assertEqual(result["resolution_status"], "NOT_FOUND")
 
     def test_replica_exact_resolution_is_used_without_local_link(self):
@@ -275,6 +325,125 @@ class PriceComb001B6DirectResolutionTests(unittest.TestCase):
         popup_ids = {row["combination_woo_id"] for row in prepared["popup_combination_plan"]["derived_lines"]}
         self.assertNotIn("13092", popup_ids)
         self.assertTrue(all(row["included_in_popup"] == "YES" for row in prepared["incremental_filter_report"]))
+
+    def test_approved_plegables_prepare_ready_impact_preview(self):
+        woo = Woo({
+            "products/3657/variations/4558": variation(4558, 3657, "0201011|0808001", "232.00"),
+            "products/3657/variations/4561": variation(4561, 3657, "0201011|0816001", "242.00"),
+            "products/3658/variations/13092": variation_context(),
+        })
+        entries = [
+            {"code": "0208001", "name": "Plegable 80", "source": {
+                "physical_item_id": "208001",
+                "physical_sku": "0208001",
+                "woo_id": "4558",
+                "woo_parent_id": "3657",
+                "woo_item_kind": "variation",
+                "woo_sku": "0201011|0808001",
+            }},
+            {"code": "0216001", "name": "Plegable 160", "source": {
+                "physical_item_id": "216001",
+                "physical_sku": "0216001",
+                "woo_id": "4561",
+                "woo_parent_id": "3657",
+                "woo_item_kind": "variation",
+                "woo_sku": "0201011|0816001",
+            }},
+        ]
+
+        prepared = prepare_price_addition(
+            entries,
+            adjustment_mode="amount",
+            adjustment_value="1.00",
+            impact_service=FixedImpact(),
+            woo_client=woo,
+            session=None,
+        )
+
+        self.assertEqual(prepared["counts"]["direct_ready"], 2)
+        self.assertEqual(prepared["counts"]["direct_blocked"], 0)
+        by_item = {row["identities"]["physical_item_id"]: row for row in prepared["direct_rows"]}
+        self.assertEqual(by_item["208001"]["identities"]["woo_id"], 4558)
+        self.assertEqual(by_item["208001"]["identities"]["woo_sku"], "0201011|0808001")
+        self.assertEqual(by_item["216001"]["identities"]["woo_id"], 4561)
+        self.assertEqual(by_item["216001"]["identities"]["woo_sku"], "0201011|0816001")
+        self.assertTrue(prepared["popup_combination_plan"]["derived_lines"])
+        self.assertTrue(all("No hay destino Woo exacto" not in row["blocking_reason"] for row in prepared["direct_rows"]))
+
+    def test_approved_plegable_208001_zero_derived_does_not_block_direct_row(self):
+        woo = Woo({
+            "products/3657/variations/4558": variation(4558, 3657, "0201011|0808001", "232.00"),
+        })
+
+        prepared = prepare_price_addition(
+            [{"code": "0208001", "name": "Plegable 80", "source": {
+                "physical_item_id": "208001",
+                "physical_sku": "0208001",
+                "woo_id": "4558",
+                "woo_parent_id": "3657",
+                "woo_item_kind": "variation",
+                "woo_sku": "0201011|0808001",
+            }}],
+            adjustment_mode="amount",
+            adjustment_value="1.00",
+            impact_service=EmptyGraphImpact(),
+            woo_client=woo,
+            session=None,
+        )
+
+        direct = prepared["direct_rows"][0]
+        self.assertEqual(direct["status"], "READY")
+        self.assertEqual(direct["old_price_value"], 232.0)
+        self.assertEqual(direct["new_price_value"], 233.0)
+        self.assertEqual(prepared["counts"]["derived"], 0)
+        self.assertEqual(prepared["graph_coverage"][0]["status"], "NO_DERIVED_COMBINATIONS")
+        self.assertNotEqual(direct["status"], "BLOCKED_GRAPH_COVERAGE")
+
+    def test_approved_plegable_216001_zero_derived_does_not_block_direct_row(self):
+        woo = Woo({
+            "products/3657/variations/4561": variation(4561, 3657, "0201011|0816001", "232.00"),
+        })
+
+        prepared = prepare_price_addition(
+            [{"code": "0216001", "name": "Plegable 160", "source": {
+                "physical_item_id": "216001",
+                "physical_sku": "0216001",
+                "woo_id": "4561",
+                "woo_parent_id": "3657",
+                "woo_item_kind": "variation",
+                "woo_sku": "0201011|0816001",
+            }}],
+            adjustment_mode="amount",
+            adjustment_value="1.00",
+            impact_service=EmptyGraphImpact(),
+            woo_client=woo,
+            session=None,
+        )
+
+        direct = prepared["direct_rows"][0]
+        self.assertEqual(direct["status"], "READY")
+        self.assertEqual(direct["old_price_value"], 232.0)
+        self.assertEqual(direct["new_price_value"], 233.0)
+        self.assertEqual(prepared["counts"]["derived"], 0)
+        self.assertEqual(prepared["graph_coverage"][0]["status"], "NO_DERIVED_COMBINATIONS")
+        self.assertNotEqual(direct["status"], "BLOCKED_GRAPH_COVERAGE")
+
+    def test_zero_derived_with_unresolved_direct_identity_stays_blocked(self):
+        prepared = prepare_price_addition(
+            [{"code": "0208001", "name": "Plegable 80", "source": {
+                "physical_item_id": "208001",
+                "physical_sku": "0208001",
+            }}],
+            adjustment_mode="amount",
+            adjustment_value="1.00",
+            impact_service=EmptyGraphImpact(),
+            woo_client=Woo({}),
+            session=None,
+        )
+
+        direct = prepared["direct_rows"][0]
+        self.assertNotEqual(direct["status"], "READY")
+        self.assertEqual(prepared["graph_coverage"], [])
 
     def test_popup_uses_incremental_plan_not_combined_plan(self):
         source = inspect.getsource(FutonHubErpPrototype._open_price_item_impact_popup)
