@@ -16,7 +16,11 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
-from futonhub.core.catalog_policy import is_discontinued_commercial_status, is_operationally_active
+from futonhub.core.catalog_policy import (
+    is_discontinued_commercial_status,
+    is_operationally_active,
+    operational_inactive_reason,
+)
 from futonhub.ui.erp.catalog_filters import (
     FILTER_FIELDS,
     PhysicalCatalogSnapshot,
@@ -38,7 +42,42 @@ FILTER_COVERAGE_COLUMNS = (
     "visible_in_family", "visible_in_group", "visible_in_size", "visible_in_gama", "status", "reason",
 )
 
-PRICE_PROPOSAL_NON_SELECTABLE_ITEM_IDS = frozenset({"208001", "216001"})
+PRICE_PROPOSAL_IMPACT_ONLY_ITEM_IDS = frozenset({"208001", "216001"})
+PRICE_PROPOSAL_HUMAN_CONFIRMED_NON_SELECTABLE_REASONS = {
+    "608010": "OUT_OF_USE_CONFIRMED_NOT_PRICE_SOURCE",
+    "608012": "OUT_OF_USE_CONFIRMED_NOT_PRICE_SOURCE",
+    "616008": "OUT_OF_USE_CONFIRMED_NOT_PRICE_SOURCE",
+    "616010": "OUT_OF_USE_CONFIRMED_NOT_PRICE_SOURCE",
+    "616012": "OUT_OF_USE_CONFIRMED_NOT_PRICE_SOURCE",
+    "608019": "COMBINATION_COMPONENT_ONLY_NOT_PRICE_SOURCE",
+    "616019": "COMBINATION_COMPONENT_ONLY_NOT_PRICE_SOURCE",
+}
+PRICE_PROPOSAL_HUMAN_CONFIRMED_MISSING_WOO_SOURCE_CODES = frozenset({
+    "0758087",
+    "0780002",
+    "0780007",
+})
+PRICE_PROPOSAL_NON_SELECTABLE_ITEM_IDS = (
+    PRICE_PROPOSAL_IMPACT_ONLY_ITEM_IDS
+    | frozenset(PRICE_PROPOSAL_HUMAN_CONFIRMED_NON_SELECTABLE_REASONS)
+)
+PRICE_PROPOSAL_SELECTABLE_AUDIT_CATEGORIES = (
+    "ACTIVE_DIRECT_WOO",
+    "ACTIVE_MISSING_WOO",
+    "DESCATALOGADO",
+    "OUT_OF_USE_CONFIRMED",
+    "COMBINATION_COMPONENT_ONLY",
+    "DERIVED_ONLY_NOT_PRICE_SOURCE",
+    "STALE_WOO_LINK",
+    "AMBIGUOUS_IDENTITY",
+    "UNKNOWN",
+)
+PRICE_PROPOSAL_SAFE_HIDE_AUDIT_CATEGORIES = frozenset({
+    "DESCATALOGADO",
+    "OUT_OF_USE_CONFIRMED",
+    "COMBINATION_COMPONENT_ONLY",
+    "DERIVED_ONLY_NOT_PRICE_SOURCE",
+})
 
 
 def _text(value: Any) -> str:
@@ -73,6 +112,17 @@ def _apply_live_commercial_status(row: dict[str, Any]) -> None:
 
 def physical_sku(row: Mapping[str, Any]) -> str:
     return _text(row.get("physical_sku") or row.get("hub_item_code") or row.get("heca_reference"))
+
+
+def _has_direct_woo_identity(row: Mapping[str, Any]) -> bool:
+    return bool(_text(row.get("woo_id") or row.get("woo_parent_id") or row.get("woo_sku")))
+
+
+def _is_human_confirmed_missing_woo_price_source(row: Mapping[str, Any]) -> bool:
+    return (
+        physical_sku(row) in PRICE_PROPOSAL_HUMAN_CONFIRMED_MISSING_WOO_SOURCE_CODES
+        and not _has_direct_woo_identity(row)
+    )
 
 
 def reconcile_canonical_catalogue(
@@ -267,13 +317,141 @@ def operational_price_catalogue_rows(rows: Iterable[Mapping[str, Any]]) -> list[
 
 def is_price_proposal_selectable_catalogue_row(row: Mapping[str, Any]) -> bool:
     """Return whether a row may be selected as a main proposal item."""
+    return price_proposal_non_selectable_reason(row) == ""
+
+
+def price_proposal_non_selectable_reason(row: Mapping[str, Any]) -> str:
+    """Return why a row cannot start a price proposal, or an empty string.
+
+    Missing Woo metadata is intentionally not a reason here. Active catalogue
+    rows without a direct Woo link remain selectable for recovery/review unless
+    another canonical business signal marks them as non-operational.
+    """
+    if not is_operationally_active(row):
+        return operational_inactive_reason(row)
     item_id = _text(row.get("physical_item_id") or row.get("item_id"))
-    return is_operationally_active(row) and item_id not in PRICE_PROPOSAL_NON_SELECTABLE_ITEM_IDS
+    if item_id in PRICE_PROPOSAL_IMPACT_ONLY_ITEM_IDS:
+        return "IMPACT_TARGET_ONLY_NOT_PRICE_SOURCE"
+    if item_id in PRICE_PROPOSAL_HUMAN_CONFIRMED_NON_SELECTABLE_REASONS:
+        return PRICE_PROPOSAL_HUMAN_CONFIRMED_NON_SELECTABLE_REASONS[item_id]
+    if _is_human_confirmed_missing_woo_price_source(row):
+        return "ACTIVE_MISSING_WOO_CONFIRMED_NOT_PRICE_SOURCE"
+    price_policy = _text(row.get("price_policy_override")).upper()
+    if price_policy == "NO":
+        return "NON_OPERATIONAL_PRICE_POLICY"
+    if _text(row.get("sale_item")).upper() == "NO" and _text(row.get("price_operable")).casefold() == "false":
+        return "NON_OPERATIONAL_PRICE_POLICY"
+    operational_status = _text(row.get("operational_status")).upper()
+    if operational_status in {"HISTORICAL_OR_DISCONTINUED", "OUT_OF_USE", "NON_OPERATIONAL"}:
+        return operational_status
+    quarantine_reason = _text(row.get("quarantine_reason")).upper()
+    if quarantine_reason in {"SUPPLIER_COMPONENT_NOT_FOR_SALE", "COMBINATION_COMPONENT_ONLY"}:
+        return "COMBINATION_COMPONENT_ONLY"
+    return ""
 
 
 def price_proposal_selectable_catalogue_rows(rows: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
     """Exclude impact-only rows from the New Proposal selectable catalogue."""
     return [dict(row) for row in rows if is_price_proposal_selectable_catalogue_row(row)]
+
+
+def classify_price_proposal_catalogue_row(row: Mapping[str, Any]) -> tuple[str, str]:
+    """Classify one price-catalogue row without mutating selection policy."""
+    item_id = _text(row.get("physical_item_id") or row.get("item_id"))
+    if item_id in PRICE_PROPOSAL_IMPACT_ONLY_ITEM_IDS:
+        return "DERIVED_ONLY_NOT_PRICE_SOURCE", "Impact target aprobado; no debe iniciar propuestas."
+    if _is_human_confirmed_missing_woo_price_source(row):
+        return "ACTIVE_MISSING_WOO", "Artículo activo sin mapping Woo directo; no seleccionable por decisión humana."
+    confirmed_reason = PRICE_PROPOSAL_HUMAN_CONFIRMED_NON_SELECTABLE_REASONS.get(item_id)
+    if confirmed_reason:
+        if confirmed_reason.startswith("COMBINATION_COMPONENT_ONLY"):
+            return "COMBINATION_COMPONENT_ONLY", confirmed_reason
+        return "OUT_OF_USE_CONFIRMED", confirmed_reason
+    if is_discontinued_commercial_status(row.get("commercial_status")):
+        return "DESCATALOGADO", "commercial_status descatalogado."
+    live_status = _text(row.get("catalog_live_status")).upper()
+    if live_status == "LIVE_DUPLICATE":
+        return "AMBIGUOUS_IDENTITY", "inventory_items devolvió identidad duplicada."
+    reason = price_proposal_non_selectable_reason(row)
+    if reason:
+        normalized_reason = reason.upper()
+        if "DESCATALOG" in normalized_reason:
+            return "DESCATALOGADO", reason
+        if "COMPONENT" in normalized_reason:
+            return "COMBINATION_COMPONENT_ONLY", reason
+        if normalized_reason in {"IMPACT_TARGET_ONLY_NOT_PRICE_SOURCE"}:
+            return "DERIVED_ONLY_NOT_PRICE_SOURCE", reason
+        if normalized_reason in {"AMBIGUOUS_IDENTITY", "DUPLICATE_SUPABASE_CODE"}:
+            return "AMBIGUOUS_IDENTITY", reason
+        return "OUT_OF_USE_CONFIRMED", reason
+    woo_link_status = _text(row.get("woo_link_status")).casefold()
+    woo_live_status = _text(row.get("woo_live_status") or row.get("price_sync_status")).upper()
+    if any(token in woo_link_status for token in ("stale", "roto", "caduc", "recuperar")) or woo_live_status in {
+        "WOO_NOT_FOUND",
+        "STALE_WOO_LINK",
+        "BROKEN_WOO_LINK",
+    }:
+        return "STALE_WOO_LINK", "Mapping Woo requiere revisión."
+    record_type = _text(row.get("item_record_type") or row.get("hub_search_record_type")).lower()
+    if record_type in {"component_placeholder"}:
+        return "COMBINATION_COMPONENT_ONLY", "Registro componente/placeholder."
+    if record_type in {"alias"}:
+        return "AMBIGUOUS_IDENTITY", "Alias no resuelto como identidad física principal."
+    if _has_direct_woo_identity(row):
+        return "ACTIVE_DIRECT_WOO", "Artículo activo con mapping Woo."
+    return "ACTIVE_MISSING_WOO", "Artículo activo sin mapping Woo directo; se mantiene revisable."
+
+
+def audit_price_proposal_selectable_catalogue(rows: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
+    """Build a read-only catalogue-selection audit for the price proposal picker."""
+    audit_rows: list[dict[str, str]] = []
+    counts = {category: 0 for category in PRICE_PROPOSAL_SELECTABLE_AUDIT_CATEGORIES}
+    safe_hide_candidates: list[dict[str, str]] = []
+    for raw in rows:
+        row = dict(raw)
+        classification, reason = classify_price_proposal_catalogue_row(row)
+        counts[classification] = counts.get(classification, 0) + 1
+        item_id = _text(row.get("physical_item_id") or row.get("item_id"))
+        code = physical_sku(row)
+        recommended_selectable = (
+            "NO"
+            if classification in PRICE_PROPOSAL_SAFE_HIDE_AUDIT_CATEGORIES
+            or price_proposal_non_selectable_reason(row)
+            else "YES"
+        )
+        audit_row = {
+            "item_id": item_id,
+            "code": code,
+            "name": _text(row.get("name") or row.get("canonical_name")),
+            "family": _text(row.get("family") or row.get("filter_family")),
+            "group": _text(row.get("filter_group")),
+            "commercial_status": _text(row.get("commercial_status")),
+            "item_record_type": _text(row.get("item_record_type") or row.get("hub_search_record_type")),
+            "operational_status": _text(row.get("operational_status")),
+            "woo_id": _text(row.get("woo_id")),
+            "woo_parent_id": _text(row.get("woo_parent_id")),
+            "woo_sku": _text(row.get("woo_sku")),
+            "woo_link_status": _text(row.get("woo_link_status")),
+            "classification": classification,
+            "reason": reason,
+            "recommended_selectable": recommended_selectable,
+            "impact_target_needed": "YES" if classification == "DERIVED_ONLY_NOT_PRICE_SOURCE" else "NO",
+        }
+        audit_rows.append(audit_row)
+        if recommended_selectable == "NO":
+            safe_hide_candidates.append(audit_row)
+    return {
+        "rows": audit_rows,
+        "counts": counts,
+        "total": len(audit_rows),
+        "safe_hide_candidates": safe_hide_candidates,
+        "selectable_counts": dict(sorted(Counter(
+            audit_row["classification"]
+            for audit_row in audit_rows
+            if audit_row["recommended_selectable"] == "YES"
+        ).items())),
+        "total_selectable": sum(1 for audit_row in audit_rows if audit_row["recommended_selectable"] == "YES"),
+    }
 
 
 def write_csv(path: Path, columns: tuple[str, ...], rows: Iterable[Mapping[str, Any]]) -> Path:

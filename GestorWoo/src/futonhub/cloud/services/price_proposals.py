@@ -9,6 +9,49 @@ from gestorwoo.config import Settings, load_settings
 from gestorwoo.woocommerce import WooCommerceClient, WooCommerceError
 
 
+PRICE_PROPOSAL_HISTORY_DEFAULT_PAGE_SIZE = 10
+PRICE_PROPOSAL_HISTORY_MAX_PAGE_SIZE = 50
+PRICE_PROPOSAL_HISTORY_ROW_CHUNK_SIZE = 500
+PRICE_PROPOSAL_DETAIL_MAX_ROWS = 500
+PRICE_PROPOSAL_HISTORY_BASE_COLUMNS = (
+    "id",
+    "created_at",
+    "status",
+    "item_kind",
+    "item_woo_id",
+    "name",
+    "old_price",
+    "new_price",
+    "delta",
+    "notes",
+    "published_at",
+    "error_message",
+)
+PRICE_PROPOSAL_HISTORY_SOURCE_SUMMARY_FIELDS = (
+    "ui_save_token",
+    "ui_proposal_id",
+    "proposal_group_id",
+    "group_id",
+    "batch_id",
+    "operation_id",
+    "ui_proposal_name",
+    "ui_line_name",
+    "workflow_state",
+    "rolled_back",
+    "ui_deleted",
+    "test",
+    "price_at_creation",
+    "proposed_price",
+    "ui_canonical_item_kind",
+    "ui_canonical_woo_id",
+)
+PRICE_PROPOSAL_HISTORY_SUMMARY_COLUMNS = ",".join(
+    PRICE_PROPOSAL_HISTORY_BASE_COLUMNS
+    + tuple(f"source_row->>{field}" for field in PRICE_PROPOSAL_HISTORY_SOURCE_SUMMARY_FIELDS)
+)
+PRICE_PROPOSAL_HISTORY_COUNTER_COLUMNS = PRICE_PROPOSAL_HISTORY_SUMMARY_COLUMNS
+
+
 def _json_safe(value: Any) -> Any:
     import json
     try:
@@ -26,10 +69,31 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
         return default
 
 
+def _safe_optional_float(value: Any) -> float | None:
+    try:
+        if value is None or value == "":
+            return None
+        return float(str(value).replace(",", "."))
+    except Exception:
+        return None
+
+
 
 def _source_row_dict(row: dict[str, Any]) -> dict[str, Any]:
     source = row.get("source_row")
     return source if isinstance(source, dict) else {}
+
+
+def _coerce_projected_source_flag(value: Any) -> Any:
+    if value is True or value is False or value in (None, ""):
+        return value
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"true", "1", "yes", "si", "sí"}:
+            return True
+        if lowered in {"false", "0", "no"}:
+            return False
+    return value
 
 
 def _truthy_source_flag(value: Any) -> bool:
@@ -106,6 +170,131 @@ def _price_proposal_logical_identity(row: dict[str, Any]) -> tuple[str, str]:
         if value not in (None, ""):
             return key, str(value)
     return "id", str(row.get("id") or "")
+
+
+def _price_proposal_logical_key(row: dict[str, Any]) -> str:
+    key, value = _price_proposal_logical_identity(row)
+    return f"{key}:{value}" if value else f"id:{row.get('id') or ''}"
+
+
+def _hydrate_price_proposal_summary_row(row: Mapping[str, Any]) -> dict[str, Any]:
+    hydrated = dict(row)
+    if isinstance(hydrated.get("source_row"), dict):
+        hydrated["ui_history_summary"] = False
+        return hydrated
+    source: dict[str, Any] = {}
+    for key in PRICE_PROPOSAL_HISTORY_SOURCE_SUMMARY_FIELDS:
+        if key not in hydrated:
+            continue
+        value = hydrated.get(key)
+        if key in {"rolled_back", "ui_deleted", "test"}:
+            value = _coerce_projected_source_flag(value)
+        if value not in (None, ""):
+            source[key] = value
+    hydrated["source_row"] = source
+    hydrated["ui_history_summary"] = True
+    return hydrated
+
+
+def _price_history_counter_direction(row: dict[str, Any]) -> str:
+    source = _source_row_dict(row)
+    old_price = _safe_optional_float(
+        source.get("price_at_creation")
+        if source.get("price_at_creation") not in (None, "")
+        else row.get("old_price")
+    )
+    new_price = _safe_optional_float(
+        source.get("proposed_price")
+        if source.get("proposed_price") not in (None, "")
+        else row.get("new_price")
+    )
+    if old_price is None or new_price is None:
+        return "flat"
+    delta = new_price - old_price
+    if delta > 0:
+        return "up"
+    if delta < 0:
+        return "down"
+    return "flat"
+
+
+def _price_history_counts_for_rows(rows: Iterable[dict[str, Any]]) -> dict[str, dict[str, int]]:
+    counts_by_group: dict[str, dict[str, int]] = {}
+    for row in rows:
+        source = _source_row_dict(row)
+        if _truthy_source_flag(source.get("test")) or _is_ui_deleted(row):
+            continue
+        group_key = _price_proposal_logical_key(row)
+        counts = counts_by_group.setdefault(
+            group_key,
+            {"items": 0, "up": 0, "down": 0, "flat": 0},
+        )
+        counts["items"] += 1
+        direction = _price_history_counter_direction(row)
+        counts[direction] = counts.get(direction, 0) + 1
+    return counts_by_group
+
+
+def _history_counter_identity_groups(rows: Iterable[dict[str, Any]]) -> dict[str, list[str]]:
+    grouped: dict[str, list[str]] = {}
+    for row in rows:
+        raw_key = str(row.get("ui_history_group_key") or _price_proposal_logical_key(row) or "")
+        if ":" in raw_key:
+            key, value = raw_key.split(":", 1)
+        else:
+            key, value = "id", str(row.get("id") or "")
+        key = key.strip()
+        value = value.strip()
+        if not key or not value:
+            continue
+        grouped.setdefault(key, [])
+        if value not in grouped[key]:
+            grouped[key].append(value)
+    return grouped
+
+
+def _attach_price_history_counts(
+    session,
+    visible_rows: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    if not visible_rows:
+        return visible_rows, []
+    identity_groups = _history_counter_identity_groups(visible_rows)
+    counter_rows: list[dict[str, Any]] = []
+    counter_queries: list[dict[str, Any]] = []
+    for key, values in identity_groups.items():
+        if not values:
+            continue
+        column = "id" if key == "id" else f"source_row->>{key}"
+        limit = max(1, min(PRICE_PROPOSAL_DETAIL_MAX_ROWS * len(values), PRICE_PROPOSAL_DETAIL_MAX_ROWS * PRICE_PROPOSAL_HISTORY_MAX_PAGE_SIZE))
+        query = (
+            session.client.table("price_change_proposals")
+            .select(PRICE_PROPOSAL_HISTORY_COUNTER_COLUMNS)
+            .in_(column, values)
+            .order("created_at", desc=True)
+            .order("id", desc=True)
+            .limit(limit)
+        )
+        resp = query.execute()
+        fetched = [_hydrate_price_proposal_summary_row(row) for row in (getattr(resp, "data", None) or [])]
+        counter_rows.extend(fetched)
+        counter_queries.append({
+            "identity_key": key,
+            "column": column,
+            "groups": len(values),
+            "rows": len(fetched),
+            "limit": limit,
+        })
+    counts_by_group = _price_history_counts_for_rows(counter_rows)
+    for row in visible_rows:
+        group_key = str(row.get("ui_history_group_key") or _price_proposal_logical_key(row))
+        counts = counts_by_group.get(group_key) or _price_history_counts_for_rows([row]).get(
+            group_key,
+            {"items": 0, "up": 0, "down": 0, "flat": 0},
+        )
+        row["ui_history_counts"] = dict(counts)
+        row["ui_history_counts_loaded"] = True
+    return visible_rows, counter_queries
 
 
 def analyze_price_proposal_soft_deletes(
@@ -1172,6 +1361,179 @@ def _normalized_history_limit(limit: int | None) -> int | None:
     except Exception as exc:
         raise CloudAuditError("Limit invalido para historial de propuestas.") from exc
     return parsed if parsed > 0 else None
+
+
+def _validate_price_proposal_status(status: str | None) -> str:
+    normalized_status = (status or "").strip().lower()
+    if normalized_status and normalized_status != "all" and normalized_status not in PRICE_PROPOSAL_STATUSES:
+        raise CloudAuditError(
+            "Estado invalido. Usa: "
+            + ", ".join(sorted(PRICE_PROPOSAL_STATUSES))
+            + " o all."
+        )
+    return normalized_status
+
+
+def _normalized_history_page(page: int | None) -> int:
+    try:
+        parsed = int(page or 1)
+    except Exception:
+        return 1
+    return max(1, parsed)
+
+
+def _normalized_history_page_size(page_size: int | None) -> int:
+    try:
+        parsed = int(page_size or PRICE_PROPOSAL_HISTORY_DEFAULT_PAGE_SIZE)
+    except Exception:
+        parsed = PRICE_PROPOSAL_HISTORY_DEFAULT_PAGE_SIZE
+    return max(1, min(parsed, PRICE_PROPOSAL_HISTORY_MAX_PAGE_SIZE))
+
+
+def fetch_real_price_proposal_history_page(
+    session,
+    status: str | None = None,
+    *,
+    page: int | None = 1,
+    page_size: int | None = PRICE_PROPOSAL_HISTORY_DEFAULT_PAGE_SIZE,
+) -> dict[str, Any]:
+    """Fetch one lightweight proposal-history page newest-first.
+
+    The saved-proposal list must not fetch the full history or full source_row
+    blobs up front. Details remain available through targeted lazy-load calls.
+    """
+    normalized_status = _validate_price_proposal_status(status)
+    normalized_page = _normalized_history_page(page)
+    normalized_page_size = _normalized_history_page_size(page_size)
+    start_group = (normalized_page - 1) * normalized_page_size
+    target_group_count = start_group + normalized_page_size + 1
+    row_chunk_size = max(PRICE_PROPOSAL_HISTORY_ROW_CHUNK_SIZE, normalized_page_size + 1)
+    row_offset = 0
+    unique_rows: list[dict[str, Any]] = []
+    seen_group_keys: set[str] = set()
+    rows_per_logical_proposal: dict[str, int] = {}
+    scanned_rows = 0
+    page_row_queries: list[dict[str, int]] = []
+    discarded: list[dict[str, str]] = []
+    ui_deleted_distribution: dict[str, int] = {}
+    while len(unique_rows) < target_group_count:
+        range_start = row_offset
+        range_end = row_offset + row_chunk_size - 1
+        query = session.client.table("price_change_proposals").select(PRICE_PROPOSAL_HISTORY_SUMMARY_COLUMNS)
+        if normalized_status and normalized_status != "all":
+            query = query.eq("status", normalized_status)
+        query = query.order("created_at", desc=True).order("id", desc=True)
+        range_method = getattr(query, "range", None)
+        paginated = False
+        if callable(range_method):
+            query = range_method(range_start, range_end)
+            paginated = True
+        else:
+            query = query.limit(row_chunk_size)
+        resp = query.execute()
+        fetched_rows = [_hydrate_price_proposal_summary_row(row) for row in (getattr(resp, "data", None) or [])]
+        page_row_queries.append({"start": range_start, "end": range_end, "rows": len(fetched_rows)})
+        if not fetched_rows:
+            break
+        for row in fetched_rows:
+            scanned_rows += 1
+            source = _source_row_dict(row)
+            row_id = str(row.get("id") or "")
+            category = _source_flag_category(source, "ui_deleted")
+            ui_deleted_distribution[category] = ui_deleted_distribution.get(category, 0) + 1
+            if _truthy_source_flag(source.get("test")):
+                discarded.append({"id": row_id, "reason": "test"})
+                continue
+            if _is_ui_deleted(row):
+                discarded.append({"id": row_id, "reason": "ui_deleted"})
+                continue
+            group_key = _price_proposal_logical_key(row)
+            rows_per_logical_proposal[group_key] = rows_per_logical_proposal.get(group_key, 0) + 1
+            if group_key in seen_group_keys:
+                continue
+            seen_group_keys.add(group_key)
+            row["ui_history_group_key"] = group_key
+            unique_rows.append(row)
+            if len(unique_rows) >= target_group_count:
+                break
+        if len(unique_rows) >= target_group_count or len(fetched_rows) < row_chunk_size or not paginated:
+            break
+        row_offset += row_chunk_size
+    visible_rows = unique_rows[start_group:start_group + normalized_page_size]
+    visible_rows, counter_queries = _attach_price_history_counts(session, visible_rows)
+    has_next = len(unique_rows) > start_group + normalized_page_size
+    return {
+        "rows": visible_rows,
+        "raw_count": scanned_rows,
+        "filtered_count": len(visible_rows),
+        "discarded": discarded,
+        "ui_deleted_distribution": dict(sorted(ui_deleted_distribution.items())),
+        "deletion_patterns": [],
+        "repository": "price_change_proposals",
+        "status_filter": normalized_status or "all",
+        "page": normalized_page,
+        "page_size": normalized_page_size,
+        "has_next": has_next,
+        "columns": PRICE_PROPOSAL_HISTORY_SUMMARY_COLUMNS,
+        "query_shape": "summary_logical_proposal_page",
+        "pagination_unit": "proposal",
+        "row_chunk_size": row_chunk_size,
+        "logical_proposals_scanned": len(unique_rows),
+        "page_row_queries": page_row_queries,
+        "counter_query_count": len(counter_queries),
+        "counter_queries": counter_queries,
+        "initial_history_query_count": len(page_row_queries) + len(counter_queries),
+        "counter_query_columns": PRICE_PROPOSAL_HISTORY_COUNTER_COLUMNS,
+        "rows_per_logical_proposal_sample": dict(list(rows_per_logical_proposal.items())[:10]),
+    }
+
+
+def fetch_real_price_proposal_detail_rows(
+    session,
+    proposal_id: str,
+    *,
+    group_key: str | None = None,
+) -> list[dict[str, Any]]:
+    """Fetch full rows only for the selected saved proposal/group."""
+    proposal_id = str(proposal_id or "").strip()
+    if not proposal_id:
+        return []
+    first_resp = (
+        session.client.table("price_change_proposals")
+        .select("*")
+        .eq("id", proposal_id)
+        .limit(1)
+        .execute()
+    )
+    first_rows = [dict(row) for row in (getattr(first_resp, "data", None) or [])]
+    if not first_rows:
+        return []
+    first = first_rows[0]
+    key, value = _price_proposal_logical_identity(first)
+    if group_key:
+        raw_key = str(group_key)
+        if ":" in raw_key:
+            key, value = raw_key.split(":", 1)
+    if key == "id" or not value:
+        return first_rows
+    try:
+        group_resp = (
+            session.client.table("price_change_proposals")
+            .select("*")
+            .eq(f"source_row->>{key}", value)
+            .order("created_at", desc=True)
+            .limit(PRICE_PROPOSAL_DETAIL_MAX_ROWS)
+            .execute()
+        )
+        rows = [dict(row) for row in (getattr(group_resp, "data", None) or [])]
+        visible = [
+            row for row in rows
+            if not _truthy_source_flag(_source_row_dict(row).get("test"))
+            and not _is_ui_deleted(row)
+        ]
+        return visible or first_rows
+    except Exception:
+        return first_rows
 
 
 def _fetch_price_proposal_history_rows(

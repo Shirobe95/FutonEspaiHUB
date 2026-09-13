@@ -4,6 +4,7 @@ import inspect
 import sys
 import tempfile
 import unittest
+from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -189,15 +190,115 @@ def supplier_price(item_id: int, supplier: str, price):
     }
 
 
-def fake_session(client: FakeClient):
-    return SimpleNamespace(user_id="user-1", email="worker@example.test", role="worker", client=client)
+def fake_session(client: FakeClient, *, email: str = "worker@example.test", user_id: str = "user-1"):
+    return SimpleNamespace(user_id=user_id, email=email, role="worker", client=client)
 
 
 def fake_settings():
     return SimpleNamespace(machine_name="test-machine", sync_role="worker")
 
 
+def write_futon_espai_stock_workbook(path: Path, rows: list[dict[str, object]]) -> None:
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Sheet2"
+    ws.append(["Codigo", "Denominacion", "Cantidad", "Coste", "Valoracion", "1-NADAL FORW", "2-FUTONESPAI", "Ignored"])
+    for row in rows:
+        ws.append(
+            [
+                row.get("code"),
+                row.get("name", "Item"),
+                row.get("total"),
+                row.get("cost", 99),
+                row.get("valuation", 999),
+                row.get("other_warehouse", 123),
+                row.get("store"),
+                row.get("ignored", "ignored"),
+            ]
+        )
+        number_format = row.get("number_format")
+        if number_format:
+            ws.cell(row=ws.max_row, column=1).number_format = str(number_format)
+    wb.create_sheet("Sheet1")
+    wb.save(path)
+    wb.close()
+
+
 class UpdatesModule004Tests(unittest.TestCase):
+    def test_updates_access_policy_is_exact_and_limited_to_configured_users(self) -> None:
+        all_processes = (
+            updates.PROCESS_ROTATION_C,
+            updates.PROCESS_STOCK,
+            updates.PROCESS_SUPPLIER_PRICES,
+        )
+
+        self.assertEqual(updates.allowed_updates_processes("andyshb95@gmail.com"), all_processes)
+        self.assertEqual(updates.allowed_updates_processes("ANDYSHB95@GMAIL.COM"), all_processes)
+        self.assertEqual(updates.allowed_updates_processes("futonhub1@gmail.com"), (updates.PROCESS_STOCK,))
+        self.assertEqual(updates.allowed_updates_processes("FUTONHUB1@GMAIL.COM"), (updates.PROCESS_STOCK,))
+        self.assertEqual(updates.allowed_updates_processes("xfutonhub1@gmail.com"), all_processes)
+        self.assertEqual(updates.allowed_updates_processes("worker@example.test"), all_processes)
+
+    def test_futon_espai_can_preview_and_apply_stock(self) -> None:
+        client = FakeClient()
+        client.tables["inventory_items"] = [inventory_row(725002, "0725002", store_stock=2, warehouse_stock=3)]
+        session = fake_session(client, email="futonhub1@gmail.com")
+
+        preview = updates.preview_updates(
+            session,
+            updates.PROCESS_STOCK,
+            [{"ID": "0725002", "Stock Tienda": 7, "Stock Warehouse": 8}],
+        )
+
+        self.assertTrue(preview["apply_enabled"])
+        with patch.object(updates, "write_snapshot"), patch.object(updates, "write_audit_event"):
+            result = updates.apply_update_preview(session, preview, settings=fake_settings())
+
+        self.assertEqual(result["status"], "APPLIED")
+        self.assertEqual(result["applied_rows"], 1)
+        self.assertEqual(client.tables["inventory_items"][0]["store_stock"], 7.0)
+        self.assertEqual(client.tables["inventory_items"][0]["warehouse_stock"], 8.0)
+
+    def test_futon_espai_rotation_and_supplier_prices_are_access_denied_before_writes(self) -> None:
+        for process in (updates.PROCESS_ROTATION_C, updates.PROCESS_SUPPLIER_PRICES):
+            with self.subTest(process=process):
+                client = FakeClient()
+                client.tables["inventory_items"] = [inventory_row(725002, "0725002", rotation_c=1.0)]
+                session = fake_session(client, email="futonhub1@gmail.com")
+
+                with self.assertRaises(updates.UpdateApplyError) as preview_ctx:
+                    updates.preview_updates(session, process, [{"ID": "0725002", "Rotación C": 1.5}])
+
+                self.assertEqual(preview_ctx.exception.result["status"], updates.ACCESS_DENIED)
+                stale_ready_preview = {
+                    "process": process,
+                    "valid": True,
+                    "global_blocker": False,
+                    "rows": [
+                        {
+                            "process": process,
+                            "status": updates.READY,
+                            "id": "0725002",
+                            "item_id": 725002,
+                            "changes": [{"field": "rotation_c", "new": 1.5, "inventory_changed": True}],
+                        }
+                    ],
+                }
+                with patch.object(updates, "write_snapshot") as snapshots, patch.object(updates, "write_audit_event") as audits:
+                    with self.assertRaises(updates.UpdateApplyError) as apply_ctx:
+                        updates.apply_update_preview(session, stale_ready_preview, settings=fake_settings())
+
+                self.assertEqual(apply_ctx.exception.result["status"], updates.ACCESS_DENIED)
+                snapshots.assert_not_called()
+                audits.assert_not_called()
+                self.assertEqual(client.update_payloads, [])
+                self.assertEqual(client.upsert_payloads, [])
+
+    def test_owner_keeps_full_updates_access(self) -> None:
+        self.assertTrue(updates.can_use_updates_process("andyshb95@gmail.com", updates.PROCESS_STOCK))
+        self.assertTrue(updates.can_use_updates_process("andyshb95@gmail.com", updates.PROCESS_ROTATION_C))
+        self.assertTrue(updates.can_use_updates_process("andyshb95@gmail.com", updates.PROCESS_SUPPLIER_PRICES))
+
     def test_template_generation_and_excel_parse_preserve_leading_zeros(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             template_path = Path(tmp) / "Plantilla_RotacionC.xlsx"
@@ -306,6 +407,492 @@ class UpdatesModule004Tests(unittest.TestCase):
         self.assertEqual(row["weighted_average_cost"], 99.9)
         payload_fields = {key for _table, _item_id, payload in client.update_payloads for key in payload}
         self.assertNotIn("weighted_average_cost", payload_fields)
+
+    def test_futon_espai_stock_excel_derives_warehouse_and_preserves_leading_zero(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "Stock Almacenes.xlsx"
+            write_futon_espai_stock_workbook(
+                path,
+                [
+                    {"code": "0725002", "total": 13, "store": 4, "ignored": 500},
+                    {"code": 725003, "number_format": "0000000", "total": 10, "store": 10},
+                    {"code": "0725004", "total": 0, "store": 0},
+                ],
+            )
+
+            rows = updates.read_updates_workbook(path, updates.PROCESS_STOCK)
+
+        self.assertEqual([row["ID"] for row in rows], ["0725002", "0725003", "0725004"])
+        self.assertEqual(rows[0]["Stock Tienda"], 4)
+        self.assertEqual(rows[0]["Stock Warehouse"], 9.0)
+        self.assertEqual(rows[0]["_stock_total_excel"], 13)
+        self.assertEqual(rows[1]["Stock Warehouse"], 0.0)
+        self.assertEqual(rows[2]["Stock Warehouse"], 0.0)
+        self.assertEqual(rows[0]["_stock_import_format"], updates.STOCK_FORMAT_FUTON_ESPAI)
+
+    def test_futon_espai_stock_preview_uses_excel_total_and_writes_only_stock_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "Stock Almacenes.xlsx"
+            write_futon_espai_stock_workbook(path, [{"code": "0725002", "total": 13, "store": 4}])
+            rows = updates.read_updates_workbook(path, updates.PROCESS_STOCK)
+
+        client = FakeClient()
+        client.tables["inventory_items"] = [inventory_row(725002, "0725002", store_stock=1, warehouse_stock=2)]
+        session = fake_session(client)
+        preview = updates.preview_updates(session, updates.PROCESS_STOCK, rows)
+
+        self.assertTrue(preview["apply_enabled"])
+        row = preview["rows"][0]
+        self.assertEqual(row["store_stock_new"], 4.0)
+        self.assertEqual(row["warehouse_stock_new"], 9.0)
+        self.assertEqual(row["stock_total_new"], 13.0)
+        self.assertEqual(row["stock_total_excel"], 13.0)
+
+        with patch.object(updates, "write_snapshot"), patch.object(updates, "write_audit_event"):
+            result = updates.apply_update_preview(session, preview, settings=fake_settings())
+
+        self.assertEqual(result["status"], "APPLIED")
+        self.assertEqual(result["updated_fields"], ["store_stock", "warehouse_stock"])
+        self.assertEqual(client.tables["inventory_items"][0]["store_stock"], 4.0)
+        self.assertEqual(client.tables["inventory_items"][0]["warehouse_stock"], 9.0)
+        self.assertEqual(client.tables["inventory_items"][0]["weighted_average_cost"], 99.9)
+        payload_fields = {key for _table, _item_id, payload in client.update_payloads for key in payload}
+        self.assertEqual(payload_fields, {"store_stock", "warehouse_stock", "updated_at", "updated_by"})
+
+    def test_futon_espai_stock_signed_values_are_valid(self) -> None:
+        client = FakeClient()
+        client.tables["inventory_items"] = [
+            inventory_row(201001, "0201001", store_stock=0, warehouse_stock=0),
+            inventory_row(201011, "0201011", store_stock=0, warehouse_stock=0),
+            inventory_row(808001, "0808001", store_stock=0, warehouse_stock=0),
+            inventory_row(817003, "0817003", store_stock=0, warehouse_stock=0),
+            inventory_row(725004, "0725004", store_stock=1, warehouse_stock=1),
+        ]
+        session = fake_session(client)
+
+        preview = updates.preview_updates(
+            session,
+            updates.PROCESS_STOCK,
+            [
+                {"_row_number": 2, "_stock_import_format": updates.STOCK_FORMAT_FUTON_ESPAI, "ID": "0201001", "_stock_total_excel": 29, "Stock Tienda": -1},
+                {"_row_number": 3, "_stock_import_format": updates.STOCK_FORMAT_FUTON_ESPAI, "ID": "0201011", "_stock_total_excel": -197, "Stock Tienda": 46},
+                {"_row_number": 4, "_stock_import_format": updates.STOCK_FORMAT_FUTON_ESPAI, "ID": "0808001", "_stock_total_excel": -14, "Stock Tienda": 3},
+                {"_row_number": 5, "_stock_import_format": updates.STOCK_FORMAT_FUTON_ESPAI, "ID": "0817003", "_stock_total_excel": 1, "Stock Tienda": 2},
+                {"_row_number": 6, "_stock_import_format": updates.STOCK_FORMAT_FUTON_ESPAI, "ID": "0725004", "_stock_total_excel": 0, "Stock Tienda": 0},
+            ],
+        )
+
+        self.assertTrue(preview["apply_enabled"])
+        self.assertEqual(preview["status_counts"], {updates.READY: 5})
+        by_id = {row["id"]: row for row in preview["rows"]}
+        self.assertEqual(by_id["0201001"]["warehouse_stock_new"], 30.0)
+        self.assertEqual(by_id["0201011"]["warehouse_stock_new"], -243.0)
+        self.assertEqual(by_id["0808001"]["warehouse_stock_new"], -17.0)
+        self.assertEqual(by_id["0817003"]["warehouse_stock_new"], -1.0)
+        self.assertEqual(by_id["0725004"]["warehouse_stock_new"], 0.0)
+
+    def test_futon_espai_stock_empty_non_numeric_and_decimal_values_are_blocked(self) -> None:
+        client = FakeClient()
+        client.tables["inventory_items"] = [
+            inventory_row(725002, "0725002"),
+            inventory_row(725003, "0725003"),
+            inventory_row(725004, "0725004"),
+            inventory_row(725005, "0725005"),
+        ]
+        session = fake_session(client)
+
+        preview = updates.preview_updates(
+            session,
+            updates.PROCESS_STOCK,
+            [
+                {"_row_number": 2, "_stock_import_format": updates.STOCK_FORMAT_FUTON_ESPAI, "ID": "0725002", "_stock_total_excel": "", "Stock Tienda": 1},
+                {"_row_number": 3, "_stock_import_format": updates.STOCK_FORMAT_FUTON_ESPAI, "ID": "0725003", "_stock_total_excel": 10, "Stock Tienda": ""},
+                {"_row_number": 4, "_stock_import_format": updates.STOCK_FORMAT_FUTON_ESPAI, "ID": "0725004", "_stock_total_excel": "mal", "Stock Tienda": 0},
+                {"_row_number": 5, "_stock_import_format": updates.STOCK_FORMAT_FUTON_ESPAI, "ID": "0725005", "_stock_total_excel": 10, "Stock Tienda": "1.5"},
+            ],
+        )
+
+        self.assertFalse(preview["apply_enabled"])
+        self.assertEqual(preview["status_counts"], {updates.INVALID_VALUE: 4})
+        reasons = " | ".join(row["reason"] for row in preview["rows"])
+        self.assertIn("Total Excel vacio", reasons)
+        self.assertIn("Stock Tienda vacio", reasons)
+        self.assertIn("Total Excel no es numerico", reasons)
+        self.assertIn("Stock Tienda debe ser un entero", reasons)
+
+    def test_mixed_stock_row_errors_keep_apply_enabled_for_ready_rows_only(self) -> None:
+        client = FakeClient()
+        ready_codes = [f"09010{index:02d}" for index in range(10)]
+        no_change_codes = [f"09020{index:02d}" for index in range(3)]
+        descatalogado_codes = [f"09030{index:02d}" for index in range(2)]
+        invalid_value_code = "0904000"
+        client.tables["inventory_items"] = [
+            *[
+                inventory_row(901000 + index, code, store_stock=0, warehouse_stock=0)
+                for index, code in enumerate(ready_codes)
+            ],
+            *[
+                inventory_row(902000 + index, code, store_stock=3, warehouse_stock=7)
+                for index, code in enumerate(no_change_codes)
+            ],
+            *[
+                inventory_row(903000 + index, code, commercial_status="Descatalogado")
+                for index, code in enumerate(descatalogado_codes)
+            ],
+            inventory_row(904000, invalid_value_code),
+        ]
+        session = fake_session(client)
+
+        rows = [
+            *[
+                {
+                    "_row_number": index + 2,
+                    "_stock_import_format": updates.STOCK_FORMAT_FUTON_ESPAI,
+                    "ID": code,
+                    "_stock_total_excel": 15,
+                    "Stock Tienda": 4,
+                }
+                for index, code in enumerate(ready_codes)
+            ],
+            *[
+                {
+                    "_row_number": index + 20,
+                    "_stock_import_format": updates.STOCK_FORMAT_FUTON_ESPAI,
+                    "ID": code,
+                    "_stock_total_excel": 10,
+                    "Stock Tienda": 3,
+                }
+                for index, code in enumerate(no_change_codes)
+            ],
+            *[
+                {
+                    "_row_number": index + 30,
+                    "_stock_import_format": updates.STOCK_FORMAT_FUTON_ESPAI,
+                    "ID": code,
+                    "_stock_total_excel": 10,
+                    "Stock Tienda": 3,
+                }
+                for index, code in enumerate(descatalogado_codes)
+            ],
+            {
+                "_row_number": 40,
+                "_stock_import_format": updates.STOCK_FORMAT_FUTON_ESPAI,
+                "ID": "0999990",
+                "_stock_total_excel": 1,
+                "Stock Tienda": 0,
+            },
+            {
+                "_row_number": 41,
+                "_stock_import_format": updates.STOCK_FORMAT_FUTON_ESPAI,
+                "ID": "0999991",
+                "_stock_total_excel": 1,
+                "Stock Tienda": 0,
+            },
+            {
+                "_row_number": 42,
+                "_stock_import_format": updates.STOCK_FORMAT_FUTON_ESPAI,
+                "ID": invalid_value_code,
+                "_stock_total_excel": 1,
+                "Stock Tienda": "1.5",
+            },
+        ]
+
+        preview = updates.preview_updates(session, updates.PROCESS_STOCK, rows)
+
+        self.assertTrue(preview["valid"])
+        self.assertTrue(preview["apply_enabled"])
+        self.assertEqual(preview["ready_count"], 10)
+        self.assertEqual(preview["no_change_count"], 3)
+        self.assertEqual(preview["row_error_count"], 5)
+        self.assertEqual(preview["excluded_count"], 8)
+        self.assertEqual(
+            preview["status_counts"],
+            {
+                updates.READY: 10,
+                updates.NO_CHANGE: 3,
+                updates.DESCATALOGADO_NO_ACTUALIZABLE: 2,
+                updates.INVALID_ID: 2,
+                updates.INVALID_VALUE: 1,
+            },
+        )
+
+        with patch.object(updates, "write_snapshot"), patch.object(updates, "write_audit_event"):
+            result = updates.apply_update_preview(session, preview, settings=fake_settings())
+
+        self.assertEqual(result["status"], "APPLIED")
+        self.assertEqual(result["applied_rows"], 10)
+        self.assertEqual({item_id for _table, item_id, _payload in client.update_payloads}, {901000 + index for index in range(10)})
+
+    def test_global_blocker_still_blocks_apply_even_with_ready_rows(self) -> None:
+        client = FakeClient()
+        client.tables["inventory_items"] = [inventory_row(725002, "0725002", store_stock=0, warehouse_stock=0)]
+        session = fake_session(client)
+        preview = updates.preview_updates(
+            session,
+            updates.PROCESS_STOCK,
+            [
+                {
+                    "_row_number": 2,
+                    "_stock_import_format": updates.STOCK_FORMAT_FUTON_ESPAI,
+                    "ID": "0725002",
+                    "_stock_total_excel": 10,
+                    "Stock Tienda": 3,
+                }
+            ],
+        )
+        preview["global_blocker"] = True
+        preview["valid"] = False
+
+        with patch.object(updates, "write_snapshot"), patch.object(updates, "write_audit_event"):
+            with self.assertRaises(updates.UpdateApplyError):
+                updates.apply_update_preview(session, preview, settings=fake_settings())
+
+        self.assertEqual(client.update_payloads, [])
+
+    def test_futon_espai_stock_apply_can_write_signed_store_and_warehouse(self) -> None:
+        client = FakeClient()
+        client.tables["inventory_items"] = [
+            inventory_row(201001, "0201001", store_stock=0, warehouse_stock=0),
+            inventory_row(201011, "0201011", store_stock=0, warehouse_stock=0),
+        ]
+        session = fake_session(client)
+
+        preview = updates.preview_updates(
+            session,
+            updates.PROCESS_STOCK,
+            [
+                {"_row_number": 2, "_stock_import_format": updates.STOCK_FORMAT_FUTON_ESPAI, "ID": "0201001", "_stock_total_excel": 29, "Stock Tienda": -1},
+                {"_row_number": 3, "_stock_import_format": updates.STOCK_FORMAT_FUTON_ESPAI, "ID": "0201011", "_stock_total_excel": -197, "Stock Tienda": 46},
+            ],
+        )
+
+        with patch.object(updates, "write_snapshot"), patch.object(updates, "write_audit_event"):
+            result = updates.apply_update_preview(session, preview, settings=fake_settings())
+
+        self.assertEqual(result["status"], "APPLIED")
+        by_item = {row["item_id"]: row for row in client.tables["inventory_items"]}
+        self.assertEqual(by_item[201001]["store_stock"], -1.0)
+        self.assertEqual(by_item[201001]["warehouse_stock"], 30.0)
+        self.assertEqual(by_item[201011]["store_stock"], 46.0)
+        self.assertEqual(by_item[201011]["warehouse_stock"], -243.0)
+        payloads = {item_id: payload for _table, item_id, payload in client.update_payloads}
+        self.assertEqual(payloads[201001]["store_stock"], -1.0)
+        self.assertEqual(payloads[201001]["warehouse_stock"], 30.0)
+        self.assertEqual(payloads[201011]["store_stock"], 46.0)
+        self.assertEqual(payloads[201011]["warehouse_stock"], -243.0)
+
+    def test_stock_resolved_duplicate_item_ids_are_excluded_before_apply(self) -> None:
+        client = FakeClient()
+        client.tables["inventory_items"] = [inventory_row(201004, "0201004", store_stock=0, warehouse_stock=9)]
+        session = fake_session(client)
+
+        preview = updates.preview_updates(
+            session,
+            updates.PROCESS_STOCK,
+            [
+                {"_row_number": 8, "_stock_import_format": updates.STOCK_FORMAT_FUTON_ESPAI, "ID": "0201004", "_stock_total_excel": 18, "Stock Tienda": 0},
+                {"_row_number": 265, "_stock_import_format": updates.STOCK_FORMAT_FUTON_ESPAI, "ID": "201004", "_stock_total_excel": 0, "Stock Tienda": 0},
+            ],
+        )
+
+        self.assertFalse(preview["apply_enabled"])
+        self.assertEqual(preview["ready_count"], 0)
+        self.assertEqual(preview["write_cell_count"], 0)
+        self.assertEqual(preview["status_counts"], {updates.DUPLICATE_ID: 2})
+        self.assertEqual({row["item_id"] for row in preview["rows"]}, {201004})
+        self.assertTrue(all("item_id=201004" in row["reason"] for row in preview["rows"]))
+
+    def test_stale_ready_preview_with_duplicate_item_ids_blocks_without_writes(self) -> None:
+        client = FakeClient()
+        client.tables["inventory_items"] = [inventory_row(201004, "0201004", store_stock=0, warehouse_stock=9)]
+        session = fake_session(client)
+        stale_preview = {
+            "process": updates.PROCESS_STOCK,
+            "valid": True,
+            "global_blocker": False,
+            "rows": [
+                {
+                    "process": updates.PROCESS_STOCK,
+                    "status": updates.READY,
+                    "id": "0201004",
+                    "requested_id": "0201004",
+                    "item_id": 201004,
+                    "changes": [
+                        {
+                            "field": "warehouse_stock",
+                            "current": 9,
+                            "new": 18.0,
+                            "expected_current": 9,
+                            "inventory_changed": True,
+                        }
+                    ],
+                },
+                {
+                    "process": updates.PROCESS_STOCK,
+                    "status": updates.READY,
+                    "id": "0201004",
+                    "requested_id": "201004",
+                    "item_id": 201004,
+                    "changes": [
+                        {
+                            "field": "warehouse_stock",
+                            "current": 9,
+                            "new": 0.0,
+                            "expected_current": 9,
+                            "inventory_changed": True,
+                        }
+                    ],
+                },
+            ],
+        }
+
+        with patch.object(updates, "write_snapshot"), patch.object(updates, "write_audit_event"):
+            with self.assertRaises(updates.UpdateApplyError) as ctx:
+                updates.apply_update_preview(session, stale_preview, settings=fake_settings())
+
+        self.assertEqual(ctx.exception.result["status"], "BLOCKED_DUPLICATE_READY_ITEM")
+        self.assertEqual(ctx.exception.result["applied_rows"], 0)
+        self.assertEqual(client.tables["inventory_items"][0]["warehouse_stock"], 9)
+        self.assertEqual(client.update_payloads, [])
+
+    def test_stock_apply_two_fields_same_row_does_not_self_drift(self) -> None:
+        client = FakeClient()
+        client.tables["inventory_items"] = [inventory_row(725002, "0725002", store_stock=1, warehouse_stock=10)]
+        session = fake_session(client)
+        preview = updates.preview_updates(
+            session,
+            updates.PROCESS_STOCK,
+            [{"ID": "0725002", "Stock Tienda": 2, "Stock Warehouse": 9}],
+        )
+
+        with patch.object(updates, "write_snapshot"), patch.object(updates, "write_audit_event"):
+            result = updates.apply_update_preview(session, preview, settings=fake_settings())
+
+        self.assertEqual(result["status"], "APPLIED")
+        row = client.tables["inventory_items"][0]
+        self.assertEqual(row["store_stock"], 2.0)
+        self.assertEqual(row["warehouse_stock"], 9.0)
+        self.assertEqual(len(client.update_payloads), 1)
+        payload = client.update_payloads[0][2]
+        self.assertEqual(payload["store_stock"], 2.0)
+        self.assertEqual(payload["warehouse_stock"], 9.0)
+
+    def test_stock_apply_real_external_drift_still_blocks_and_rolls_back(self) -> None:
+        client = FakeClient()
+        client.tables["inventory_items"] = [
+            inventory_row(725002, "0725002", store_stock=1, warehouse_stock=10),
+            inventory_row(725003, "0725003", store_stock=4, warehouse_stock=10),
+        ]
+        session = fake_session(client)
+        preview = updates.preview_updates(
+            session,
+            updates.PROCESS_STOCK,
+            [
+                {"ID": "0725002", "Stock Tienda": 2, "Stock Warehouse": 9},
+                {"ID": "0725003", "Stock Tienda": 4, "Stock Warehouse": 12},
+            ],
+        )
+        client.tables["inventory_items"][1]["warehouse_stock"] = 11
+
+        with patch.object(updates, "write_snapshot"), patch.object(updates, "write_audit_event"):
+            with self.assertRaises(updates.UpdateApplyError) as ctx:
+                updates.apply_update_preview(session, preview, settings=fake_settings())
+
+        self.assertEqual(ctx.exception.result["status"], "ROLLED_BACK")
+        by_item = {row["item_id"]: row for row in client.tables["inventory_items"]}
+        self.assertEqual(by_item[725002]["store_stock"], 1)
+        self.assertEqual(by_item[725002]["warehouse_stock"], 10)
+        self.assertEqual(by_item[725003]["warehouse_stock"], 11)
+
+    def test_stock_apply_numeric_equivalent_values_do_not_trigger_drift(self) -> None:
+        client = FakeClient()
+        client.tables["inventory_items"] = [inventory_row(725002, "0725002", store_stock=0, warehouse_stock=1)]
+        session = fake_session(client)
+        preview = updates.preview_updates(
+            session,
+            updates.PROCESS_STOCK,
+            [{"ID": "0725002", "Stock Tienda": 2, "Stock Warehouse": 3}],
+        )
+        client.tables["inventory_items"][0]["store_stock"] = Decimal("0.0")
+        client.tables["inventory_items"][0]["warehouse_stock"] = Decimal("1.0")
+
+        with patch.object(updates, "write_snapshot"), patch.object(updates, "write_audit_event"):
+            result = updates.apply_update_preview(session, preview, settings=fake_settings())
+
+        self.assertEqual(result["status"], "APPLIED")
+        row = client.tables["inventory_items"][0]
+        self.assertEqual(row["store_stock"], 2.0)
+        self.assertEqual(row["warehouse_stock"], 3.0)
+
+    def test_futon_espai_stock_duplicates_invalid_id_and_descatalogado_are_preserved(self) -> None:
+        client = FakeClient()
+        client.tables["inventory_items"] = [
+            inventory_row(725002, "0725002"),
+            inventory_row(725004, "0725004", commercial_status="Descatalogado"),
+        ]
+        session = fake_session(client)
+
+        preview = updates.preview_updates(
+            session,
+            updates.PROCESS_STOCK,
+            [
+                {"_row_number": 2, "_stock_import_format": updates.STOCK_FORMAT_FUTON_ESPAI, "ID": "0725002", "_stock_total_excel": 13, "Stock Tienda": 4},
+                {"_row_number": 3, "_stock_import_format": updates.STOCK_FORMAT_FUTON_ESPAI, "ID": "0725002", "_stock_total_excel": 14, "Stock Tienda": 5},
+                {"_row_number": 4, "_stock_import_format": updates.STOCK_FORMAT_FUTON_ESPAI, "ID": "9999999", "_stock_total_excel": 1, "Stock Tienda": 0},
+                {"_row_number": 5, "_stock_import_format": updates.STOCK_FORMAT_FUTON_ESPAI, "ID": "0725004", "_stock_total_excel": 1, "Stock Tienda": 0},
+            ],
+        )
+
+        self.assertFalse(preview["apply_enabled"])
+        self.assertEqual(preview["status_counts"][updates.DUPLICATE_ID], 2)
+        self.assertEqual(preview["status_counts"][updates.INVALID_ID], 1)
+        self.assertEqual(preview["status_counts"][updates.DESCATALOGADO_NO_ACTUALIZABLE], 1)
+
+    def test_futon_espai_stock_formula_without_cached_value_is_blocked(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "Stock Almacenes.xlsx"
+            wb = Workbook()
+            ws = wb.active
+            ws.title = "Sheet2"
+            ws.append(["Codigo", "Denominacion", "Cantidad", "Coste", "Valoracion", "1-NADAL FORW", "2-FUTONESPAI"])
+            ws.append(["0725002", "Item", "=SUM(F2:Q2)", 0, 0, 9, 4])
+            wb.save(path)
+            wb.close()
+
+            with self.assertRaises(updates.UpdatesValidationError) as ctx:
+                updates.read_updates_workbook(path, updates.PROCESS_STOCK)
+
+        self.assertIn("formula sin valor calculado", str(ctx.exception))
+        self.assertIn("fila 2", str(ctx.exception))
+
+    def test_stock_workbook_with_unknown_signature_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "stock_unknown.xlsx"
+            wb = Workbook()
+            ws = wb.active
+            ws.append(["Codigo", "Nombre", "Cantidad", "", "", "", "Tienda"])
+            ws.append(["0725002", "Item", 13, "", "", "", 4])
+            wb.save(path)
+            wb.close()
+
+            with self.assertRaises(updates.UpdatesValidationError) as ctx:
+                updates.read_updates_workbook(path, updates.PROCESS_STOCK)
+
+        self.assertIn("Stock Almacenes de Futon Espai", str(ctx.exception))
+
+    def test_legacy_stock_workbook_format_is_still_supported(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "legacy_stock.xlsx"
+            wb = Workbook()
+            ws = wb.active
+            ws.append(["ID", "Stock Tienda", "Stock Warehouse"])
+            ws.append(["0725002", 7, 8])
+            wb.save(path)
+            wb.close()
+
+            rows = updates.read_updates_workbook(path, updates.PROCESS_STOCK)
+
+        self.assertEqual(rows, [{"_row_number": 2, "ID": "0725002", "Stock Tienda": 7, "Stock Warehouse": 8}])
 
     def test_supplier_prices_primary_resolution_pascal_blank_and_sync(self) -> None:
         client = FakeClient()
@@ -444,8 +1031,26 @@ class UpdatesModule004Tests(unittest.TestCase):
         )
 
         self.assertFalse(preview["apply_enabled"])
-        self.assertEqual(preview["status_counts"], {updates.INVALID_ID: 1})
+        self.assertEqual(preview["status_counts"], {updates.AMBIGUOUS_IDENTITY: 1})
         self.assertIn("ambigua", preview["rows"][0]["reason"])
+
+    def test_descatalogado_identity_resolves_before_policy_even_if_not_simple(self) -> None:
+        client = FakeClient()
+        discontinued = inventory_row(725001, "0725001", commercial_status="Descatalogado")
+        discontinued["item_record_type"] = "historical_duplicate"
+        client.tables["inventory_items"] = [discontinued]
+        session = fake_session(client)
+
+        preview = updates.preview_updates(
+            session,
+            updates.PROCESS_STOCK,
+            [{"ID": "0725001", "Stock Tienda": 1, "Stock Warehouse": 1}],
+        )
+
+        self.assertFalse(preview["apply_enabled"])
+        self.assertEqual(preview["status_counts"], {updates.DESCATALOGADO_NO_ACTUALIZABLE: 1})
+        self.assertEqual(preview["rows"][0]["item_id"], 725001)
+        self.assertEqual(preview["rows"][0]["id"], "0725001")
 
     def test_zero_prefixed_resolution_does_not_bypass_descatalogado_block(self) -> None:
         client = FakeClient()
@@ -645,12 +1250,41 @@ class UpdatesNavigationContractTests(unittest.TestCase):
         from futonhub.ui.erp.prototype import FutonHubErpPrototype
 
         source = inspect.getsource(FutonHubErpPrototype._build_updates)
-        self.assertIn('state: dict[str, Any] = {"preview": None, "applying": False}', source)
-        self.assertIn('if state.get("applying"):', source)
+        self.assertIn("_updates_process_options_for_user", source)
+        self.assertIn('"loading": False', source)
+        self.assertIn('if state.get("applying") or state.get("loading"):', source)
         self.assertIn('self._show_working_overlay("Aplicando actualizacion"', source)
         self.assertIn("threading.Thread(target=worker, daemon=True).start()", source)
         self.assertIn("self.after(0, callback)", source)
         self.assertIn("preview_updates_from_excel(session, process, source_path)", source)
+
+    def test_updates_visible_process_options_follow_access_policy(self) -> None:
+        from futonhub.ui.erp.prototype import _updates_process_options_for_user
+
+        andy_processes = tuple(process for process, _label in _updates_process_options_for_user("andyshb95@gmail.com"))
+        espai_processes = tuple(process for process, _label in _updates_process_options_for_user("futonhub1@gmail.com"))
+        unknown_processes = tuple(process for process, _label in _updates_process_options_for_user("worker@example.test"))
+
+        expected_all = (
+            updates.PROCESS_ROTATION_C,
+            updates.PROCESS_STOCK,
+            updates.PROCESS_SUPPLIER_PRICES,
+        )
+        self.assertEqual(andy_processes, expected_all)
+        self.assertEqual(espai_processes, (updates.PROCESS_STOCK,))
+        self.assertEqual(unknown_processes, expected_all)
+
+    def test_updates_load_excel_runs_in_background_with_overlay_and_double_click_guard(self) -> None:
+        from futonhub.ui.erp.prototype import FutonHubErpPrototype
+
+        source = inspect.getsource(FutonHubErpPrototype._build_updates)
+        self.assertIn('if state.get("applying") or state.get("loading"):', source)
+        self.assertIn('self._show_working_overlay("Cargando Excel"', source)
+        self.assertIn("set_loading(True, loading_message)", source)
+        self.assertIn("set_loading(False)", source)
+        self.assertIn("Cargando y validando stock...", source)
+        self.assertIn("Preparando vista previa...", source)
+        self.assertIn("preview_updates_from_excel(session, process, path)", source)
 
 
 if __name__ == "__main__":

@@ -15,23 +15,33 @@ PROCESS_ROTATION_C = "rotation_c"
 PROCESS_STOCK = "stock"
 PROCESS_SUPPLIER_PRICES = "supplier_prices"
 
+OWNER_UPDATES_USER_EMAIL = "andyshb95@gmail.com"
+FUTON_ESPAI_UPDATES_USER_EMAIL = "futonhub1@gmail.com"
+ACCESS_DENIED = "ACCESS_DENIED"
+
+STOCK_FORMAT_LEGACY = "LEGACY_STOCK_FORMAT"
+STOCK_FORMAT_FUTON_ESPAI = "FUTON_ESPAI_STOCK_ALMACENES"
+
 READY = "READY"
 NO_CHANGE = "NO_CHANGE"
 INVALID_ID = "INVALID_ID"
 INVALID_VALUE = "INVALID_VALUE"
 DUPLICATE_ID = "DUPLICATE_ID"
+AMBIGUOUS_IDENTITY = "AMBIGUOUS_IDENTITY"
 DESCATALOGADO_NO_ACTUALIZABLE = "DESCATALOGADO_NO_ACTUALIZABLE"
 PRIMARY_SUPPLIER_UNRESOLVED = "PRIMARY_SUPPLIER_UNRESOLVED"
 SUPPLIER_PRICES_READ_ERROR = "SUPPLIER_PRICES_READ_ERROR"
 
-BLOCKING_STATUSES = {
+ROW_EXCLUDED_STATUSES = {
     INVALID_ID,
     INVALID_VALUE,
     DUPLICATE_ID,
+    AMBIGUOUS_IDENTITY,
     DESCATALOGADO_NO_ACTUALIZABLE,
     PRIMARY_SUPPLIER_UNRESOLVED,
     SUPPLIER_PRICES_READ_ERROR,
 }
+BLOCKING_STATUSES = ROW_EXCLUDED_STATUSES
 
 PROCESS_DEFINITIONS: dict[str, dict[str, Any]] = {
     PROCESS_ROTATION_C: {
@@ -49,6 +59,12 @@ PROCESS_DEFINITIONS: dict[str, dict[str, Any]] = {
         "template_name": "Plantilla_Precios_Proveedores.xlsx",
         "headers": ("ID", "Precio Principal", "Pascal"),
     },
+}
+
+UPDATES_PROCESS_ORDER = (PROCESS_ROTATION_C, PROCESS_STOCK, PROCESS_SUPPLIER_PRICES)
+_UPDATES_PROCESS_ACCESS_BY_EMAIL = {
+    OWNER_UPDATES_USER_EMAIL: frozenset(UPDATES_PROCESS_ORDER),
+    FUTON_ESPAI_UPDATES_USER_EMAIL: frozenset({PROCESS_STOCK}),
 }
 
 INVENTORY_UPDATE_SELECT_COLUMNS = (
@@ -83,6 +99,40 @@ class ParsedUpdateRow:
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _normalise_user_email(user_email: Any) -> str:
+    return str(user_email or "").strip().casefold()
+
+
+def can_use_updates_process(user_email: Any, process: str) -> bool:
+    _definition(process)
+    allowed_processes = _UPDATES_PROCESS_ACCESS_BY_EMAIL.get(_normalise_user_email(user_email))
+    if allowed_processes is None:
+        return True
+    return process in allowed_processes
+
+
+def allowed_updates_processes(user_email: Any) -> tuple[str, ...]:
+    return tuple(process for process in UPDATES_PROCESS_ORDER if can_use_updates_process(user_email, process))
+
+
+def ensure_updates_process_access(user_email: Any, process: str) -> None:
+    definition = _definition(process)
+    if can_use_updates_process(user_email, process):
+        return
+    message = f"{ACCESS_DENIED}: usuario no autorizado para {definition['label']}."
+    raise UpdateApplyError(
+        message,
+        {
+            "operation_id": "",
+            "status": ACCESS_DENIED,
+            "process": process,
+            "applied_rows": 0,
+            "errors": [message],
+            "postcheck": [],
+        },
+    )
 
 
 def _is_blank(value: Any) -> bool:
@@ -131,6 +181,12 @@ def _parse_decimal(value: Any, *, allow_blank: bool, field_label: str, allow_neg
     if not allow_negative and number < 0:
         return None, f"{field_label} no puede ser negativo"
     return number, ""
+
+
+def _integer_quantity_error(value: Decimal | None, *, field_label: str) -> str:
+    if value is not None and value != value.to_integral_value():
+        return f"{field_label} debe ser un entero"
+    return ""
 
 
 def _decimal_equal(left: Any, right: Any) -> bool:
@@ -198,6 +254,12 @@ def _is_simple_inventory_row(row: Mapping[str, Any]) -> bool:
     return True
 
 
+def _is_update_resolvable_identity_row(row: Mapping[str, Any]) -> bool:
+    if _is_simple_inventory_row(row):
+        return True
+    return is_discontinued_commercial_status(row.get("commercial_status"))
+
+
 def _select_rows_by_exact_value(session, column: str, value: Any) -> list[dict[str, Any]]:
     response = (
         session.client.table("inventory_items")
@@ -228,15 +290,15 @@ def _collect_update_inventory_candidates(session, code: str) -> tuple[dict[int, 
 
 def _resolve_update_inventory_item_literal(session, code: str) -> tuple[dict[str, Any] | None, str, bool]:
     found, diagnostics = _collect_update_inventory_candidates(session, code)
-    physical = {
+    candidates = {
         item_id: row
         for item_id, row in found.items()
-        if _is_simple_inventory_row(row) and _row_matches_requested_id(row, code)
+        if _is_update_resolvable_identity_row(row) and _row_matches_requested_id(row, code)
     }
 
-    if len(physical) == 1:
-        return next(iter(physical.values())), "", False
-    if len(physical) > 1:
+    if len(candidates) == 1:
+        return next(iter(candidates.values())), "", False
+    if len(candidates) > 1:
         return None, "Resolucion exacta ambigua para el ID", True
     if diagnostics:
         return None, "; ".join(diagnostics), False
@@ -251,6 +313,12 @@ def _canonical_update_item_code(row: Mapping[str, Any]) -> str:
         if value:
             return value
     return str(row.get("item_id") or "").strip()
+
+
+def _resolution_error_status(reason: str) -> str:
+    if "ambigua" in str(reason or "").casefold():
+        return AMBIGUOUS_IDENTITY
+    return INVALID_ID
 
 
 def resolve_update_inventory_item(session, requested_id: Any) -> tuple[dict[str, Any] | None, str]:
@@ -360,6 +428,106 @@ def _trim_header_values(values: list[Any]) -> list[str]:
     return result
 
 
+def _normalized_header(value: Any) -> str:
+    import re
+    import unicodedata
+
+    text = "" if value is None else str(value).strip()
+    text = unicodedata.normalize("NFKD", text)
+    text = "".join(char for char in text if not unicodedata.combining(char))
+    return re.sub(r"\s+", " ", text).casefold()
+
+
+def _is_futon_espai_stock_sheet(sheet: Any) -> bool:
+    headers = {
+        "a": _normalized_header(sheet.cell(row=1, column=1).value),
+        "b": _normalized_header(sheet.cell(row=1, column=2).value),
+        "c": _normalized_header(sheet.cell(row=1, column=3).value),
+        "g": _normalized_header(sheet.cell(row=1, column=7).value),
+    }
+    return (
+        headers["a"] == "codigo"
+        and headers["b"] == "denominacion"
+        and headers["c"] == "cantidad"
+        and "futonespai" in headers["g"]
+    )
+
+
+def _find_futon_espai_stock_sheet(workbook: Any) -> Any | None:
+    for sheet in workbook.worksheets:
+        if _is_futon_espai_stock_sheet(sheet):
+            return sheet
+    return None
+
+
+def _cached_formula_value(formula_cell: Any, value_cell: Any, *, row_number: int, field_label: str) -> Any:
+    if getattr(formula_cell, "data_type", "") == "f" and _is_blank(value_cell.value):
+        raise UpdatesValidationError(
+            f"{field_label} fila {row_number}: formula sin valor calculado almacenado. "
+            "Abre y guarda el Excel antes de cargarlo."
+        )
+    return value_cell.value
+
+
+def _derive_stock_warehouse_raw(total_value: Any, store_value: Any) -> Any:
+    total = _decimal_or_none(total_value)
+    store = _decimal_or_none(store_value)
+    if total is None or store is None:
+        return ""
+    return _decimal_to_payload(total - store)
+
+
+def _read_futon_espai_stock_workbook(path: str | Path) -> list[dict[str, Any]] | None:
+    from openpyxl import load_workbook
+
+    workbook_values = load_workbook(path, read_only=False, data_only=True)
+    workbook_formulas = load_workbook(path, read_only=False, data_only=False)
+    try:
+        value_sheet = _find_futon_espai_stock_sheet(workbook_values)
+        if value_sheet is None:
+            if _find_futon_espai_stock_sheet(workbook_formulas) is None:
+                return None
+            value_sheet = workbook_values[_find_futon_espai_stock_sheet(workbook_formulas).title]
+        formula_sheet = workbook_formulas[value_sheet.title]
+
+        rows: list[dict[str, Any]] = []
+        for row_number in range(2, value_sheet.max_row + 1):
+            code_cell = formula_sheet.cell(row=row_number, column=1)
+            total_formula_cell = formula_sheet.cell(row=row_number, column=3)
+            total_value_cell = value_sheet.cell(row=row_number, column=3)
+            store_formula_cell = formula_sheet.cell(row=row_number, column=7)
+            store_value_cell = value_sheet.cell(row=row_number, column=7)
+            total_value = _cached_formula_value(
+                total_formula_cell,
+                total_value_cell,
+                row_number=row_number,
+                field_label="Total Excel",
+            )
+            store_value = _cached_formula_value(
+                store_formula_cell,
+                store_value_cell,
+                row_number=row_number,
+                field_label="Stock Tienda",
+            )
+            code = _excel_id_value(code_cell)
+            if _is_blank(code) and _is_blank(total_value) and _is_blank(store_value):
+                continue
+            rows.append(
+                {
+                    "_row_number": row_number,
+                    "_stock_import_format": STOCK_FORMAT_FUTON_ESPAI,
+                    "_stock_total_excel": total_value,
+                    "ID": code,
+                    "Stock Tienda": store_value,
+                    "Stock Warehouse": _derive_stock_warehouse_raw(total_value, store_value),
+                }
+            )
+        return rows
+    finally:
+        workbook_values.close()
+        workbook_formulas.close()
+
+
 def _definition(process: str) -> dict[str, Any]:
     if process not in PROCESS_DEFINITIONS:
         raise UpdatesValidationError(f"Proceso de actualizacion no soportado: {process}")
@@ -371,12 +539,22 @@ def read_updates_workbook(path: str | Path, process: str) -> list[dict[str, Any]
 
     definition = _definition(process)
     expected_headers = list(definition["headers"])
+    if process == PROCESS_STOCK:
+        official_rows = _read_futon_espai_stock_workbook(path)
+        if official_rows is not None:
+            return official_rows
+
     workbook = load_workbook(path, read_only=True, data_only=True)
     try:
         sheet = workbook.active
         header_cells = next(sheet.iter_rows(min_row=1, max_row=1))
         headers = _trim_header_values([cell.value for cell in header_cells])
         if headers != expected_headers:
+            if process == PROCESS_STOCK:
+                raise UpdatesValidationError(
+                    "El archivo no corresponde al formato de Stock Almacenes de Futon Espai "
+                    "ni al formato legacy ID | Stock Tienda | Stock Warehouse."
+                )
             raise UpdatesValidationError(
                 f"Headers invalidos para {definition['label']}. Esperado: {' | '.join(expected_headers)}"
             )
@@ -424,6 +602,49 @@ def _error_row(raw: Mapping[str, Any], status: str, reason: str, process: str, r
         "reason": reason,
         "changes": [],
     }
+
+
+def _duplicate_resolved_item_reason(item_id: int, rows: Iterable[Mapping[str, Any]]) -> str:
+    requested_ids = sorted(
+        {
+            str(row.get("requested_id") or row.get("id") or "").strip()
+            for row in rows
+            if str(row.get("requested_id") or row.get("id") or "").strip()
+        }
+    )
+    canonical_ids = sorted(
+        {
+            str(row.get("id") or "").strip()
+            for row in rows
+            if str(row.get("id") or "").strip()
+        }
+    )
+    details = ", ".join(requested_ids or canonical_ids)
+    return f"Item fisico duplicado en el Excel: item_id={item_id}; IDs={details}"
+
+
+def _mark_duplicate_resolved_items(preview_rows: list[dict[str, Any]]) -> None:
+    resolved_rows_by_item_id: dict[int, list[dict[str, Any]]] = {}
+    for row in preview_rows:
+        if row.get("status") in ROW_EXCLUDED_STATUSES:
+            continue
+        item_id = row.get("item_id")
+        if item_id in (None, ""):
+            continue
+        try:
+            item_key = int(item_id)
+        except (TypeError, ValueError):
+            continue
+        resolved_rows_by_item_id.setdefault(item_key, []).append(row)
+
+    for item_id, rows in resolved_rows_by_item_id.items():
+        if len(rows) < 2:
+            continue
+        reason = _duplicate_resolved_item_reason(item_id, rows)
+        for row in rows:
+            row["status"] = DUPLICATE_ID
+            row["reason"] = reason
+            row["changes"] = []
 
 
 def _base_preview_row(process: str, raw: Mapping[str, Any], item: Mapping[str, Any]) -> dict[str, Any]:
@@ -483,8 +704,31 @@ def _preview_rotation(session, raw: Mapping[str, Any], item: Mapping[str, Any]) 
 
 def _preview_stock(session, raw: Mapping[str, Any], item: Mapping[str, Any]) -> dict[str, Any]:
     row = _base_preview_row(PROCESS_STOCK, raw, item)
-    store, store_error = _parse_decimal(raw.get("Stock Tienda"), allow_blank=False, field_label="Stock Tienda")
-    warehouse, warehouse_error = _parse_decimal(raw.get("Stock Warehouse"), allow_blank=False, field_label="Stock Warehouse")
+    import_format = str(raw.get("_stock_import_format") or STOCK_FORMAT_LEGACY)
+    if import_format == STOCK_FORMAT_FUTON_ESPAI:
+        store, store_error = _parse_decimal(
+            raw.get("Stock Tienda"),
+            allow_blank=False,
+            field_label="Stock Tienda",
+            allow_negative=True,
+        )
+        total, total_error = _parse_decimal(
+            raw.get("_stock_total_excel"),
+            allow_blank=False,
+            field_label="Total Excel",
+            allow_negative=True,
+        )
+        store_integer_error = _integer_quantity_error(store, field_label="Stock Tienda")
+        total_integer_error = _integer_quantity_error(total, field_label="Total Excel")
+        warehouse = total - store if total is not None and store is not None else None
+        warehouse_error = _integer_quantity_error(warehouse, field_label="Stock Warehouse derivado")
+    else:
+        store, store_error = _parse_decimal(raw.get("Stock Tienda"), allow_blank=False, field_label="Stock Tienda")
+        store_integer_error = ""
+        total_integer_error = ""
+        total = None
+        total_error = ""
+        warehouse, warehouse_error = _parse_decimal(raw.get("Stock Warehouse"), allow_blank=False, field_label="Stock Warehouse")
     row.update(
         {
             "store_stock_current": item.get("store_stock"),
@@ -493,12 +737,33 @@ def _preview_stock(session, raw: Mapping[str, Any], item: Mapping[str, Any]) -> 
             "warehouse_stock_new": _decimal_to_payload(warehouse) if warehouse is not None else None,
             "stock_total_current": (_canonical_price_value(item.get("store_stock")) or 0.0)
             + (_canonical_price_value(item.get("warehouse_stock")) or 0.0),
+            "stock_import_format": import_format,
+            "stock_total_excel": _decimal_to_payload(total) if total is not None else "",
         }
     )
-    if store_error or warehouse_error:
-        row.update({"status": INVALID_VALUE, "reason": "; ".join(error for error in (store_error, warehouse_error) if error)})
+    if store_error or warehouse_error or total_error or store_integer_error or total_integer_error:
+        row.update(
+            {
+                "status": INVALID_VALUE,
+                "reason": "; ".join(
+                    error
+                    for error in (
+                        total_error,
+                        total_integer_error,
+                        store_error,
+                        store_integer_error,
+                        warehouse_error,
+                    )
+                    if error
+                ),
+            }
+        )
         return row
-    row["stock_total_new"] = float(store or Decimal("0")) + float(warehouse or Decimal("0"))
+    row["stock_total_new"] = (
+        _decimal_to_payload(total)
+        if import_format == STOCK_FORMAT_FUTON_ESPAI and total is not None
+        else float(store or Decimal("0")) + float(warehouse or Decimal("0"))
+    )
     changes = [
         _change(field="store_stock", current=item.get("store_stock"), new_value=store),
         _change(field="warehouse_stock", current=item.get("warehouse_stock"), new_value=warehouse),
@@ -584,6 +849,7 @@ def _preview_supplier_prices(session, raw: Mapping[str, Any], item: Mapping[str,
 
 def preview_updates(session, process: str, rows: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
     _definition(process)
+    ensure_updates_process_access(getattr(session, "email", None), process)
     raw_rows = [dict(row) for row in rows]
     requested_ids = [str(row.get("ID") or "").strip() for row in raw_rows if str(row.get("ID") or "").strip()]
     duplicate_ids = {value for value in requested_ids if requested_ids.count(value) > 1}
@@ -599,7 +865,8 @@ def preview_updates(session, process: str, rows: Iterable[Mapping[str, Any]]) ->
             continue
         item, reason = resolve_update_inventory_item(session, requested_id)
         if item is None:
-            preview_rows.append(_error_row(raw, INVALID_ID, reason or "No existe coincidencia exacta", process, requested_id))
+            reason = reason or "No existe coincidencia exacta"
+            preview_rows.append(_error_row(raw, _resolution_error_status(reason), reason, process, requested_id))
             continue
         if is_discontinued_commercial_status(item.get("commercial_status")):
             row = _base_preview_row(process, raw, item)
@@ -620,25 +887,32 @@ def preview_updates(session, process: str, rows: Iterable[Mapping[str, Any]]) ->
         else:
             raise UpdatesValidationError(f"Proceso de actualizacion no soportado: {process}")
 
+    _mark_duplicate_resolved_items(preview_rows)
     status_counts: dict[str, int] = {}
     for row in preview_rows:
         status_counts[row["status"]] = status_counts.get(row["status"], 0) + 1
     ready_rows = [row for row in preview_rows if row["status"] == READY]
+    row_error_count = sum(status_counts.get(status, 0) for status in ROW_EXCLUDED_STATUSES)
+    global_blocker = False
     return {
         "process": process,
         "label": PROCESS_DEFINITIONS[process]["label"],
-        "valid": not any(row["status"] in BLOCKING_STATUSES for row in preview_rows),
-        "apply_enabled": bool(ready_rows) and not any(row["status"] in BLOCKING_STATUSES for row in preview_rows),
+        "valid": not global_blocker,
+        "global_blocker": global_blocker,
+        "apply_enabled": bool(ready_rows) and not global_blocker,
         "rows": preview_rows,
         "row_count": len(preview_rows),
         "ready_count": len(ready_rows),
         "no_change_count": status_counts.get(NO_CHANGE, 0),
+        "row_error_count": row_error_count,
+        "excluded_count": row_error_count + status_counts.get(NO_CHANGE, 0),
         "status_counts": status_counts,
         "write_cell_count": sum(len(row.get("changes") or []) for row in ready_rows),
     }
 
 
 def preview_updates_from_excel(session, process: str, path: str | Path) -> dict[str, Any]:
+    ensure_updates_process_access(getattr(session, "email", None), process)
     rows = read_updates_workbook(path, process)
     preview = preview_updates(session, process, rows)
     preview["source_path"] = str(path)
@@ -752,14 +1026,45 @@ def _postcheck_row(session, row: Mapping[str, Any]) -> dict[str, Any]:
     return {"item_id": item_id, "checked": checked}
 
 
+def _validate_unique_ready_item_ids(ready_rows: Iterable[Mapping[str, Any]]) -> None:
+    rows_by_item_id: dict[int, list[Mapping[str, Any]]] = {}
+    for row in ready_rows:
+        item_id = row.get("item_id")
+        if item_id in (None, ""):
+            continue
+        try:
+            item_key = int(item_id)
+        except (TypeError, ValueError):
+            continue
+        rows_by_item_id.setdefault(item_key, []).append(row)
+
+    for item_id, rows in rows_by_item_id.items():
+        if len(rows) < 2:
+            continue
+        first = rows[0]
+        message = f"{first.get('id')}: {_duplicate_resolved_item_reason(item_id, rows)}"
+        raise UpdateApplyError(
+            message,
+            {
+                "operation_id": "",
+                "status": "BLOCKED_DUPLICATE_READY_ITEM",
+                "process": str(first.get("process") or ""),
+                "applied_rows": 0,
+                "errors": [message],
+                "postcheck": [],
+            },
+        )
+
+
 def apply_update_preview(session, preview: Mapping[str, Any], settings: Settings | None = None) -> dict[str, Any]:
     if not getattr(session, "user_id", None):
         raise UpdateApplyError("No se puede aplicar Actualizaciones sin usuario autenticado.")
-    settings = settings or load_settings()
     process = str(preview.get("process") or "")
     _definition(process)
-    if not preview.get("valid"):
-        raise UpdateApplyError("El preview contiene errores y no puede aplicarse.")
+    ensure_updates_process_access(getattr(session, "email", None), process)
+    settings = settings or load_settings()
+    if preview.get("global_blocker") or (preview.get("valid") is False and not preview.get("rows")):
+        raise UpdateApplyError("El preview contiene un bloqueador global y no puede aplicarse.")
 
     ready_rows = [dict(row) for row in (preview.get("rows") or []) if row.get("status") == READY]
     if not ready_rows:
@@ -771,6 +1076,7 @@ def apply_update_preview(session, preview: Mapping[str, Any], settings: Settings
             "errors": [],
             "postcheck": [],
         }
+    _validate_unique_ready_item_ids(ready_rows)
 
     operation_id = new_operation_id("UPDATES")
     now = _now_iso()

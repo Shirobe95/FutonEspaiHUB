@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.6.1 · Stock Updates & Proposal Workflow
+
+- Actualizaciones > Stock incorpora el formato operativo validado por Futon
+  Espai: `A=Codigo`, `C=Total`, `G=Tienda`, con almacen calculado como
+  `Total - Tienda`.
+- Stock acepta valores firmados validos, mantiene errores por fila como no
+  bloqueantes y aplica unicamente filas `READY`, con preview, snapshot,
+  postcheck, rollback y doble proteccion contra ejecuciones repetidas.
+- Stock protege campos no autorizados y evita escrituras en descatalogados,
+  invalidos y duplicados de identidad; smoke humano real:
+  `UPDATES-20260904-084735-F891046B`.
+- Actualizaciones anade control de acceso acotado al modulo: Andy conserva
+  Stock, Rotacion C y Precios de Proveedores; Futon Espai conserva Stock y no
+  ve ni ejecuta Rotacion C ni Precios de Proveedores.
+- Cambio de Precios mantiene exclusiones confirmadas del catalogo fuente sin
+  aplicar una regla global de ocultar articulos sin Woo.
+- Propuestas limita la carga inicial a las 10 propuestas logicas mas recientes,
+  conserva el historial completo, calcula contadores reales de Items/Suben/Bajan
+  sin placeholders y mantiene detalle lazy.
+- Smokes humanos registrados para Stock, control de acceso, catalogo fuente de
+  precios, historial de propuestas y contadores de propuestas.
+
 ## 0.6.0 · Proposal History & Price Impact Catalogue
 
 - Cambio de Precios: refuerza la resolucion Woo de Tatamis Plegables con

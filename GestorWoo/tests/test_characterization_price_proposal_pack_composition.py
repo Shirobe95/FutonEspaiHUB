@@ -1487,12 +1487,14 @@ class PriceProposalPackCompositionTests(unittest.TestCase):
         self.assertEqual(len(grouped), 3)
         self.assertEqual([proposal.status for proposal in grouped], ["Pendiente", "Error critico", "Restaurada"])
 
-    def test_refresh_loads_maximum_service_window_and_renders_once_after_worker(self) -> None:
+    def test_refresh_loads_bounded_history_page_and_renders_once_after_worker(self) -> None:
         source = inspect.getsource(FutonHubErpPrototype._refresh_price_proposals)
         before_worker, worker = source.split("def worker()", 1)
 
-        self.assertIn('diagnose_real_price_proposals(self._cloud_session, status="all")', worker)
-        self.assertNotIn('limit=200', worker)
+        self.assertIn("fetch_real_price_proposal_history_page(", worker)
+        self.assertIn("page=page", worker)
+        self.assertIn("page_size=page_size", worker)
+        self.assertNotIn("diagnose_real_price_proposals(", worker)
         active_refresh = before_worker.split('overlay = self._price_start_working_overlay', 1)[1]
         self.assertNotIn('self._show_view("precios")', active_refresh)
         self.assertIn("_finish_price_proposals_refresh", worker)
@@ -1936,7 +1938,7 @@ class PriceProposalPackCompositionTests(unittest.TestCase):
         save_source = inspect.getsource(FutonHubErpPrototype._finish_price_edit_saved)
 
         self.assertIn("self._price_refresh_generation += 1", source)
-        self.assertEqual(source.count("diagnose_real_price_proposals("), 1)
+        self.assertEqual(source.count("fetch_real_price_proposal_history_page("), 1)
         self.assertIn('source="manual"', workspace_source)
         self.assertIn('"borrado"', delete_source)
         self.assertIn('"guardado"', save_source)

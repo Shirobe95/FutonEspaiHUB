@@ -43,9 +43,12 @@ from futonhub.cloud.services.inventory import (
     update_inventory_item_fields,
 )
 from futonhub.cloud.services.price_proposals import (
+    PRICE_PROPOSAL_HISTORY_DEFAULT_PAGE_SIZE,
     create_real_price_proposal,
     delete_real_price_proposal_group,
     diagnose_real_price_proposals,
+    fetch_real_price_proposal_detail_rows,
+    fetch_real_price_proposal_history_page,
     format_existing_price_proposal_preview,
     preview_real_price_proposal,
     preview_existing_price_proposal,
@@ -87,12 +90,18 @@ from futonhub.cloud.services.supplier_prices import (
     update_supplier_price_inventory_item,
 )
 from futonhub.cloud.services.updates import (
+    AMBIGUOUS_IDENTITY,
+    DESCATALOGADO_NO_ACTUALIZABLE,
+    DUPLICATE_ID,
+    INVALID_ID,
+    INVALID_VALUE,
     PROCESS_DEFINITIONS as UPDATE_PROCESS_DEFINITIONS,
     PROCESS_ROTATION_C,
     PROCESS_STOCK,
     PROCESS_SUPPLIER_PRICES,
     UpdateApplyError,
     UpdatesValidationError,
+    allowed_updates_processes,
     apply_update_preview,
     preview_updates_from_excel,
     write_update_template,
@@ -131,6 +140,7 @@ from futonhub.services.price_catalog_audit import (
 )
 from futonhub.services.inventory_visibility import InventoryVisibilityOverrides
 from futonhub.services.price_catalog_reconciliation import (
+    audit_price_proposal_selectable_catalogue,
     operational_price_catalogue_rows,
     price_proposal_selectable_catalogue_rows,
     reconcile_canonical_catalogue,
@@ -243,6 +253,11 @@ def _ensure_openpyxl_exports_loaded() -> None:
     Side = _Side
     get_column_letter = _get_column_letter
     _OPENPYXL_EXPORTS_LOADED = True
+
+
+def _updates_process_options_for_user(user_email: object) -> tuple[tuple[str, str], ...]:
+    visible_processes = allowed_updates_processes(user_email)
+    return tuple((process, UPDATE_PROCESS_DEFINITIONS[process]["label"]) for process in visible_processes)
 
 
 INVENTORY_ITEMS = [
@@ -675,6 +690,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         self._price_filter_options_cache: dict[tuple[str, str, str, str, str], dict[str, list[str]]] = {}
         self._price_filter_metadata_generation = 0
         self._price_filter_performance: dict[str, Any] = {}
+        self._price_selectable_catalog_audit: dict[str, Any] = {}
         self._price_search_results: list[dict[str, Any]] = []
         self._price_items_loading = False
         self._price_items_error = ""
@@ -714,6 +730,11 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         self._price_refresh_diagnostics: list[dict[str, Any]] = []
         self._price_next_refresh_source = ""
         self._price_refresh_preferred_token = ""
+        self._price_history_page = 1
+        self._price_history_page_size = PRICE_PROPOSAL_HISTORY_DEFAULT_PAGE_SIZE
+        self._price_history_has_next_page = False
+        self._price_detail_loading_key = ""
+        self._price_detail_generation = 0
         self._supplier_orders: list[SupplierOrder] = []
         self._orders_loaded_once = False
         self._orders_loading = False
@@ -1199,6 +1220,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         self._price_filter_options_cache = {}
         self._price_filter_metadata_generation = 0
         self._price_filter_performance = {}
+        self._price_selectable_catalog_audit = {}
         self._price_search_results = []
         self._price_items_loading = False
         self._price_items_error = ""
@@ -1229,6 +1251,11 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         self._price_refresh_diagnostics = []
         self._price_next_refresh_source = ""
         self._price_refresh_preferred_token = ""
+        self._price_history_page = 1
+        self._price_history_page_size = PRICE_PROPOSAL_HISTORY_DEFAULT_PAGE_SIZE
+        self._price_history_has_next_page = False
+        self._price_detail_loading_key = ""
+        self._price_detail_generation = 0
         self._supplier_orders = []
         self._orders_loaded_once = False
         self._orders_loading = False
@@ -2916,6 +2943,90 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         self._price_mode = "saved"
         self._show_view("precios")
 
+    def _price_proposal_needs_detail_load(self, proposal: PriceProposal | None) -> bool:
+        raw = proposal.raw if proposal and isinstance(proposal.raw, dict) else {}
+        return bool(raw.get("ui_history_summary"))
+
+    def _price_proposal_list_count_text(self, proposal: PriceProposal, value: int) -> str:
+        return str(value)
+
+    def _price_proposal_detail_key(self, proposal: PriceProposal) -> str:
+        raw = proposal.raw if isinstance(proposal.raw, dict) else {}
+        return str(raw.get("ui_group_key") or raw.get("id") or "")
+
+    def _price_replace_saved_proposal(self, old_key: str, proposal: PriceProposal) -> None:
+        updated: list[PriceProposal] = []
+        replaced = False
+        for current in self.__dict__.get("_price_proposals") or []:
+            if not replaced and self._price_proposal_detail_key(current) == old_key:
+                updated.append(proposal)
+                replaced = True
+            else:
+                updated.append(current)
+        self._price_proposals = updated if replaced else [proposal, *list(self.__dict__.get("_price_proposals") or [])]
+        self._selected_price_proposal = proposal
+
+    def _render_loading_saved_proposal_detail(self, parent: tk.Misc, proposal: PriceProposal) -> None:
+        for child in parent.winfo_children():
+            child.destroy()
+        card = self._card(parent)
+        card.pack(fill=tk.BOTH, expand=True)
+        tk.Label(
+            card,
+            text=f"Cargando detalle de {proposal.name}...",
+            bg=CARD,
+            fg=INDIGO,
+            font=("Segoe UI", 11),
+            anchor=tk.CENTER,
+            justify=tk.CENTER,
+        ).pack(fill=tk.BOTH, expand=True, padx=24, pady=24)
+
+    def _load_saved_proposal_detail(self, parent: tk.Frame, proposal: PriceProposal) -> None:
+        if self._cloud_session is None or not self._price_proposal_needs_detail_load(proposal):
+            return
+        proposal_id = str((proposal.raw or {}).get("id") or "")
+        if not proposal_id:
+            return
+        old_key = self._price_proposal_detail_key(proposal)
+        if self.__dict__.get("_price_detail_loading_key") == old_key:
+            return
+        self._price_detail_generation += 1
+        generation = self._price_detail_generation
+        self._price_detail_loading_key = old_key
+        group_key = str((proposal.raw or {}).get("ui_group_key") or "")
+
+        def worker() -> None:
+            try:
+                rows = fetch_real_price_proposal_detail_rows(
+                    self._cloud_session,
+                    proposal_id,
+                    group_key=group_key,
+                )
+                proposals = self._price_group_cloud_proposals(rows)
+                detail = proposals[0] if proposals else proposal
+                self.after(0, lambda: self._finish_saved_proposal_detail_load(old_key, detail, generation))
+            except Exception as exc:
+                self.after(0, lambda exc=exc: self._finish_saved_proposal_detail_error(old_key, exc, generation))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _finish_saved_proposal_detail_load(self, old_key: str, proposal: PriceProposal, generation: int) -> None:
+        if generation != self.__dict__.get("_price_detail_generation"):
+            return
+        self._price_detail_loading_key = ""
+        if self._current_key != "precios" or self._price_mode != "saved":
+            return
+        self._price_replace_saved_proposal(old_key, proposal)
+        self._show_view("precios")
+
+    def _finish_saved_proposal_detail_error(self, old_key: str, exc: Exception, generation: int) -> None:
+        if generation != self.__dict__.get("_price_detail_generation"):
+            return
+        self._price_detail_loading_key = ""
+        self._price_error = f"No se pudo cargar el detalle de la propuesta: {exc}"
+        if self._current_key == "precios" and self._price_mode == "saved":
+            self._show_view("precios")
+
     def _proposal_matches_search(self, proposal: PriceProposal, query: str) -> bool:
         needle = self._normalize_search_text(query)
         if not needle:
@@ -2975,9 +3086,15 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         else:
             source_proposals = self._price_proposals or list(SAVED_PROPOSALS)
         proposals = [proposal for proposal in source_proposals if self._proposal_matches_search(proposal, self._proposal_search_query)]
-        state_text = "Cargando reales..." if self._price_loading else f"{len(proposals)} visibles"
+        if self._price_loading:
+            state_text = "Cargando reales..."
+        elif self._cloud_session is not None:
+            state_text = f"{len(proposals)} recientes"
+        else:
+            state_text = f"{len(proposals)} visibles"
         self._status_chip(head, state_text, "Info").grid(row=0, column=1, sticky="e", padx=(0, 8))
-        self._button(head, "Actualizar", primary=True, command=lambda: self._refresh_price_module(parent, source="manual")).grid(row=0, column=2, sticky="e")
+        refresh_column = 2
+        self._button(head, "Actualizar", primary=True, command=lambda: self._refresh_price_module(parent, source="manual")).grid(row=0, column=refresh_column, sticky="e")
         if self._price_error:
             tk.Label(list_card, text=self._price_error, bg=INDIGO_SOFT if self._price_loading else ROSE_SOFT, fg=INDIGO if self._price_loading else ROSE, anchor=tk.W).grid(
                 row=2,
@@ -3040,9 +3157,9 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             table.rowconfigure(row_index, minsize=64)
             values = [
                 f"{proposal.name}\n{proposal.date}",
-                str(proposal.items),
-                str(proposal.up),
-                str(proposal.down),
+                self._price_proposal_list_count_text(proposal, proposal.items),
+                self._price_proposal_list_count_text(proposal, proposal.up),
+                self._price_proposal_list_count_text(proposal, proposal.down),
                 proposal.status,
             ]
             for column_index, value in enumerate(values):
@@ -3065,9 +3182,15 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 label.grid(row=row_index, column=column_index, sticky="nsew", padx=3, pady=3)
                 label.bind("<Button-1>", lambda _event, proposal=proposal: select_proposal(proposal), add="+")
 
-        self._render_saved_proposal_detail(detail_host, self._selected_price_proposal)
+        if self._price_proposal_needs_detail_load(self._selected_price_proposal):
+            self._render_loading_saved_proposal_detail(detail_host, self._selected_price_proposal)
+            self._load_saved_proposal_detail(parent, self._selected_price_proposal)
+        else:
+            self._render_saved_proposal_detail(detail_host, self._selected_price_proposal)
 
     def _refresh_price_proposals(self, parent: tk.Frame, *, source: str = "automatico") -> None:
+        if self.__dict__.get("_price_loading", False):
+            return
         self._price_refresh_generation += 1
         generation = self._price_refresh_generation
         if self._cloud_session is None:
@@ -3090,10 +3213,19 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         self._price_error = "Cargando propuestas reales..."
         overlay = self._price_start_working_overlay("Cargando propuestas", "Actualizando el listado de propuestas...")
         self._price_record_refresh_diagnostic(source, generation, 0, "iniciado")
+        page = 1
+        page_size = PRICE_PROPOSAL_HISTORY_DEFAULT_PAGE_SIZE
+        self._price_history_page = page
+        self._price_history_page_size = page_size
 
         def worker() -> None:
             try:
-                diagnostic = diagnose_real_price_proposals(self._cloud_session, status="all")
+                diagnostic = fetch_real_price_proposal_history_page(
+                    self._cloud_session,
+                    status="all",
+                    page=page,
+                    page_size=page_size,
+                )
                 rows = list(diagnostic.get("rows") or [])
                 proposals = self._price_group_cloud_proposals(rows)
                 self.after(0, lambda: self._finish_price_proposals_refresh(
@@ -3108,6 +3240,10 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                     deletion_patterns=list(diagnostic.get("deletion_patterns") or []),
                     repository=str(diagnostic.get("repository") or "price_change_proposals"),
                     query_ok=True,
+                    page=int(diagnostic.get("page") or page),
+                    page_size=int(diagnostic.get("page_size") or page_size),
+                    has_next=bool(diagnostic.get("has_next")),
+                    query_columns=str(diagnostic.get("columns") or ""),
                     overlay=overlay,
                 ))
             except Exception as exc:
@@ -3142,6 +3278,10 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         error_type: str = "",
         ui_deleted_distribution: dict[str, int] | None = None,
         deletion_patterns: list[dict[str, Any]] | None = None,
+        page: int | None = None,
+        page_size: int | None = None,
+        has_next: bool | None = None,
+        query_columns: str = "",
         overlay: tk.Toplevel | None = None,
     ) -> None:
         self._price_stop_working_overlay(overlay)
@@ -3195,6 +3335,12 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         self._price_error = error
         self._price_loading = False
         self._price_loaded_once = True
+        if page is not None:
+            self._price_history_page = max(1, int(page or 1))
+        if page_size is not None:
+            self._price_history_page_size = max(1, int(page_size or PRICE_PROPOSAL_HISTORY_DEFAULT_PAGE_SIZE))
+        if has_next is not None:
+            self._price_history_has_next_page = bool(has_next)
         preferred_token = self._price_refresh_preferred_token
         selected = None
         for proposal in self._price_proposals:
@@ -3220,6 +3366,10 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             "",
             ui_deleted_distribution,
             deletion_patterns,
+            page,
+            page_size,
+            has_next,
+            query_columns,
         )
         if self._current_key == "precios":
             self._show_view("precios")
@@ -3242,6 +3392,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         self._price_filter_options_cache = {}
         self._price_filter_metadata_generation = 0
         self._price_filter_performance = {}
+        self._price_selectable_catalog_audit = {}
         self._price_search_results = []
         self._price_line_sources = {}
         self._price_live_price_context_by_physical_item = {}
@@ -3260,6 +3411,9 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         self._selected_price_proposal = None
         self._price_loaded_once = False
         self._price_refresh_preferred_token = ""
+        self._price_history_page = 1
+        self._price_history_has_next_page = False
+        self._price_detail_loading_key = ""
         self._price_rendered_model_keys = ()
         self._price_rendered_model_types = ()
 
@@ -3351,6 +3505,10 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         error_type: str = "",
         ui_deleted_distribution: dict[str, int] | None = None,
         deletion_patterns: list[dict[str, Any]] | None = None,
+        page: int | None = None,
+        page_size: int | None = None,
+        has_next: bool | None = None,
+        query_columns: str = "",
     ) -> None:
         diagnostics = self.__dict__.setdefault("_price_refresh_diagnostics", [])
         diagnostics.append({
@@ -3366,13 +3524,17 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             "authenticated_user": bool(getattr(self._cloud_session, "user_id", None)) if self._cloud_session is not None else False,
             "role_known": bool(getattr(self._cloud_session, "role", None)) if self._cloud_session is not None else False,
             "repository": repository,
-            "loader": "diagnose_real_price_proposals",
+            "loader": "fetch_real_price_proposal_history_page",
             "query": "ok" if query_ok is True else "error" if query_ok is False else "skipped",
             "error_type": str(error_type or ""),
             "ui_deleted_distribution": dict(ui_deleted_distribution or {}),
             "deletion_patterns": list(deletion_patterns or []),
             "cache_items": len(self.__dict__.get("_price_proposals") or []),
             "discarded": list(discarded or []),
+            "page": int(page if page is not None else self.__dict__.get("_price_history_page", 1) or 1),
+            "page_size": int(page_size if page_size is not None else self.__dict__.get("_price_history_page_size", PRICE_PROPOSAL_HISTORY_DEFAULT_PAGE_SIZE) or PRICE_PROPOSAL_HISTORY_DEFAULT_PAGE_SIZE),
+            "has_next": bool(has_next) if has_next is not None else bool(self.__dict__.get("_price_history_has_next_page", False)),
+            "query_columns": str(query_columns or ""),
         })
         del diagnostics[:-30]
         if query_ok is False:
@@ -3430,23 +3592,34 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             member_proposals = [self._price_proposal_from_cloud_row(row) for row in member_rows]
             first = member_proposals[0]
             lines = tuple(line for proposal in member_proposals for line in proposal.lines)
-            up = sum(proposal.up for proposal in member_proposals)
-            down = sum(proposal.down for proposal in member_proposals)
-            flat = sum(proposal.flat for proposal in member_proposals)
+            summary_only = any(bool(row.get("ui_history_summary")) for row in member_rows)
+            summary_counts: dict[str, Any] = {}
+            if summary_only:
+                for row in member_rows:
+                    counts = row.get("ui_history_counts")
+                    if isinstance(counts, dict):
+                        summary_counts = counts
+                        break
+            items = int(summary_counts.get("items") or 0) if summary_only else len(lines)
+            up = int(summary_counts.get("up") or 0) if summary_only else sum(proposal.up for proposal in member_proposals)
+            down = int(summary_counts.get("down") or 0) if summary_only else sum(proposal.down for proposal in member_proposals)
+            flat = int(summary_counts.get("flat") or 0) if summary_only else sum(proposal.flat for proposal in member_proposals)
             raw = dict(member_rows[0])
             raw["ui_member_ids"] = [str(row.get("id")) for row in member_rows if row.get("id")]
             raw["ui_member_rows"] = member_rows
             raw["ui_group_key"] = group_key
+            if summary_counts:
+                raw["ui_history_counts"] = dict(summary_counts)
             if member_rows[0].get("source_row") and isinstance(member_rows[0]["source_row"], dict):
                 raw["ui_save_token"] = member_rows[0]["source_row"].get("ui_save_token")
             proposals.append(PriceProposal(
                 name=first.name,
                 date=first.date,
-                items=len(lines),
+                items=items,
                 up=up,
                 down=down,
                 flat=flat,
-                change=first.change if len(lines) == 1 else "Grupo",
+                change=first.change if items == 1 else "Grupo",
                 status=first.status,
                 lines=lines,
                 raw=raw,
@@ -5010,6 +5183,9 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             return
         self._price_catalog_items = list(items)
         selectable_items = self._price_selectable_catalog_items(items)
+        self._price_selectable_catalog_audit = audit_price_proposal_selectable_catalogue(
+            [dict(item.raw or {}) for item in items]
+        )
         self._price_catalog_loaded_once = True
         self._price_available_items = list(selectable_items)
         self._price_catalog_stage_counts = dict(stage_counts or {"unified_rows": len(items)})
@@ -5482,8 +5658,11 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             for item in selectable_items
             if self._price_source_from_inventory_item(item)
         }
-        if not self._price_edit_selected_code and selectable_items:
+        selectable_codes = {item.code for item in selectable_items}
+        if selectable_items and self._price_edit_selected_code not in selectable_codes:
             self._price_edit_selected_code = selectable_items[0].code
+        elif not selectable_items:
+            self._price_edit_selected_code = ""
         missing_context_items = [
             item for item in self._price_live_sync_candidate_items(selectable_items)
             if self._price_physical_context_key(
@@ -12538,9 +12717,11 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             ).pack(expand=True)
             return
 
-        process_order = (PROCESS_ROTATION_C, PROCESS_STOCK, PROCESS_SUPPLIER_PRICES)
-        label_to_process = {UPDATE_PROCESS_DEFINITIONS[key]["label"]: key for key in process_order}
-        state: dict[str, Any] = {"preview": None, "applying": False}
+        process_options = _updates_process_options_for_user(getattr(self._cloud_session, "email", None))
+        process_order = tuple(process for process, _label in process_options) or (PROCESS_STOCK,)
+        label_to_process = {label: process for process, label in process_options}
+        default_process = process_order[0]
+        state: dict[str, Any] = {"preview": None, "applying": False, "loading": False}
 
         layout = tk.Frame(parent, bg=BG)
         layout.pack(fill=tk.BOTH, expand=True)
@@ -12552,7 +12733,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         controls.columnconfigure(1, weight=1)
 
         tk.Label(controls, text="Proceso", bg=CARD, fg=TEXT, font=("Segoe UI", 10, "bold")).grid(row=0, column=0, sticky="w", padx=16, pady=14)
-        process_var = tk.StringVar(value=UPDATE_PROCESS_DEFINITIONS[PROCESS_ROTATION_C]["label"])
+        process_var = tk.StringVar(value=UPDATE_PROCESS_DEFINITIONS[default_process]["label"])
         process_combo = ttk.Combobox(controls, textvariable=process_var, values=list(label_to_process.keys()), state="readonly", width=28)
         process_combo.grid(row=0, column=1, sticky="w", padx=(0, 12), pady=14, ipady=4)
 
@@ -12572,9 +12753,15 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 fg=TEXT,
                 font=("Segoe UI", 12, "bold"),
             ).pack(anchor=tk.W, padx=14, pady=(14, 4))
+            process_hint = "Plantilla: " + " | ".join(UPDATE_PROCESS_DEFINITIONS[process]["headers"])
+            if process == PROCESS_STOCK:
+                process_hint = (
+                    "Formato Futon Espai: Codigo=A | Total=C | Tienda=G. "
+                    "Almacen = Total - Tienda. Legacy: ID | Stock Tienda | Stock Warehouse."
+                )
             tk.Label(
                 card,
-                text="Plantilla: " + " | ".join(UPDATE_PROCESS_DEFINITIONS[process]["headers"]),
+                text=process_hint,
                 bg=CARD,
                 fg=MUTED,
                 font=("Segoe UI", 8),
@@ -12638,8 +12825,17 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         def refresh_apply_button_state() -> None:
             apply_button = apply_button_holder.get("button")
             preview = state.get("preview")
-            enabled = bool(preview and preview.get("apply_enabled") and not state.get("applying"))
+            enabled = bool(preview and preview.get("apply_enabled") and not state.get("applying") and not state.get("loading"))
             configure_widget(apply_button, state=tk.NORMAL if enabled else tk.DISABLED)
+
+        def set_loading(loading: bool, message: str = "Preparando vista previa...") -> None:
+            state["loading"] = loading
+            configure_widget(process_combo, state=tk.DISABLED if loading else "readonly")
+            for button in action_buttons:
+                configure_widget(button, state=tk.DISABLED if loading else tk.NORMAL)
+            refresh_apply_button_state()
+            if loading:
+                configure_widget(status_label, text=message, fg=INDIGO)
 
         def set_applying(applying: bool) -> None:
             state["applying"] = applying
@@ -12660,7 +12856,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 return
 
         def selected_process() -> str:
-            return label_to_process.get(process_var.get(), PROCESS_ROTATION_C)
+            return label_to_process.get(process_var.get(), default_process)
 
         def preview_values(row: dict[str, Any]) -> tuple[str, str, str]:
             process = row.get("process")
@@ -12694,6 +12890,31 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 return current, new, row.get("primary_supplier") or ""
             return "", "", ""
 
+        def preview_status_text(preview: dict[str, Any]) -> str:
+            counts = preview.get("status_counts") or {}
+            descatalogado = counts.get(DESCATALOGADO_NO_ACTUALIZABLE, 0)
+            ids_no_encontrados = counts.get(INVALID_ID, 0)
+            otros_errores = sum(
+                counts.get(status, 0)
+                for status in (
+                    AMBIGUOUS_IDENTITY,
+                    INVALID_VALUE,
+                    DUPLICATE_ID,
+                )
+            )
+            line = (
+                f"{preview.get('label')}: {preview.get('row_count')} filas | "
+                f"Listos para actualizar {preview.get('ready_count')} | "
+                f"Sin cambios {preview.get('no_change_count')} | "
+                f"Descatalogados omitidos {descatalogado} | "
+                f"IDs no encontrados {ids_no_encontrados} | "
+                f"Otros errores {otros_errores} | "
+                f"celdas a escribir {preview.get('write_cell_count')}"
+            )
+            if preview.get("apply_enabled") and preview.get("row_error_count"):
+                line += " | Se aplicaran unicamente las filas validas."
+            return line
+
         def render_preview(preview: dict[str, Any] | None) -> None:
             tree.delete(*tree.get_children())
             state["preview"] = preview
@@ -12721,13 +12942,10 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                     ),
                     tags=(tag,),
                 )
+            has_row_errors = bool(preview.get("row_error_count"))
             status_label.configure(
-                text=(
-                    f"{preview.get('label')}: {preview.get('row_count')} filas | "
-                    f"READY {preview.get('ready_count')} | NO_CHANGE {preview.get('no_change_count')} | "
-                    f"celdas a escribir {preview.get('write_cell_count')}"
-                ),
-                fg=GREEN if preview.get("apply_enabled") else ORANGE if preview.get("valid") else ROSE,
+                text=preview_status_text(preview),
+                fg=GREEN if preview.get("apply_enabled") and not has_row_errors else ORANGE if preview.get("valid") else ROSE,
             )
             refresh_apply_button_state()
 
@@ -12750,7 +12968,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             messagebox.showinfo("Actualizaciones", f"Plantilla generada:\n{path}")
 
         def load_excel() -> None:
-            if state.get("applying"):
+            if state.get("applying") or state.get("loading"):
                 return
             path = filedialog.askopenfilename(
                 title="Cargar Excel de actualizacion",
@@ -12758,20 +12976,47 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             )
             if not path:
                 return
-            try:
-                preview = preview_updates_from_excel(self._cloud_session, selected_process(), path)
-            except UpdatesValidationError as exc:
-                messagebox.showerror("Actualizaciones", str(exc))
+            session = self._cloud_session
+            process = selected_process()
+            loading_message = "Cargando y validando stock..." if process == PROCESS_STOCK else "Preparando vista previa..."
+            overlay = self._show_working_overlay("Cargando Excel", loading_message)
+            set_loading(True, loading_message)
+
+            def finish_success(preview: dict[str, Any]) -> None:
+                close_overlay(overlay)
+                if not view_alive():
+                    return
+                render_preview(preview)
+                set_loading(False)
+
+            def finish_error(error: str, validation_error: bool = False) -> None:
+                close_overlay(overlay)
+                if not view_alive():
+                    return
+                message = error if validation_error else f"No se pudo preparar el preview.\n\n{error}"
+                messagebox.showerror("Actualizaciones", message)
                 render_preview(None)
-                return
-            except Exception as exc:
-                messagebox.showerror("Actualizaciones", f"No se pudo preparar el preview.\n\n{exc}")
-                render_preview(None)
-                return
-            render_preview(preview)
+                set_loading(False)
+
+            def schedule(callback: Callable[[], None]) -> None:
+                try:
+                    self.after(0, callback)
+                except tk.TclError:
+                    return
+
+            def worker() -> None:
+                try:
+                    preview = preview_updates_from_excel(session, process, path)
+                    schedule(lambda preview=preview: finish_success(preview))
+                except UpdatesValidationError as exc:
+                    schedule(lambda exc=exc: finish_error(str(exc), True))
+                except Exception as exc:
+                    schedule(lambda exc=exc: finish_error(str(exc), False))
+
+            threading.Thread(target=worker, daemon=True).start()
 
         def apply_preview() -> None:
-            if state.get("applying"):
+            if state.get("applying") or state.get("loading"):
                 return
             preview = state.get("preview")
             if not preview or not preview.get("apply_enabled"):
@@ -12779,6 +13024,10 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 return
             message = (
                 f"Aplicar {preview.get('write_cell_count')} cambios en Supabase.\n\n"
+                f"Listos para actualizar: {preview.get('ready_count')}.\n"
+                f"Sin cambios: {preview.get('no_change_count')}.\n"
+                f"Filas excluidas: {preview.get('row_error_count')}.\n"
+                "Se aplicaran unicamente las filas validas.\n\n"
                 "Se revalidara el estado live, se generara snapshot y postcheck.\n"
                 "WooCommerce, precios Woo, stock Woo y coste ponderado no se tocan.\n\n"
                 "Continuar"
@@ -12846,7 +13095,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             threading.Thread(target=worker, daemon=True).start()
 
         def process_changed(_event: object | None = None) -> None:
-            if state.get("applying"):
+            if state.get("applying") or state.get("loading"):
                 return
             render_preview(None)
 
