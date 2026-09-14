@@ -457,12 +457,14 @@ def build_catalog_filter_bar(
     on_clear: Callable[[], None],
     button_factory: Callable[..., tk.Widget],
     colors: Mapping[str, str],
+    keep_search_buttons_inline: bool = False,
+    search_entry_width: int = 22,
 ) -> tk.Frame:
     """Build the compact shared hierarchy bar without mutating result data."""
     card = tk.Frame(parent, bg=colors["card"], highlightbackground=colors["line"], highlightthickness=1)
     card.pack(fill=tk.X, pady=(0, 12))
     inner = tk.Frame(card, bg=colors["card"])
-    inner.pack(fill=tk.X, padx=14, pady=10)
+    inner.pack(fill=tk.X, padx=10 if keep_search_buttons_inline else 14, pady=8 if keep_search_buttons_inline else 10)
     for column in range(4):
         inner.columnconfigure(column, weight=1)
     inner.columnconfigure(4, weight=2)
@@ -521,18 +523,20 @@ def build_catalog_filter_bar(
         highlightcolor=colors["indigo"],
         highlightthickness=1,
         font=("Segoe UI", 9),
+        width=max(12, int(search_entry_width or 22)),
     )
     query_entry.pack(fill=tk.X, pady=(3, 0), ipady=5)
     query_entry.bind("<Return>", lambda _event: on_apply(active_selection.with_query(query_var.get())))
 
     button_host = tk.Frame(inner, bg=colors["card"])
-    button_factory(button_host, "Aplicar filtros", primary=True, command=lambda: on_apply(active_selection.with_query(query_var.get()))).pack(side=tk.LEFT, padx=(0, 6))
+    button_gap = 4 if keep_search_buttons_inline else 6
+    button_factory(button_host, "Aplicar filtros", primary=True, command=lambda: on_apply(active_selection.with_query(query_var.get()))).pack(side=tk.LEFT, padx=(0, button_gap))
     button_factory(button_host, "Limpiar", command=on_clear).pack(side=tk.LEFT)
 
     layout_state = {"key": None}
 
     def apply_responsive_layout(width: int) -> None:
-        layout = catalog_filter_bar_layout(width)
+        layout = catalog_filter_bar_layout(width, keep_search_buttons_inline=keep_search_buttons_inline)
         key = (
             layout.filter_columns,
             layout.search_row,

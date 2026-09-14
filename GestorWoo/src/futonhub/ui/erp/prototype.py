@@ -187,7 +187,13 @@ from futonhub.ui.erp.catalog_filters import (
     ranked_catalog_search_rows,
     row_matches_catalog_filters,
 )
-from futonhub.ui.erp.responsive import center_window_safely, modal_dimensions_for_viewport, set_minsize_safely, widget_screen_size
+from futonhub.ui.erp.responsive import (
+    center_window_safely,
+    modal_dimensions_for_viewport,
+    price_proposal_workspace_layout,
+    set_minsize_safely,
+    widget_screen_size,
+)
 from futonhub.ui.erp.inventory_create import ErpInventoryCreateMixin
 from futonhub.ui.erp.inventory_detail import ErpInventoryDetailMixin
 from futonhub.ui.erp.inventory_edit import ErpInventoryEditMixin
@@ -230,6 +236,7 @@ from futonhub.ui.erp.shared_ui import (
 
 SUPPLIER_ORDER_DEBUG = False
 _OPENPYXL_EXPORTS_LOADED = False
+PRICE_CANDIDATE_PAGE_SIZE = 30
 
 
 def _ensure_openpyxl_exports_loaded() -> None:
@@ -696,7 +703,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         self._price_items_error = ""
         self._price_items_generation = 0
         self._price_candidate_page = 0
-        self._price_candidate_page_size = 50
+        self._price_candidate_page_size = PRICE_CANDIDATE_PAGE_SIZE
         self._price_visible_candidate_ids: set[str] = set()
         self._price_selected_candidate_ids: set[str] = set()
         self._price_line_sources: dict[str, dict[str, Any]] = {}
@@ -1226,6 +1233,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         self._price_items_error = ""
         self._price_items_generation = 0
         self._price_candidate_page = 0
+        self._price_candidate_page_size = PRICE_CANDIDATE_PAGE_SIZE
         self._price_visible_candidate_ids = set()
         self._price_selected_candidate_ids = set()
         self._price_line_sources = {}
@@ -4954,7 +4962,8 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         return str(result.get("key") or result.get("code") or "").strip()
 
     def _price_candidate_page_results(self, results: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], int, int]:
-        page_size = max(10, min(int(getattr(self, "_price_candidate_page_size", 50) or 50), 100))
+        page_size = PRICE_CANDIDATE_PAGE_SIZE
+        self._price_candidate_page_size = PRICE_CANDIDATE_PAGE_SIZE
         if not results:
             self._price_candidate_page = 0
             return [], 0, 0
@@ -4998,11 +5007,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             self._show_view("precios")
 
     def _price_set_candidate_page_size(self, page_size: object) -> None:
-        try:
-            normalized_size = int(str(page_size).strip())
-        except (TypeError, ValueError):
-            normalized_size = 50
-        self._price_candidate_page_size = max(10, min(normalized_size, 100))
+        self._price_candidate_page_size = PRICE_CANDIDATE_PAGE_SIZE
         self._price_candidate_page = 0
         if self._current_key == "precios":
             self._show_view("precios")
@@ -5469,14 +5474,17 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             elif not self.__dict__.get("_price_catalog_loading", False):
                 self.after(50, self._maybe_start_price_woo_sync)
 
+        screen_width, _screen_height = widget_screen_size(parent)
+        workspace_layout = price_proposal_workspace_layout(screen_width)
+
         body = tk.Frame(parent, bg=BG)
         body.pack(fill=tk.BOTH, expand=True)
-        body.columnconfigure(0, weight=3)
-        body.columnconfigure(1, weight=2)
+        body.columnconfigure(0, weight=workspace_layout.list_weight)
+        body.columnconfigure(1, weight=workspace_layout.detail_weight)
         body.rowconfigure(0, weight=1)
 
         left = tk.Frame(body, bg=BG)
-        left.grid(row=0, column=0, sticky="nsew", padx=(0, 14))
+        left.grid(row=0, column=0, sticky="nsew", padx=(0, workspace_layout.column_gap))
         right = tk.Frame(body, bg=BG)
         right.grid(row=0, column=1, sticky="nsew")
 
@@ -5525,6 +5533,8 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             on_clear=lambda: self._clear_price_catalog_filters(parent),
             button_factory=self._button,
             colors={"card": CARD, "line": LINE, "text": TEXT, "indigo": INDIGO},
+            keep_search_buttons_inline=True,
+            search_entry_width=18,
         )
         results = self._price_filtered_catalog_results(all_results)
         visible_results, page, total_pages = self._price_candidate_page_results(results)
@@ -6101,11 +6111,14 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         actions_enabled: bool = True,
     ) -> None:
         """Tabla de candidatos con seleccion visible y sin estado oculto."""
+        screen_width, _screen_height = widget_screen_size(parent)
+        layout = price_proposal_workspace_layout(screen_width)
+
         card = self._card(parent)
         card.pack(fill=tk.BOTH, expand=True)
 
         header = tk.Frame(card, bg=SOFT, highlightbackground=LINE, highlightthickness=1)
-        header.pack(fill=tk.X, padx=16, pady=(16, 0))
+        header.pack(fill=tk.X, padx=layout.card_pad_x, pady=(16, 0))
         header.columnconfigure(3, weight=1)
         header_select_var = tk.BooleanVar(value=False)
         header_select = tk.Checkbutton(
@@ -6118,12 +6131,12 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             command=lambda: toggle_all(),
         )
         header_select.configure(state=tk.NORMAL if actions_enabled else tk.DISABLED)
-        header_select.grid(row=0, column=0, sticky="ew", padx=8)
+        header_select.grid(row=0, column=0, sticky="ew", padx=layout.control_gap)
         for column, text, width, anchor in (
-            (1, "ID", 14, tk.CENTER),
-            (2, "Tipo", 11, tk.CENTER),
+            (1, "ID", layout.id_column_chars, tk.CENTER),
+            (2, "Tipo", layout.type_column_chars, tk.CENTER),
             (3, "Nombre", 1, tk.W),
-            (4, "Precio", 11, tk.CENTER),
+            (4, "Precio", layout.price_column_chars, tk.CENTER),
         ):
             tk.Label(
                 header,
@@ -6138,7 +6151,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             ).grid(row=0, column=column, sticky="ew")
 
         viewport = tk.Frame(card, bg=CARD)
-        viewport.pack(fill=tk.BOTH, expand=True, padx=16)
+        viewport.pack(fill=tk.BOTH, expand=True, padx=layout.card_pad_x)
         viewport.rowconfigure(0, weight=1)
         viewport.columnconfigure(0, weight=1)
         canvas = tk.Canvas(viewport, bg=CARD, highlightthickness=0)
@@ -6152,7 +6165,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         vertical_scroll.grid(row=0, column=1, sticky="ns")
         horizontal_scroll.grid(row=1, column=0, sticky="ew")
         list_host.bind("<Configure>", lambda _event: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.bind("<Configure>", lambda event: canvas.itemconfigure(list_window, width=max(event.width, 720)))
+        canvas.bind("<Configure>", lambda event: canvas.itemconfigure(list_window, width=max(event.width, layout.candidate_min_width)))
         canvas.bind("<MouseWheel>", lambda event: canvas.yview_scroll(int(-1 * (event.delta / 120)), "units"))
 
         selected_key = ""
@@ -6235,10 +6248,30 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 command=lambda result=result: toggle_result(result),
             )
             checkbox.configure(state=tk.NORMAL if actions_enabled else tk.DISABLED)
-            checkbox.grid(row=0, column=0, sticky="nsew", padx=8)
-            id_label = tk.Label(item, text=result.get("code"), bg=row_bg, fg=TEXT, width=14, anchor=tk.CENTER, padx=8, pady=5)
+            checkbox.grid(row=0, column=0, sticky="nsew", padx=layout.control_gap)
+            id_label = tk.Label(
+                item,
+                text=result.get("code"),
+                bg=row_bg,
+                fg=TEXT,
+                width=layout.id_column_chars,
+                anchor=tk.CENTER,
+                padx=6,
+                pady=5,
+            )
             id_label.grid(row=0, column=1, sticky="nsew")
-            type_label = tk.Label(item, text=visible_type, bg=row_bg, fg=ROSE if eligibility == "ERROR" else MUTED, width=18, anchor=tk.CENTER, padx=8, pady=5)
+            type_label = tk.Label(
+                item,
+                text=visible_type,
+                bg=row_bg,
+                fg=ROSE if eligibility == "ERROR" else MUTED,
+                width=layout.type_column_chars,
+                anchor=tk.CENTER,
+                padx=6,
+                pady=5,
+                wraplength=max(80, layout.name_wraplength // 2),
+                justify=tk.CENTER,
+            )
             type_label.grid(row=0, column=2, sticky="nsew")
             name_label = tk.Label(
                 item,
@@ -6247,11 +6280,22 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 fg=TEXT,
                 anchor=tk.W,
                 justify=tk.LEFT,
-                padx=8,
+                padx=6,
                 pady=5,
+                wraplength=layout.name_wraplength,
             )
             name_label.grid(row=0, column=3, sticky="nsew")
-            price_label = tk.Label(item, text=result.get("price"), bg=row_bg, fg=TEXT, width=11, anchor=tk.CENTER, padx=8, pady=5)
+            price_label = tk.Label(
+                item,
+                text=result.get("price"),
+                bg=row_bg,
+                fg=TEXT,
+                width=layout.price_column_chars,
+                anchor=tk.CENTER,
+                padx=6,
+                pady=5,
+                wraplength=max(76, layout.name_wraplength // 2),
+            )
             price_label.grid(row=0, column=4, sticky="nsew")
             row_widgets[key] = item
             for widget in (item, id_label, type_label, name_label, price_label):
@@ -6259,23 +6303,23 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 widget.bind("<Double-Button-1>", lambda _event, result=result: add_single_result(result), add="+")
 
         footer = tk.Frame(card, bg=CARD)
-        footer.pack(fill=tk.X, padx=16, pady=(10, 16))
+        footer.pack(fill=tk.X, padx=layout.card_pad_x, pady=(10, 16))
         footer.columnconfigure(0, weight=1)
         adjustment_row = tk.Frame(footer, bg=CARD)
         adjustment_row.grid(row=0, column=0, sticky="ew")
-        tk.Label(adjustment_row, text="Subida %", bg=CARD, fg=MUTED, font=("Segoe UI", 8, "bold")).pack(side=tk.LEFT, padx=(0, 6))
+        tk.Label(adjustment_row, text="Subida %", bg=CARD, fg=MUTED, font=("Segoe UI", 8, "bold")).pack(side=tk.LEFT, padx=(0, 4))
         percent_entry = tk.Entry(adjustment_row, width=8, bg=CARD, fg=TEXT, relief=tk.SOLID, borderwidth=1, highlightbackground=LINE, highlightcolor=INDIGO, highlightthickness=1)
-        percent_entry.pack(side=tk.LEFT, ipady=7, padx=(0, 12))
-        tk.Label(adjustment_row, text="Valor", bg=CARD, fg=MUTED, font=("Segoe UI", 8, "bold")).pack(side=tk.LEFT, padx=(0, 6))
-        exact_entry = tk.Entry(adjustment_row, width=10, bg=CARD, fg=TEXT, relief=tk.SOLID, borderwidth=1, highlightbackground=LINE, highlightcolor=INDIGO, highlightthickness=1)
-        exact_entry.pack(side=tk.LEFT, ipady=7, padx=(0, 12))
-        tk.Label(adjustment_row, textvariable=selected_count_var, bg=CARD, fg=MUTED, font=("Segoe UI", 8, "bold")).pack(side=tk.LEFT, padx=(0, 12))
+        percent_entry.pack(side=tk.LEFT, ipady=6, padx=(0, layout.control_gap))
+        tk.Label(adjustment_row, text="Valor", bg=CARD, fg=MUTED, font=("Segoe UI", 8, "bold")).pack(side=tk.LEFT, padx=(0, 4))
+        exact_entry = tk.Entry(adjustment_row, width=9, bg=CARD, fg=TEXT, relief=tk.SOLID, borderwidth=1, highlightbackground=LINE, highlightcolor=INDIGO, highlightthickness=1)
+        exact_entry.pack(side=tk.LEFT, ipady=6, padx=(0, layout.control_gap))
+        tk.Label(adjustment_row, textvariable=selected_count_var, bg=CARD, fg=MUTED, font=("Segoe UI", 8, "bold")).pack(side=tk.LEFT, padx=(0, layout.control_gap))
         tk.Frame(adjustment_row, bg=CARD).pack(side=tk.LEFT, fill=tk.X, expand=True)
 
         pagination_row = tk.Frame(footer, bg=CARD)
-        pagination_row.grid(row=1, column=0, sticky="w", pady=(8, 0))
+        pagination_row.grid(row=1, column=0, sticky="w", pady=(6, 0))
         action_row = tk.Frame(footer, bg=CARD)
-        action_row.grid(row=2, column=0, sticky="e", pady=(8, 0))
+        action_row.grid(row=2, column=0, sticky="e", pady=(6, 0))
 
         def change_page(delta: int) -> None:
             self._price_change_candidate_page(page + delta)
@@ -6308,22 +6352,17 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
 
         previous_button = self._button(pagination_row, "<", command=lambda: change_page(-1))
         previous_button.configure(state=tk.NORMAL if page > 0 else tk.DISABLED, disabledforeground="#CBD5E1")
-        previous_button.pack(side=tk.LEFT, padx=(0, 4))
+        previous_button.pack(side=tk.LEFT, padx=(0, layout.action_gap))
         tk.Label(
             pagination_row,
             text=f"Pagina {page + 1} de {total_pages} ({total_results} candidatos)",
             bg=CARD,
             fg=MUTED,
             font=("Segoe UI", 8),
-        ).pack(side=tk.LEFT, padx=(0, 4))
+        ).pack(side=tk.LEFT, padx=(0, layout.action_gap))
         next_button = self._button(pagination_row, ">", command=lambda: change_page(1))
         next_button.configure(state=tk.NORMAL if page + 1 < total_pages else tk.DISABLED, disabledforeground="#CBD5E1")
-        next_button.pack(side=tk.LEFT, padx=(0, 12))
-        tk.Label(pagination_row, text="Mostrar", bg=CARD, fg=MUTED, font=("Segoe UI", 8, "bold")).pack(side=tk.LEFT, padx=(0, 4))
-        page_size_var = tk.StringVar(value=str(getattr(self, "_price_candidate_page_size", 50)))
-        page_size_picker = ttk.Combobox(pagination_row, textvariable=page_size_var, values=(25, 50, 100), width=4, state="readonly")
-        page_size_picker.pack(side=tk.LEFT, padx=(0, 12))
-        page_size_picker.bind("<<ComboboxSelected>>", lambda _event: self._price_set_candidate_page_size(page_size_var.get()))
+        next_button.pack(side=tk.LEFT)
 
         preview_button = self._button(
             action_row,
@@ -6331,10 +6370,10 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             command=preview_selected,
         )
         preview_button.configure(disabledforeground="#CBD5E1")
-        preview_button.pack(side=tk.RIGHT, padx=(6, 0), ipadx=8)
+        preview_button.pack(side=tk.RIGHT, padx=(layout.action_gap, 0), ipadx=4)
         add_button = self._button(action_row, "Anadir seleccionados", primary=True, command=add_selected)
         add_button.configure(disabledforeground="#CBD5E1")
-        add_button.pack(side=tk.RIGHT, padx=(6, 0))
+        add_button.pack(side=tk.RIGHT, padx=(layout.action_gap, 0))
         refresh_selection_controls()
 
     def _price_adjustment_mode(self, percent_text: str, exact_text: str) -> tuple[str, str]:

@@ -19,10 +19,11 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from gestorwoo.windowing import clamped_window_size  # noqa: E402
-from futonhub.ui.erp.prototype import FutonHubErpPrototype  # noqa: E402
+from futonhub.ui.erp.prototype import FutonHubErpPrototype, PRICE_CANDIDATE_PAGE_SIZE  # noqa: E402
 from futonhub.ui.erp.responsive import (  # noqa: E402
     catalog_filter_bar_layout,
     modal_dimensions_for_viewport,
+    price_proposal_workspace_layout,
     shell_layout_metrics,
 )
 
@@ -64,6 +65,14 @@ class AfkWorkday001ResponsiveTests(unittest.TestCase):
         self.assertEqual(wide.search_row, 0)
         self.assertEqual(wide.button_column, 5)
 
+    def test_price_filter_bar_keeps_search_and_buttons_in_one_compact_row(self) -> None:
+        compact = catalog_filter_bar_layout(620, keep_search_buttons_inline=True)
+
+        self.assertEqual(compact.filter_columns, 2)
+        self.assertEqual(compact.search_row, compact.button_row)
+        self.assertEqual(compact.search_columnspan, 1)
+        self.assertGreater(compact.button_column, compact.search_column)
+
     def test_shell_metrics_reduce_fixed_width_on_small_laptops(self) -> None:
         small = shell_layout_metrics(1280)
         large = shell_layout_metrics(1920)
@@ -80,6 +89,67 @@ class AfkWorkday001ResponsiveTests(unittest.TestCase):
         self.assertIn("action_row = tk.Frame(footer", source)
         self.assertIn('add_button = self._button(action_row, "Anadir seleccionados"', source)
         self.assertIn('preview_button = self._button(\n            action_row,', source)
+
+    def test_price_proposal_workspace_prioritizes_add_item_on_small_screens(self) -> None:
+        desktop = price_proposal_workspace_layout(1920)
+        laptop = price_proposal_workspace_layout(1366)
+        small = price_proposal_workspace_layout(1024)
+
+        for layout in (desktop, laptop, small):
+            with self.subTest(layout=layout):
+                self.assertGreater(layout.list_weight, layout.detail_weight)
+                self.assertLessEqual(layout.detail_weight / (layout.list_weight + layout.detail_weight), 0.30)
+                self.assertLessEqual(layout.card_pad_x, 16)
+                self.assertLessEqual(layout.control_gap, 10)
+
+        self.assertLess(small.candidate_min_width, desktop.candidate_min_width)
+        self.assertLess(small.name_wraplength, desktop.name_wraplength)
+        self.assertLessEqual(small.candidate_min_width, 480)
+
+    def test_price_proposal_add_item_action_fits_required_viewports(self) -> None:
+        estimated_action_width = 380
+        for width, height in ((1920, 1080), (1366, 768), (1280, 720), (1024, 768)):
+            with self.subTest(viewport=(width, height)):
+                shell = shell_layout_metrics(width)
+                proposal = price_proposal_workspace_layout(width)
+                content_width = width - shell.sidebar_width - (shell.content_pad_x * 2)
+                picker_width = int(
+                    (content_width - proposal.column_gap)
+                    * proposal.list_weight
+                    / (proposal.list_weight + proposal.detail_weight)
+                )
+
+                self.assertGreaterEqual(picker_width, proposal.candidate_min_width)
+                self.assertGreaterEqual(picker_width, estimated_action_width)
+                filter_layout = catalog_filter_bar_layout(picker_width, keep_search_buttons_inline=True)
+                self.assertEqual(filter_layout.search_row, filter_layout.button_row)
+
+    def test_price_proposal_editor_uses_responsive_layout_without_fixed_picker_width(self) -> None:
+        workspace_source = inspect.getsource(FutonHubErpPrototype._build_price_edit_workspace)
+        picker_source = inspect.getsource(FutonHubErpPrototype._price_items_pick_list)
+
+        self.assertIn("price_proposal_workspace_layout(screen_width)", workspace_source)
+        self.assertIn("workspace_layout.list_weight", workspace_source)
+        self.assertIn("workspace_layout.detail_weight", workspace_source)
+        self.assertIn("workspace_layout.column_gap", workspace_source)
+        self.assertIn("layout = price_proposal_workspace_layout(screen_width)", picker_source)
+        self.assertIn("layout.candidate_min_width", picker_source)
+        self.assertIn("layout.id_column_chars", picker_source)
+        self.assertIn("layout.type_column_chars", picker_source)
+        self.assertIn("layout.price_column_chars", picker_source)
+        self.assertIn("layout.control_gap", picker_source)
+        self.assertNotIn("max(event.width, 720)", picker_source)
+
+    def test_price_proposal_uses_fixed_thirty_item_pages_without_show_combo(self) -> None:
+        workspace_source = inspect.getsource(FutonHubErpPrototype._build_price_edit_workspace)
+        picker_source = inspect.getsource(FutonHubErpPrototype._price_items_pick_list)
+
+        self.assertEqual(PRICE_CANDIDATE_PAGE_SIZE, 30)
+        self.assertIn("keep_search_buttons_inline=True", workspace_source)
+        self.assertIn("search_entry_width=18", workspace_source)
+        self.assertNotIn('text="Mostrar"', picker_source)
+        self.assertNotIn("page_size_picker", picker_source)
+        self.assertNotIn("ttk.Combobox(pagination_row", picker_source)
 
     def test_main_window_minimum_supports_1280x720_stress_viewport(self) -> None:
         source = inspect.getsource(FutonHubErpPrototype.__init__)

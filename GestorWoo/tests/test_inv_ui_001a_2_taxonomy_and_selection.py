@@ -17,7 +17,7 @@ from futonhub.cloud.services.inventory import (  # noqa: E402
 )
 from futonhub.ui.erp.catalog_filters import VisibleItemSelection  # noqa: E402
 from futonhub.ui.erp.inventory_list import ErpInventoryListMixin  # noqa: E402
-from futonhub.ui.erp.prototype import FutonHubErpPrototype  # noqa: E402
+from futonhub.ui.erp.prototype import FutonHubErpPrototype, PRICE_CANDIDATE_PAGE_SIZE  # noqa: E402
 from inv_ui_001a_2_taxonomy import classify_cover, classify_futon  # noqa: E402
 
 
@@ -157,7 +157,7 @@ class VisibleItemSelectionTests(unittest.TestCase):
 class PrototypeCandidateSelectionTests(unittest.TestCase):
     def _app(self) -> FutonHubErpPrototype:
         app = FutonHubErpPrototype.__new__(FutonHubErpPrototype)
-        app._price_candidate_page_size = 2
+        app._price_candidate_page_size = PRICE_CANDIDATE_PAGE_SIZE
         app._price_candidate_page = 0
         app._price_selected_candidate_ids = set()
         app._price_visible_candidate_ids = set()
@@ -166,7 +166,7 @@ class PrototypeCandidateSelectionTests(unittest.TestCase):
 
     @staticmethod
     def _results() -> list[dict[str, object]]:
-        return [{"key": f"item:{number}", "code": str(number), "name": f"Item {number}"} for number in range(1, 26)]
+        return [{"key": f"item:{number}", "code": str(number), "name": f"Item {number}"} for number in range(1, 66)]
 
     def test_page_transition_drops_previous_page_selection_and_payload_is_visible_only(self) -> None:
         app = self._app()
@@ -186,11 +186,11 @@ class PrototypeCandidateSelectionTests(unittest.TestCase):
         results = self._results()
         visible, _page, _pages = app._price_candidate_page_results(results)
         app._price_toggle_all_visible_candidates(visible)
-        self.assertEqual({f"item:{number}" for number in range(1, 11)}, app._price_selected_candidate_ids)
+        self.assertEqual({f"item:{number}" for number in range(1, 31)}, app._price_selected_candidate_ids)
         app._price_toggle_all_visible_candidates(visible)
         self.assertEqual(set(), app._price_selected_candidate_ids)
 
-    def test_page_size_change_reconciles_selection_to_new_visible_page(self) -> None:
+    def test_page_size_change_request_keeps_fixed_size_and_reconciles_selection(self) -> None:
         app = self._app()
         results = self._results()
         app._price_candidate_page = 1
@@ -200,6 +200,26 @@ class PrototypeCandidateSelectionTests(unittest.TestCase):
         visible_after_resize, _page, _pages = app._price_candidate_page_results(results)
         self.assertEqual([], app._price_selected_visible_results(visible_after_resize))
         self.assertEqual(set(), app._price_selected_candidate_ids)
+        self.assertEqual(PRICE_CANDIDATE_PAGE_SIZE, app._price_candidate_page_size)
+        self.assertEqual(PRICE_CANDIDATE_PAGE_SIZE, len(visible_after_resize))
+
+    def test_candidate_pagination_is_fixed_at_thirty_items(self) -> None:
+        app = self._app()
+        results = self._results()
+        first_page, page, total_pages = app._price_candidate_page_results(results)
+        self.assertEqual(30, PRICE_CANDIDATE_PAGE_SIZE)
+        self.assertEqual((0, 3), (page, total_pages))
+        self.assertEqual(30, len(first_page))
+
+        app._price_candidate_page = 1
+        second_page, page, total_pages = app._price_candidate_page_results(results)
+        self.assertEqual((1, 3), (page, total_pages))
+        self.assertEqual([f"item:{number}" for number in range(31, 61)], [app._price_candidate_id(row) for row in second_page])
+
+        app._price_candidate_page = 2
+        last_page, page, total_pages = app._price_candidate_page_results(results)
+        self.assertEqual((2, 3), (page, total_pages))
+        self.assertEqual(5, len(last_page))
 
 
 class UiWiringTests(unittest.TestCase):

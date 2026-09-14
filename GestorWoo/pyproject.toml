@@ -1,6 +1,6 @@
 [project]
 name = "futonhub"
-version = "0.6.1"
+version = "0.6.2"
 description = "Mini ERP interno para Futon Espai."
 requires-python = ">=3.11"
 dependencies = [

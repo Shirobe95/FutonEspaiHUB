@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.6.2 · Small Screen Price Proposal UX
+
+- Cambio de Precios > Nueva Propuesta compacta el layout responsive para
+  pantallas pequenas y prioriza la visibilidad del boton `Anadir seleccionados`.
+- Reduce el ancho del panel de detalles y el espaciado de los controles de
+  porcentaje / valor exacto sin cambiar reglas de calculo ni publicacion.
+- El buscador del catalogo de precios queda compacto y mantiene `Aplicar
+  filtros` y `Limpiar` en la misma fila en anchos pequenos soportados.
+- El selector de items usa paginacion fija de 30 articulos por pagina y elimina
+  el combo visual `Mostrar 50`.
+
 ## 0.6.1 · Stock Updates & Proposal Workflow
 
 - Actualizaciones > Stock incorpora el formato operativo validado por Futon
