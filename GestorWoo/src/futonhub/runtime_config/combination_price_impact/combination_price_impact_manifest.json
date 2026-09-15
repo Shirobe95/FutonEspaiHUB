@@ -20,7 +20,7 @@
     "operational_combinations": 241,
     "impact_matrix_rows": 640,
     "excluded_combinations": 142,
-    "clean_physical_nodes": 188,
+    "clean_physical_nodes": 191,
     "operational_physical_nodes": 188,
     "catalog_operational_baseline_total_physical_items": 254,
     "catalog_operational_baseline_quarantined_physical_items": 66,
@@ -53,8 +53,8 @@
     {
       "name": "WOO_MAP_001A_3_CLEAN_GRAPH.json",
       "relative_path": "WOO_MAP_001A_3_CLEAN_GRAPH.json",
-      "sha256": "5de814f10af9419d110e4c923c63d046568f520e78b69cfe6ffd30c882dceb69",
-      "bytes": 3087464
+      "sha256": "22607e179f3e0284f398b4e369516ba5eebd42779d626cea1d0d7edddd65a560",
+      "bytes": 3089583
     },
     {
       "name": "WOO_MAP_001A_3_QUARANTINED_COMBINATIONS.csv",

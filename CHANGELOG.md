@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.6.4 · Funda 14 cm Catalogue & Graph Hotfix
+
+- Normaliza Fundas 90x200x14,5 cm a la familia operativa 90x200x14.
+- Agrupa las cinco Fundas vigentes bajo el filtro unico 90x200x14.
+- Recupera los physical nodes runtime faltantes para 0619014, 0619013 y
+  0619008 sin inventar combinaciones.
+- Elimina BLOCKED_GRAPH_COVERAGE para las tres Fundas directas validadas.
+- Mantiene publicacion directa validada para 0619014, 0619013 y 0619008.
+
 ## 0.6.3 · Funda Price Sources & Woo Price Publishing
 
 - Cambio de Precios recupera la Funda Futon Sesamo 80x200x13 Negra
