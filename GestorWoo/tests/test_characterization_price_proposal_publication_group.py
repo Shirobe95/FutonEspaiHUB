@@ -61,6 +61,56 @@ def proposal(
     }
 
 
+def woo_only_price_source_proposal(
+    row_id: str,
+    sku: str,
+    woo_id: int,
+    *,
+    old_price: float = 71.0,
+    new_price: float = 83.78,
+    parent_id: int = 3631,
+) -> dict:
+    item_id = f"93000000{int(woo_id)}"
+    row = proposal(
+        row_id,
+        "variation",
+        woo_id,
+        old_price=old_price,
+        new_price=new_price,
+        snapshot={
+            "item_id": item_id,
+            "item_record_type": "woo_item",
+            "hub_item_code": sku,
+            "physical_sku": sku,
+            "woo_id": woo_id,
+            "woo_parent_id": parent_id,
+            "parent_woo_id": parent_id,
+            "woo_item_kind": "variation",
+            "woo_sku": sku,
+            "regular_price": f"{old_price:.2f}",
+            "sale_price": "",
+            "price": f"{old_price:.2f}",
+        },
+    )
+    row["source_row"].update({
+        "entry_origin": "DIRECT_ITEM",
+        "ui_line_code": sku,
+        "ui_line_name": f"Funda {sku}",
+        "physical_item_id": item_id,
+        "physical_sku": sku,
+        "item_record_type": "woo_item",
+        "price_source_woo_only": "YES",
+        "price_source_mode": "PRICE_SOURCE_WOO_ONLY",
+        "publish_target_field": "sale_price",
+        "woo_id": woo_id,
+        "woo_parent_id": parent_id,
+        "parent_woo_id": parent_id,
+        "woo_item_kind": "variation",
+        "woo_sku": sku,
+    })
+    return row
+
+
 def price_text(value) -> str:
     if value == "":
         return ""
@@ -2129,6 +2179,80 @@ class PriceProposalPublicationGroupTests(unittest.TestCase):
         self.assertEqual(woo.writes, [("variation", 7, 20, {"regular_price": "110.00", "sale_price": ""})])
         self.assertEqual(result["line_results"][0]["woo_id"], 20)
         self.assertEqual(result["line_results"][0]["parent_woo_id"], 7)
+
+    def test_woo_only_0619005_empty_sale_above_regular_uses_effective_regular_payload(self):
+        row = woo_only_price_source_proposal("woo-only-0619005", "0619005", 9907)
+        woo = StatefulWoo({
+            "products/3631/variations/9907": woo_row(
+                9907,
+                71.0,
+                parent_id=3631,
+                sku="0619005",
+                regular_price=71.0,
+                sale_price="",
+            ),
+        })
+
+        _session, result = self._publish_with_runtime_blackbox([row], woo, ["woo-only-0619005"])
+
+        self.assertEqual(
+            woo.writes,
+            [("variation", 3631, 9907, {"regular_price": "83.78", "sale_price": ""})],
+        )
+        self.assertEqual(result["final_status"], "SUCCESS_VERIFIED")
+        self.assertEqual(result["line_results"][0]["result"], "APPLIED")
+        self.assertEqual(result["line_results"][0]["pricing_payload"], {"regular_price": "83.78", "sale_price": ""})
+        self.assertEqual(woo.rows_by_endpoint["products/3631/variations/9907"]["regular_price"], "83.78")
+        self.assertEqual(woo.rows_by_endpoint["products/3631/variations/9907"]["sale_price"], "")
+
+    def test_woo_only_0619006_empty_sale_above_regular_has_independent_state(self):
+        row = woo_only_price_source_proposal("woo-only-0619006", "0619006", 9908)
+        woo = StatefulWoo({
+            "products/3631/variations/9908": woo_row(
+                9908,
+                71.0,
+                parent_id=3631,
+                sku="0619006",
+                regular_price=71.0,
+                sale_price="",
+            ),
+        })
+
+        _session, result = self._publish_with_runtime_blackbox([row], woo, ["woo-only-0619006"])
+
+        self.assertEqual(
+            woo.writes,
+            [("variation", 3631, 9908, {"regular_price": "83.78", "sale_price": ""})],
+        )
+        self.assertEqual(result["final_status"], "SUCCESS_VERIFIED")
+        self.assertEqual(result["line_results"][0]["woo_id"], 9908)
+        self.assertEqual(result["line_results"][0]["verify_ok"], True)
+
+    def test_woo_only_sale_price_remains_supported_when_below_regular_price(self):
+        row = woo_only_price_source_proposal("woo-only-sale-valid", "0619005", 9907, old_price=71.0, new_price=83.78)
+        woo = StatefulWoo({
+            "products/3631/variations/9907": woo_row(
+                9907,
+                90.0,
+                parent_id=3631,
+                sku="0619005",
+                regular_price=90.0,
+                sale_price="",
+            ),
+        })
+        row["old_price"] = 90.0
+        row["source_row"]["item_snapshot"]["price"] = "90.00"
+        row["source_row"]["item_snapshot"]["regular_price"] = "90.00"
+
+        _session, result = self._publish_with_runtime_blackbox([row], woo, ["woo-only-sale-valid"])
+
+        self.assertEqual(
+            woo.writes,
+            [("variation", 3631, 9907, {"sale_price": "83.78"})],
+        )
+        self.assertEqual(result["final_status"], "SUCCESS_VERIFIED")
+        self.assertEqual(woo.rows_by_endpoint["products/3631/variations/9907"]["regular_price"], "90.00")
+        self.assertEqual(woo.rows_by_endpoint["products/3631/variations/9907"]["sale_price"], "83.78")
 
     def test_legacy_direct_product_live_variation_revalidates_then_publishes_variation(self):
         row = proposal(

@@ -12,6 +12,7 @@ from futonhub.cloud.services.inventory import (
 )
 from futonhub.cloud.services.price_proposals import fetch_cloud_item_for_price as _fetch_cloud_item_for_price
 from futonhub.cloud.services.prices import money_or_none as _money_or_none, price_safety_preview as _price_safety_preview, short_row_value as _short_row_value
+from futonhub.services.price_woo_only_sources import woo_only_publish_target_field
 from gestorwoo.config import Settings, load_settings
 from gestorwoo.woocommerce import WooCommerceClient
 
@@ -134,19 +135,50 @@ def _format_price_value(value: Any) -> str | None:
     return f"{amount:.2f}"
 
 
-def _pricing_payload_for_effective_price(woo_before: dict[str, Any], new_price: float) -> tuple[dict[str, Any], str]:
+def _pricing_payload_for_effective_price(
+    woo_before: dict[str, Any],
+    new_price: float,
+    *,
+    force_target_field: str | None = None,
+) -> tuple[dict[str, Any], str]:
     """Construye una escritura que garantice que el precio visible sea new_price.
 
     - Si existe rebaja activa y new_price < regular_price, se actualiza sale_price.
     - Si new_price >= regular_price, se convierte en precio normal y se limpia sale_price.
     - Sin rebaja activa, se actualiza regular_price y se limpia sale_price.
+    - Una fuente Woo-only puede preferir sale_price, pero solo se honra cuando
+      el regular_price live permite que WooCommerce haga efectivo ese sale_price.
     """
     regular = _safe_money(woo_before.get("regular_price"))
     sale = _safe_money(woo_before.get("sale_price"))
     formatted = f"{new_price:.2f}"
+    if (
+        str(force_target_field or "").strip() == "sale_price"
+        and regular is not None
+        and regular > 0
+        and new_price < regular
+    ):
+        return {"sale_price": formatted}, "sale_price"
     if sale is not None and sale > 0 and regular is not None and regular > 0 and new_price < regular:
         return {"sale_price": formatted}, "sale_price"
     return {"regular_price": formatted, "sale_price": ""}, "regular_price"
+
+
+def _publish_target_field_for_proposal(proposal: dict[str, Any] | None) -> str:
+    source = proposal.get("source_row") if isinstance(proposal, dict) and isinstance(proposal.get("source_row"), dict) else {}
+    return woo_only_publish_target_field(source)
+
+
+def _pricing_payload_for_proposal_effective_price(
+    proposal: dict[str, Any] | None,
+    woo_before: dict[str, Any],
+    new_price: float,
+) -> tuple[dict[str, Any], str]:
+    return _pricing_payload_for_effective_price(
+        woo_before,
+        new_price,
+        force_target_field=_publish_target_field_for_proposal(proposal),
+    )
 
 
 def _pricing_snapshot(data: dict[str, Any] | None) -> dict[str, Any]:
@@ -577,7 +609,11 @@ def _refresh_price_proposal_group_from_live(
             refreshed_new = float(live_price) + float(component_delta)
         if refreshed_new is None or refreshed_new <= 0:
             raise CloudAuditError(f"{proposal_id} produce un precio recalculado invalido.")
-        payload, strategy = _pricing_payload_for_effective_price(live_context, float(refreshed_new))
+        payload, strategy = _pricing_payload_for_proposal_effective_price(
+            proposal,
+            live_context,
+            float(refreshed_new),
+        )
         target = row.get("target") or {}
         identity_update = _remote_identity_revalidation_from_live(target, live_context)
         if identity_update and not identity_update.get("can_revalidate"):
@@ -849,6 +885,9 @@ def _target_record_for_row(row: dict[str, Any], *, operation_id: str, target_ind
     payload = row.get("pricing_payload") if isinstance(row.get("pricing_payload"), dict) else {}
     if "regular_price" in payload:
         expected_regular = _format_price_value(payload.get("regular_price"))
+    elif "sale_price" in payload:
+        before = row.get("woo_before_full") or row.get("woo_before") or {}
+        expected_regular = _format_price_value((before or {}).get("regular_price"))
     elif woo_type == "product" or woo_type == "variation":
         expected_regular = expected_price
     return {
@@ -1456,7 +1495,8 @@ def _publish_price_targets_partial(
             processed.append(skipped_row)
             continue
         if not payload and row.get("status") != "NO_CHANGE":
-            payload, strategy = _pricing_payload_for_effective_price(
+            payload, strategy = _pricing_payload_for_proposal_effective_price(
+                row.get("proposal") if isinstance(row.get("proposal"), dict) else None,
                 row.get("woo_before_full") or {},
                 float(row["new_price"]),
             )
@@ -2118,7 +2158,11 @@ def publish_woocommerce_price(session, *, proposal_id: str, confirm: str = "", a
         )
         _ensure_snapshot_persisted(session, publish_snapshot)
 
-        pricing_payload, pricing_strategy = _pricing_payload_for_effective_price(woo_before or {}, float(new_price))
+        pricing_payload, pricing_strategy = _pricing_payload_for_proposal_effective_price(
+            proposal,
+            woo_before or {},
+            float(new_price),
+        )
         if kind in {"product", "pack"}:
             woo_put_response = client.update_product_pricing(woo_id, pricing_payload)
             woo_written = True
@@ -2589,7 +2633,8 @@ def preview_price_proposal_group_publish(
                 pricing_payload = {}
                 pricing_strategy = "no_change"
             else:
-                pricing_payload, pricing_strategy = _pricing_payload_for_effective_price(
+                pricing_payload, pricing_strategy = _pricing_payload_for_proposal_effective_price(
+                    proposal,
                     woo_data,
                     float(new_price),
                 )
@@ -2945,9 +2990,11 @@ def publish_price_proposal_group(
             strategy = str(row.get("pricing_strategy") or "")
             target_record = target_records_by_proposal_id.get(str(row.get("proposal_id")))
             if not payload:
+                proposal = row.get("proposal") if isinstance(row.get("proposal"), dict) else None
                 payload, strategy = _pricing_payload_for_effective_price(
                     row.get("woo_before_full") or {},
                     float(row["new_price"]),
+                    force_target_field=_publish_target_field_for_proposal(proposal),
                 )
             if row.get("status") == "NO_CHANGE":
                 _publish_progress(progress, "Verificando WooCommerce", index, total, row["canonical_key"])

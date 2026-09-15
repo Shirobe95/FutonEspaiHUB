@@ -10,8 +10,14 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from futonhub.services.price_catalog_reconciliation import (  # noqa: E402
+    classify_price_proposal_catalogue_row,
     filter_coverage_audit_rows,
+    price_proposal_selectable_catalogue_rows,
     reconcile_canonical_catalogue,
+)
+from futonhub.services.price_woo_only_sources import (  # noqa: E402
+    build_approved_woo_only_price_source_rows,
+    is_approved_woo_only_price_source_row,
 )
 from futonhub.services.price_woo_catalog_index import (  # noqa: E402
     build_woo_read_only_index,
@@ -103,6 +109,41 @@ def sync_row(
             "item_snapshot": {"item_id": item_id, "item_record_type": "simple", "is_pack": False},
         },
     }
+
+
+def woo_only_mirror(
+    sku: str,
+    item_id: str,
+    woo_id: str,
+    *,
+    parent_id: str = "3631",
+) -> dict[str, object]:
+    return {
+        "item_id": item_id,
+        "item_record_type": "woo_item",
+        "woo_id": woo_id,
+        "woo_parent_id": parent_id,
+        "parent_woo_id": parent_id,
+        "woo_item_kind": "variation",
+        "woo_sku": sku,
+        "sku": sku,
+        "status": "publish",
+        "commercial_status": "Activo",
+        "price": "71.00",
+        "regular_price": "71.00",
+        "sale_price": "",
+    }
+
+
+def live_variation(woo_id: int, parent_id: int, sku: str, *, price: str = "71.00") -> dict[str, object]:
+    row = product(woo_id, sku, kind="variation", price=price)
+    row.update({
+        "parent_id": parent_id,
+        "purchasable": True,
+        "stock_status": "instock",
+        "manage_stock": False,
+    })
+    return row
 
 
 class PriceComb001B83CatalogueReconciliationTests(unittest.TestCase):
@@ -257,6 +298,71 @@ class PriceComb001B83CatalogueReconciliationTests(unittest.TestCase):
         self.assertEqual(contexts["1"]["sync_status"], "WOO_NOT_FOUND")
         self.assertEqual(contexts["2"]["sync_status"], "RECOVERED_BY_EXACT_PRODUCT_SKU")
         self.assertEqual(contexts["3"]["physical_sku"], "0201001")
+
+    def test_approved_woo_only_fundas_are_promoted_only_to_price_selector(self):
+        rows = build_approved_woo_only_price_source_rows([
+            woo_only_mirror("0619005", "930000009907", "9907"),
+            woo_only_mirror("0619006", "930000009908", "9908"),
+            woo_only_mirror("0619007", "930000009999", "9999"),
+        ])
+
+        self.assertEqual([row["hub_item_code"] for row in rows], ["0619005", "0619006"])
+        by_sku = {row["hub_item_code"]: row for row in rows}
+        self.assertEqual(by_sku["0619005"]["filter_family"], "Fundas")
+        self.assertEqual(by_sku["0619005"]["filter_group"], "Funda Futón")
+        self.assertEqual(by_sku["0619005"]["filter_size"], "140x200x8")
+        self.assertEqual(by_sku["0619005"]["filter_gama"], "Crudo")
+        self.assertEqual(by_sku["0619005"]["inventory_visible"], "NO")
+        self.assertEqual(by_sku["0619006"]["filter_gama"], "Negro")
+        self.assertEqual(len(price_proposal_selectable_catalogue_rows(rows)), 2)
+        self.assertTrue(is_approved_woo_only_price_source_row(by_sku["0619005"]))
+        self.assertNotIn("930000009907", PhysicalCatalogSnapshot.load().rows_by_item_id)
+
+    def test_unapproved_woo_mirror_is_not_a_price_source(self):
+        row = woo_only_mirror("0616007", "616007", "3804")
+
+        classification, reason = classify_price_proposal_catalogue_row(row)
+
+        self.assertFalse(price_proposal_selectable_catalogue_rows([row]))
+        self.assertEqual(classification, "WOO_MIRROR_NOT_PRICE_SOURCE")
+        self.assertIn("Mirror Woo", reason)
+
+    def test_approved_woo_only_fundas_require_exact_live_variation(self):
+        rows = build_approved_woo_only_price_source_rows([
+            woo_only_mirror("0619005", "930000009907", "9907"),
+            woo_only_mirror("0619006", "930000009908", "9908"),
+        ])
+        index = build_woo_read_only_index(ReadOnlyWoo(
+            [product(3631, "", kind="variable")],
+            {
+                3631: [
+                    live_variation(9907, 3631, "0619005"),
+                    live_variation(9908, 3631, "0619006"),
+                ]
+            },
+        ))
+
+        result = reconcile_woo_contexts(rows, woo_index=index)
+        contexts = result["live_price_context_by_physical_item"]
+
+        self.assertEqual(contexts["930000009907"]["sync_status"], "PRICE_SOURCE_WOO_ONLY_VERIFIED")
+        self.assertEqual(contexts["930000009907"]["resolution_source"], "PRICE_SOURCE_WOO_ONLY")
+        self.assertEqual(contexts["930000009907"]["effective_price"], "71.00")
+        self.assertEqual(contexts["930000009907"]["publish_target_field"], "sale_price")
+        self.assertEqual(contexts["930000009908"]["sync_status"], "PRICE_SOURCE_WOO_ONLY_VERIFIED")
+
+    def test_approved_woo_only_fundas_block_duplicate_live_sku(self):
+        rows = build_approved_woo_only_price_source_rows([
+            woo_only_mirror("0619005", "930000009907", "9907"),
+        ])
+        index = build_woo_read_only_index(ReadOnlyWoo(
+            [product(3631, "", kind="variable"), product(9999, "0619005", price="71.00")],
+            {3631: [live_variation(9907, 3631, "0619005")]},
+        ))
+
+        result = reconcile_woo_contexts(rows, woo_index=index)
+
+        self.assertEqual(result["live_price_context_by_physical_item"]["930000009907"]["sync_status"], "AMBIGUOUS_WOO_LINK")
 
     def test_index_and_reconciliation_contain_no_write_path(self):
         source = "\n".join((

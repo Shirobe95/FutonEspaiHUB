@@ -14,6 +14,7 @@ from futonhub.services.price_combination_live_reconciliation import (
     reconcile_live_combination_plan,
 )
 from futonhub.services.price_woo_catalog_index import approved_local_combination_link_identity
+from futonhub.services.price_woo_only_sources import is_approved_woo_only_price_source_row
 
 
 _CENT = Decimal("0.01")
@@ -163,11 +164,28 @@ def resolve_direct_woo_target(
         return {"resolution_status": "NOT_FOUND", "reason": "Falta item_id o SKU fisico exacto."}
     source = dict(source or {})
     snapshot = source.get("item_snapshot") if isinstance(source.get("item_snapshot"), dict) else {}
+    record_type = _text(
+        source.get("item_record_type")
+        or snapshot.get("item_record_type")
+        or source.get("hub_search_record_type")
+        or snapshot.get("hub_search_record_type")
+    ).lower()
+    if record_type == "woo_item" and not is_approved_woo_only_price_source_row({**snapshot, **source}):
+        return {"resolution_status": "NOT_FOUND", "reason": "Mirror Woo no aprobado como fuente directa de Cambio de Precios."}
     try:
         local_kind = _text(source.get("woo_item_kind") or source.get("item_kind") or snapshot.get("woo_item_kind")).lower()
         local_sku = _text(source.get("woo_sku") or snapshot.get("woo_sku") or snapshot.get("sku"))
         local_id = source.get("woo_id") or snapshot.get("woo_id")
         local_parent = _text(source.get("woo_parent_id") or source.get("parent_woo_id") or snapshot.get("woo_parent_id") or snapshot.get("parent_woo_id"))
+        if record_type == "woo_item" and is_approved_woo_only_price_source_row({**snapshot, **source}):
+            resolved = _source_identities(source, sku)
+            return {
+                "resolution_status": "RESOLVED",
+                "resolution_source": "PRICE_SOURCE_WOO_ONLY",
+                "price_source_woo_only": "YES",
+                "publish_target_field": "sale_price",
+                **resolved,
+            }
         if approved_local_combination_link_identity(
             item_id=item_id,
             sku=sku,
@@ -387,7 +405,10 @@ def _direct_target_allows_empty_graph(
         and _text(expectation.get("status")) == "IDENTITY_MISMATCH"
         and _text(expectation.get("resolution_status")) == "IDENTITY_NOT_FOUND"
         and _text(change.get("direct_target_status")) == "READY"
-        and _text(change.get("direct_resolution_source")) == "APPROVED_LOCAL_COMBINATION_LINK"
+        and _text(change.get("direct_resolution_source")) in {
+            "APPROVED_LOCAL_COMBINATION_LINK",
+            "PRICE_SOURCE_WOO_ONLY",
+        }
         and _text(change.get("woo_id"))
         and _text(change.get("woo_item_kind")).lower() in {"product", "variation"}
         and _text(change.get("woo_sku"))
@@ -745,6 +766,13 @@ def prepare_price_addition(
                 "name": _text(row.get("name")),
             })
         try:
+            if is_approved_woo_only_price_source_row({
+                **dict(source.get("item_snapshot") if isinstance(source.get("item_snapshot"), Mapping) else {}),
+                **source,
+            }):
+                source["price_source_woo_only"] = "YES"
+                source["price_source_mode"] = "PRICE_SOURCE_WOO_ONLY"
+                source["publish_target_field"] = "sale_price"
             physical = _physical_identity(source, code)
             trace = live_price_trace(
                 physical["physical_item_id"],
@@ -773,6 +801,10 @@ def prepare_price_addition(
                 "woo_endpoint": trace.get("woo_endpoint"),
                 "direct_price_trace": dict(trace),
             })
+            if trace.get("price_source_woo_only") == "YES":
+                context["price_source_woo_only"] = "YES"
+                context["price_source_mode"] = "PRICE_SOURCE_WOO_ONLY"
+                context["publish_target_field"] = trace.get("publish_target_field") or "sale_price"
             old_price = _money(trace["final_old_price"])
             new_price = (
                 (old_price * (Decimal("1") + (value / Decimal("100"))))

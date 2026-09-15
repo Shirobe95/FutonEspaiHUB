@@ -89,6 +89,7 @@ def variation(woo_id, parent_id, sku, price="150.00"):
     row = product(woo_id, sku, price)
     row["type"] = "variation"
     row["parent_id"] = parent_id
+    row["purchasable"] = True
     return row
 
 
@@ -205,6 +206,42 @@ class PriceComb001B6DirectResolutionTests(unittest.TestCase):
         }
 
         result = resolve_direct_woo_target("999001", "0999001", source=source)
+
+        self.assertEqual(result["resolution_status"], "NOT_FOUND")
+
+    def test_approved_woo_only_source_resolves_as_price_source_only(self):
+        source = {
+            "physical_item_id": "930000009907",
+            "physical_sku": "0619005",
+            "item_record_type": "woo_item",
+            "woo_id": "9907",
+            "woo_parent_id": "3631",
+            "woo_item_kind": "variation",
+            "woo_sku": "0619005",
+            "price_source_woo_only": "YES",
+            "publish_target_field": "sale_price",
+        }
+
+        result = resolve_direct_woo_target("930000009907", "0619005", source=source)
+
+        self.assertEqual(result["resolution_status"], "RESOLVED")
+        self.assertEqual(result["resolution_source"], "PRICE_SOURCE_WOO_ONLY")
+        self.assertEqual(result["woo_id"], 9907)
+        self.assertEqual(result["woo_parent_id"], "3631")
+        self.assertEqual(result["publish_target_field"], "sale_price")
+
+    def test_unapproved_woo_item_mirror_does_not_resolve_as_direct_source(self):
+        source = {
+            "physical_item_id": "616007",
+            "physical_sku": "0616007",
+            "item_record_type": "woo_item",
+            "woo_id": "3804",
+            "woo_parent_id": "3631",
+            "woo_item_kind": "variation",
+            "woo_sku": "0616007",
+        }
+
+        result = resolve_direct_woo_target("616007", "0616007", source=source)
 
         self.assertEqual(result["resolution_status"], "NOT_FOUND")
 
@@ -427,6 +464,52 @@ class PriceComb001B6DirectResolutionTests(unittest.TestCase):
         self.assertEqual(prepared["counts"]["derived"], 0)
         self.assertEqual(prepared["graph_coverage"][0]["status"], "NO_DERIVED_COMBINATIONS")
         self.assertNotEqual(direct["status"], "BLOCKED_GRAPH_COVERAGE")
+
+    def test_approved_woo_only_funda_140_zero_derived_does_not_block_direct_row(self):
+        woo = Woo({
+            ("products", (("per_page", 100), ("sku", "0619005"), ("status", "any"))): [
+                variation(9907, 3631, "0619005", "71.00")
+            ],
+            "products/3631/variations/9907": variation(9907, 3631, "0619005", "71.00"),
+        })
+
+        prepared = prepare_price_addition(
+            [{"code": "0619005", "name": "Funda 140x200x8 Crudo", "source": {
+                "physical_item_id": "930000009907",
+                "physical_sku": "0619005",
+                "item_record_type": "woo_item",
+                "woo_id": "9907",
+                "woo_parent_id": "3631",
+                "woo_item_kind": "variation",
+                "woo_sku": "0619005",
+                "price_source_woo_only": "YES",
+                "price_source_mode": "PRICE_SOURCE_WOO_ONLY",
+                "publish_target_field": "sale_price",
+                "item_snapshot": {
+                    "item_id": "930000009907",
+                    "item_record_type": "woo_item",
+                    "hub_item_code": "0619005",
+                    "woo_id": "9907",
+                    "woo_parent_id": "3631",
+                    "woo_item_kind": "variation",
+                    "woo_sku": "0619005",
+                },
+            }}],
+            adjustment_mode="amount",
+            adjustment_value="4.00",
+            impact_service=EmptyGraphImpact(),
+            woo_client=woo,
+            session=None,
+        )
+
+        direct = prepared["direct_rows"][0]
+        self.assertEqual(direct["status"], "READY")
+        self.assertEqual(direct["old_price_value"], 71.0)
+        self.assertEqual(direct["new_price_value"], 75.0)
+        self.assertEqual(direct["woo_price_context"]["direct_resolution_source"], "PRICE_SOURCE_WOO_ONLY")
+        self.assertEqual(direct["woo_price_context"]["publish_target_field"], "sale_price")
+        self.assertEqual(prepared["counts"]["derived"], 0)
+        self.assertEqual(prepared["graph_coverage"][0]["status"], "NO_DERIVED_COMBINATIONS")
 
     def test_zero_derived_with_unresolved_direct_identity_stays_blocked(self):
         prepared = prepare_price_addition(

@@ -17,6 +17,10 @@ from typing import Any, Callable, Iterable, Mapping
 
 from futonhub.cloud.services.woocommerce_publish import _effective_woo_price
 from futonhub.services.combination_price_impact import effective_edge_status, effective_resolution_status
+from futonhub.services.price_woo_only_sources import (
+    is_approved_woo_only_price_source_row,
+    validate_woo_only_price_source_entity,
+)
 
 
 ProgressCallback = Callable[[dict[str, Any]], None]
@@ -27,6 +31,7 @@ SESSION_USABLE_STATUSES = frozenset({
     "READY",
     "LOCAL_LINK_VERIFIED",
     "APPROVED_EDGE_VERIFIED",
+    "PRICE_SOURCE_WOO_ONLY_VERIFIED",
     "RECOVERED_BY_EXACT_PRODUCT_SKU",
     "RECOVERED_BY_EXACT_VARIATION_SKU",
 })
@@ -103,6 +108,9 @@ def _entity(raw: Mapping[str, Any], *, kind: str, parent: Mapping[str, Any] | No
         "woo_sku": _text(item.get("sku")),
         "name": _text(item.get("name")),
         "status": _text(item.get("status")),
+        "purchasable": item.get("purchasable"),
+        "stock_status": _text(item.get("stock_status")),
+        "manage_stock": item.get("manage_stock"),
         "regular_price": _text(item.get("regular_price")),
         "sale_price": _text(item.get("sale_price")),
         "effective_price": _money_text(_effective_woo_price(item)),
@@ -333,6 +341,37 @@ def resolve_physical_woo_identity(
         return _terminal_context(item_id, sku, "COMPONENT_ONLY", "El registro es solo un componente placeholder.")
     if record_type == "alias":
         return _terminal_context(item_id, sku, "NOT_PRICE_OPERABLE", "Los aliases no son artículos físicos operables.")
+    if record_type == "woo_item":
+        if not is_approved_woo_only_price_source_row({**snapshot, **dict(row)}):
+            return _terminal_context(
+                item_id,
+                sku,
+                "NOT_PRICE_OPERABLE",
+                "El mirror Woo no esta aprobado como fuente directa de Cambio de Precios.",
+            )
+        candidates = list(woo_index.woo_entities_by_exact_literal_sku.get(sku) or ())
+        if len(candidates) != 1:
+            return _terminal_context(
+                item_id,
+                sku,
+                "AMBIGUOUS_WOO_LINK" if candidates else "WOO_NOT_FOUND",
+                f"El SKU literal {sku} devolvio {len(candidates)} destinos Woo exactos.",
+            )
+        entity = candidates[0]
+        valid, reason = validate_woo_only_price_source_entity({**snapshot, **dict(row)}, entity)
+        if not valid:
+            return _terminal_context(item_id, sku, "NOT_PRICE_OPERABLE", reason)
+        context = _context_from_entity(
+            item_id=item_id,
+            physical_sku=sku,
+            entity=entity,
+            resolution_source="PRICE_SOURCE_WOO_ONLY",
+            resolution_status="PRICE_SOURCE_WOO_ONLY_VERIFIED",
+            session_only=True,
+        )
+        context["price_source_woo_only"] = "YES"
+        context["publish_target_field"] = "sale_price"
+        return context
     if row.get("price_operable") is not None and not _bool(row.get("price_operable")):
         return _terminal_context(item_id, sku, "NOT_PRICE_OPERABLE", "El artículo no está operable para precio directo.")
     if not item_id or not sku:
@@ -445,6 +484,8 @@ def terminal_reconciliation_error(rows: Iterable[Mapping[str, Any]], error: str)
             context = _terminal_context(item_id, sku, "PACK_ONLY", "Los packs no son operables en la propuesta de precio directa.")
         elif record_type == "component_placeholder":
             context = _terminal_context(item_id, sku, "COMPONENT_ONLY", "El registro es solo un componente placeholder.")
+        elif record_type == "woo_item" and not is_approved_woo_only_price_source_row({**snapshot, **row}):
+            context = _terminal_context(item_id, sku, "NOT_PRICE_OPERABLE", "El mirror Woo no esta aprobado como fuente directa.")
         elif record_type == "alias" or (row.get("price_operable") is not None and not _bool(row.get("price_operable"))):
             context = _terminal_context(item_id, sku, "NOT_PRICE_OPERABLE", "El registro no es operable para precio directo.")
         else:

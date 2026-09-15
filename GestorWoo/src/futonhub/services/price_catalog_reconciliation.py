@@ -26,6 +26,9 @@ from futonhub.ui.erp.catalog_filters import (
     PhysicalCatalogSnapshot,
     natural_catalog_sort_key,
 )
+from futonhub.services.price_woo_only_sources import (
+    is_approved_woo_only_price_source_row,
+)
 
 
 CATALOG_DIFF_COLUMNS = (
@@ -68,6 +71,7 @@ PRICE_PROPOSAL_SELECTABLE_AUDIT_CATEGORIES = (
     "OUT_OF_USE_CONFIRMED",
     "COMBINATION_COMPONENT_ONLY",
     "DERIVED_ONLY_NOT_PRICE_SOURCE",
+    "WOO_MIRROR_NOT_PRICE_SOURCE",
     "STALE_WOO_LINK",
     "AMBIGUOUS_IDENTITY",
     "UNKNOWN",
@@ -77,6 +81,7 @@ PRICE_PROPOSAL_SAFE_HIDE_AUDIT_CATEGORIES = frozenset({
     "OUT_OF_USE_CONFIRMED",
     "COMBINATION_COMPONENT_ONLY",
     "DERIVED_ONLY_NOT_PRICE_SOURCE",
+    "WOO_MIRROR_NOT_PRICE_SOURCE",
 })
 
 
@@ -329,6 +334,9 @@ def price_proposal_non_selectable_reason(row: Mapping[str, Any]) -> str:
     """
     if not is_operationally_active(row):
         return operational_inactive_reason(row)
+    record_type = _text(row.get("item_record_type") or row.get("hub_search_record_type")).lower()
+    if record_type == "woo_item" and not is_approved_woo_only_price_source_row(row):
+        return "WOO_MIRROR_NOT_PRICE_SOURCE"
     item_id = _text(row.get("physical_item_id") or row.get("item_id"))
     if item_id in PRICE_PROPOSAL_IMPACT_ONLY_ITEM_IDS:
         return "IMPACT_TARGET_ONLY_NOT_PRICE_SOURCE"
@@ -358,6 +366,11 @@ def price_proposal_selectable_catalogue_rows(rows: Iterable[Mapping[str, Any]]) 
 def classify_price_proposal_catalogue_row(row: Mapping[str, Any]) -> tuple[str, str]:
     """Classify one price-catalogue row without mutating selection policy."""
     item_id = _text(row.get("physical_item_id") or row.get("item_id"))
+    record_type = _text(row.get("item_record_type") or row.get("hub_search_record_type")).lower()
+    if record_type == "woo_item":
+        if is_approved_woo_only_price_source_row(row):
+            return "ACTIVE_DIRECT_WOO", "Woo-only price source aprobado para Cambio de Precios."
+        return "WOO_MIRROR_NOT_PRICE_SOURCE", "Mirror Woo no aprobado como fuente de Cambio de Precios."
     if item_id in PRICE_PROPOSAL_IMPACT_ONLY_ITEM_IDS:
         return "DERIVED_ONLY_NOT_PRICE_SOURCE", "Impact target aprobado; no debe iniciar propuestas."
     if _is_human_confirmed_missing_woo_price_source(row):
@@ -392,7 +405,6 @@ def classify_price_proposal_catalogue_row(row: Mapping[str, Any]) -> tuple[str, 
         "BROKEN_WOO_LINK",
     }:
         return "STALE_WOO_LINK", "Mapping Woo requiere revisión."
-    record_type = _text(row.get("item_record_type") or row.get("hub_search_record_type")).lower()
     if record_type in {"component_placeholder"}:
         return "COMBINATION_COMPONENT_ONLY", "Registro componente/placeholder."
     if record_type in {"alias"}:

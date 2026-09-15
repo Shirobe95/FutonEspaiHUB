@@ -22,6 +22,10 @@ from futonhub.services.combination_price_impact import (
     CombinationPriceImpactService,
 )
 from futonhub.services.price_woo_catalog_index import approved_local_combination_link_identity
+from futonhub.services.price_woo_only_sources import (
+    is_approved_woo_only_price_source_row,
+    validate_woo_only_price_source_entity,
+)
 
 
 _CENT = Decimal("0.01")
@@ -270,6 +274,29 @@ def _approved_source_candidate(
     }
 
 
+def _approved_woo_only_source_candidate(
+    item_id: str,
+    sku: str,
+    source: Mapping[str, Any] | None,
+    woo_client: Any,
+) -> dict[str, Any] | None:
+    raw_source = dict(source or {})
+    snapshot = raw_source.get("item_snapshot") if isinstance(raw_source.get("item_snapshot"), Mapping) else {}
+    row = {**dict(snapshot), **raw_source, "physical_item_id": item_id, "item_id": item_id, "physical_sku": sku}
+    if not is_approved_woo_only_price_source_row(row):
+        return None
+    rows = _woo_product_exact_candidates(woo_client, sku)
+    exact_rows = [dict(candidate) for candidate in rows if _text(candidate.get("sku")) == sku]
+    if len(exact_rows) != 1:
+        raise ValueError(f"SKU Woo-only {sku} devolvio {len(exact_rows)} destinos Woo exactos.")
+    valid, reason = validate_woo_only_price_source_entity(row, exact_rows[0])
+    if not valid:
+        raise ValueError(reason)
+    candidate = _woo_exact_candidate_from_row(exact_rows[0], sku)
+    candidate["resolution_source"] = "PRICE_SOURCE_WOO_ONLY"
+    return candidate
+
+
 def _live_woo_kind(row: Mapping[str, Any]) -> str:
     row_type = _text(row.get("type")).lower()
     try:
@@ -394,6 +421,53 @@ def resolve_live_direct_identity(
             "approved_combination_link": "YES",
         }
 
+    try:
+        woo_only_candidate = _approved_woo_only_source_candidate(item_id, sku, source, woo_client)
+    except Exception as exc:
+        return {
+            **base,
+            "resolution_status": "LOOKUP_ERROR",
+            "resolution_source": "PRICE_SOURCE_WOO_ONLY",
+            "reason": str(exc),
+        }
+    if woo_only_candidate is not None:
+        try:
+            entity, endpoint = _read_woo_entity(woo_client, woo_only_candidate)
+            valid, reason = validate_woo_only_price_source_entity(
+                {
+                    **dict((source or {}).get("item_snapshot") or {}),
+                    **dict(source or {}),
+                    "physical_item_id": item_id,
+                    "item_id": item_id,
+                    "physical_sku": sku,
+                },
+                entity,
+            )
+            if not valid:
+                raise ValueError(reason)
+        except Exception as exc:
+            return {
+                **base,
+                **woo_only_candidate,
+                "resolution_status": "LOOKUP_ERROR",
+                "reason": str(exc),
+            }
+        return {
+            **base,
+            **woo_only_candidate,
+            "woo_id": int(woo_only_candidate["woo_id"]),
+            "woo_parent_id": _text(woo_only_candidate.get("woo_parent_id")) or None,
+            "woo_sku": _text(entity.get("sku")),
+            "woo_name": _text(entity.get("name")),
+            "woo_status": _text(entity.get("status")),
+            "woo_endpoint": endpoint,
+            "entity": entity,
+            "resolution_status": "RESOLVED",
+            "reason": "",
+            "price_source_woo_only": "YES",
+            "publish_target_field": "sale_price",
+        }
+
     replica = _replica_exact_candidates(session, sku)
     product_candidates: list[dict[str, Any]] = []
     lookup_error = ""
@@ -485,6 +559,8 @@ def live_price_trace(
         "final_old_price": None,
         "resolution_status": resolution.get("resolution_status"),
         "resolution_source": resolution.get("resolution_source"),
+        "price_source_woo_only": resolution.get("price_source_woo_only") or "",
+        "publish_target_field": resolution.get("publish_target_field") or "",
         "reason": resolution.get("reason") or "",
     }
     if resolution.get("resolution_status") != "RESOLVED":

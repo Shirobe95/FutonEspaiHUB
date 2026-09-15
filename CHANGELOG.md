@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.6.3 · Funda Price Sources & Woo Price Publishing
+
+- Cambio de Precios recupera la Funda Futon Sesamo 80x200x13 Negra
+  (`0616007`) como articulo normal y mantiene sus combinaciones Woo validadas.
+- Anade fuentes comerciales Woo-only con allowlist explicita para las Fundas
+  `0619005` y `0619006`, sin convertirlas en articulos fisicos ni contaminar
+  Inventario, Stock, Pedidos, Proveedores, Rotacion ni Costes.
+- Integra las fuentes Woo-only en el pipeline real de catalogo de precios:
+  product_variations, filtros, busqueda, orden, paginacion, modelo UI y render.
+- Corrige la publicacion Woo de subidas de precio cuando `sale_price` no puede
+  ser efectivo porque el nuevo precio es mayor o igual que `regular_price`.
+- Amplia regresiones de Fundas, catalogo, resolucion exacta Woo-only,
+  publisher, combinaciones, rollback y estrategia regular/sale price.
+
 ## 0.6.2 · Small Screen Price Proposal UX
 
 - Cambio de Precios > Nueva Propuesta compacta el layout responsive para

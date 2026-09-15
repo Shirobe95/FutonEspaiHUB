@@ -145,6 +145,12 @@ from futonhub.services.price_catalog_reconciliation import (
     price_proposal_selectable_catalogue_rows,
     reconcile_canonical_catalogue,
 )
+from futonhub.services.price_woo_only_sources import (
+    approved_woo_only_price_source_woo_ids,
+    build_approved_woo_only_price_source_rows,
+    is_approved_woo_only_price_source_row,
+    woo_only_filter_metadata,
+)
 from futonhub.services.price_woo_catalog_index import (
     SESSION_USABLE_STATUSES,
     build_woo_read_only_index,
@@ -1347,7 +1353,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         warehouse = self._number_or_zero(row.get("warehouse_stock"))
         total_stock = store + warehouse
         link_status = str(row.get("woo_link_status") or "").strip()
-        item_id = str(row.get("item_id") or row.get("woo_id") or "-")
+        item_id = str(row.get("display_code") or row.get("item_id") or row.get("woo_id") or "-")
         name = str(row.get("name") or row.get("woo_name") or f"Item {item_id}")
         dimensions = self._clean_inventory_value(row.get("size"), "Sin definir")
         m3 = self._format_optional_m3(row.get("cubic_meters"))
@@ -4751,7 +4757,10 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             item_id = str(raw.get("item_id") or raw.get("physical_item_id") or item.code or "").strip()
             if not item_id or is_pack or record_type in {"alias", "component_placeholder", "woo_pack", "manual_pack"}:
                 continue
-            metadata, strategy = snapshot.resolve_price_row(raw)
+            if is_approved_woo_only_price_source_row(raw):
+                metadata, strategy = woo_only_filter_metadata(raw), "price_source_woo_only"
+            else:
+                metadata, strategy = snapshot.resolve_price_row(raw)
             if metadata is None:
                 continue
             metadata = self._price_canonical_filter_metadata(metadata)
@@ -4796,6 +4805,12 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         is_pack = raw.get("is_pack") is True or str(raw.get("is_pack") or "").strip().lower() in {"1", "true", "yes", "si"}
         if is_pack or record_type in {"alias", "component_placeholder", "woo_pack", "manual_pack"}:
             return None, "ineligible_record_type"
+        if is_approved_woo_only_price_source_row(raw):
+            metadata = woo_only_filter_metadata(raw)
+            return (
+                self._price_canonical_filter_metadata(metadata),
+                "price_source_woo_only",
+            ) if metadata is not None else (None, "price_source_woo_only_unavailable")
         try:
             metadata, strategy = self._price_catalog_snapshot().resolve_price_row(raw)
             return (
@@ -5128,6 +5143,26 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             # the application itself is closing, silently drop the callback.
             return
 
+    def _price_approved_woo_only_variation_rows(self) -> list[dict[str, Any]]:
+        """Read the explicitly approved Woo-only price sources from the mirror."""
+        if self._cloud_session is None:
+            return []
+        woo_ids = list(approved_woo_only_price_source_woo_ids())
+        if not woo_ids:
+            return []
+        response = (
+            self._cloud_session.client.table("product_variations")
+            .select(
+                "woo_id,parent_woo_id,parent_name,sku,status,"
+                "regular_price,sale_price,price,stock_status,stock_quantity,attributes_label"
+            )
+            .in_("woo_id", woo_ids)
+            .order("woo_id")
+            .limit(len(woo_ids))
+            .execute()
+        )
+        return [dict(row) for row in (getattr(response, "data", None) or [])]
+
     def _load_price_catalog_for_live_sync(self) -> None:
         """Load the complete price catalogue once, before proposal history."""
         if self._cloud_session is None or self.__dict__.get("_price_catalog_loading", False):
@@ -5150,11 +5185,20 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                     visibility_overrides=visibility,
                 )
                 canonical_rows = operational_price_catalogue_rows(reconciliation.get("canonical_rows") or [])
-                items = [self._inventory_item_from_cloud_row(row) for row in canonical_rows]
+                woo_only_variation_rows = self._price_approved_woo_only_variation_rows()
+                woo_only_rows = build_approved_woo_only_price_source_rows(
+                    reconciliation.get("live_not_canonical_rows") or [],
+                    variation_rows=woo_only_variation_rows,
+                )
+                price_rows = [*canonical_rows, *woo_only_rows]
+                items = [self._inventory_item_from_cloud_row(row) for row in price_rows]
                 stage_counts = {
                     "raw_inventory_rows": len(raw_rows),
                     "live_received": len(raw_rows),
                     **dict(reconciliation.get("counts") or {}),
+                    "woo_only_variation_rows": len(woo_only_variation_rows),
+                    "woo_only_price_sources": len(woo_only_rows),
+                    "price_catalogue_visible": len(price_rows),
                 }
                 self._price_schedule_live_sync_callback(
                     lambda: self._finish_price_catalog_for_live_sync(items, "", generation, stage_counts, reconciliation)
@@ -5907,6 +5951,10 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 "item_id": physical_item_id,
                 "hub_item_code": str(raw.get("hub_item_code") or item.code or ""),
                 "item_snapshot": dict(raw),
+                "item_record_type": str(raw.get("item_record_type") or raw.get("hub_search_record_type") or ""),
+                "price_source_woo_only": raw.get("price_source_woo_only"),
+                "price_source_mode": raw.get("price_source_mode"),
+                "publish_target_field": raw.get("publish_target_field"),
                 "operational_status": str(raw.get("operational_status") or ""),
                 "quarantine_group": str(raw.get("quarantine_group") or ""),
                 "quarantine_reason": str(raw.get("quarantine_reason") or ""),
@@ -5927,6 +5975,10 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             "item_id": physical_item_id,
             "hub_item_code": str(raw.get("hub_item_code") or item.code or ""),
             "item_snapshot": dict(raw),
+            "item_record_type": str(raw.get("item_record_type") or raw.get("hub_search_record_type") or ""),
+            "price_source_woo_only": raw.get("price_source_woo_only"),
+            "price_source_mode": raw.get("price_source_mode"),
+            "publish_target_field": raw.get("publish_target_field"),
             "product_type": str(raw.get("type") or raw.get("woo_product_type") or "").strip().lower(),
             "operational_status": str(raw.get("operational_status") or ""),
             "quarantine_group": str(raw.get("quarantine_group") or ""),
@@ -7362,6 +7414,14 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 source["woo_date_modified"] = context.get("woo_date_modified")
                 source["woo_price_context"] = context
                 source["price_source_trace"] = dict(row.get("price_source_trace") or context.get("direct_price_trace") or {})
+                if context.get("price_source_woo_only") == "YES" or source["price_source_trace"].get("price_source_woo_only") == "YES":
+                    source["price_source_woo_only"] = "YES"
+                    source["price_source_mode"] = "PRICE_SOURCE_WOO_ONLY"
+                    source["publish_target_field"] = (
+                        context.get("publish_target_field")
+                        or source["price_source_trace"].get("publish_target_field")
+                        or "sale_price"
+                    )
                 source["price_adjustment_mode"] = row.get("price_adjustment_mode")
                 source["price_adjustment_value"] = row.get("price_adjustment_value")
                 # Keep both views: the popup contains only the new item's
@@ -7582,6 +7642,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 live_trace = live_price_trace(
                     physical_item_id,
                     physical_sku,
+                    source=source,
                     displayed_price=price_at_creation,
                     supabase_cached_price=item_snapshot.get("woo_price"),
                     session=read_only_session,
@@ -7682,6 +7743,11 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 "woo_parent_id": source.get("woo_parent_id") or source.get("parent_woo_id"),
                 "woo_item_kind": source.get("woo_item_kind") or source.get("item_kind"),
                 "woo_sku": source.get("woo_sku") or snapshot.get("woo_sku") or snapshot.get("sku"),
+                "direct_resolution_source": (
+                    dict(source.get("price_source_trace") or {}).get("resolution_source")
+                    or dict(source.get("woo_price_context") or {}).get("direct_resolution_source")
+                    or source.get("direct_resolution_source")
+                ),
                 "old_price": old_price,
                 "new_price": new_price,
                 "proposal_key": self._price_model_key(line, source),
@@ -7806,6 +7872,9 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                     "price_source_trace": dict(source.get("price_source_trace") or {}),
                     "price_adjustment_mode": source.get("price_adjustment_mode"),
                     "price_adjustment_value": source.get("price_adjustment_value"),
+                    "price_source_woo_only": source.get("price_source_woo_only"),
+                    "price_source_mode": source.get("price_source_mode"),
+                    "publish_target_field": source.get("publish_target_field"),
                     "combination_addition_plan": dict(combination_plan),
                     "popup_combination_addition_plan": dict(source.get("popup_combination_addition_plan") or {}),
                     "price_at_creation": price_at_creation,
