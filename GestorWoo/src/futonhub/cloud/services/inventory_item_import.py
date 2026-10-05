@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -179,11 +180,10 @@ def import_inventory_items_csv(
                 operation_id=operation_id,
                 module="Inventario",
                 action="import_inventory_items_csv",
-                entity_table="inventory_items",
+                entity_type="inventory_items",
                 entity_id="bulk",
                 before_data={"existing_count": preview.get("existing_count")},
-                after_data={"insert_count": len(payload), "sample": payload[:20]},
-                metadata={"csv_path": str(csv_path)},
+                reason=json.dumps({"csv_path": str(csv_path)}, ensure_ascii=False, default=str),
             ),
         )
     except Exception:
@@ -220,11 +220,11 @@ def import_inventory_items_csv(
                 operation_id=operation_id,
                 module="Inventario",
                 action="import_inventory_items_csv",
-                entity_table="inventory_items",
+                entity_type="inventory_items",
                 entity_id="bulk",
                 status="success" if not errors else "error",
                 message=f"Import inventory_items desde CSV: {inserted}/{len(payload)} insertados",
-                metadata={"csv_path": str(csv_path), "errors": errors[:5]},
+                after_data={"csv_path": str(csv_path), "errors": errors[:5]},
             ),
         )
     except Exception:
@@ -288,11 +288,10 @@ def upsert_inventory_items_csv(
                 operation_id=operation_id,
                 module="Inventario",
                 action="upsert_inventory_items_csv",
-                entity_table="inventory_items",
+                entity_type="inventory_items",
                 entity_id="bulk",
                 before_data={"mode": "upsert"},
-                after_data={"upsert_count": len(payload), "sample": payload[:20]},
-                metadata={"csv_path": str(csv_path)},
+                reason=json.dumps({"csv_path": str(csv_path)}, ensure_ascii=False, default=str),
             ),
         )
     except Exception:
@@ -333,11 +332,11 @@ def upsert_inventory_items_csv(
                 operation_id=operation_id,
                 module="Inventario",
                 action="upsert_inventory_items_csv",
-                entity_table="inventory_items",
+                entity_type="inventory_items",
                 entity_id="bulk",
                 status="success" if not errors else "error",
                 message=f"Upsert inventory_items desde CSV: {upserted}/{len(payload)} procesados",
-                metadata={"csv_path": str(csv_path), "errors": errors[:5]},
+                after_data={"csv_path": str(csv_path), "errors": errors[:5]},
             ),
         )
     except Exception:

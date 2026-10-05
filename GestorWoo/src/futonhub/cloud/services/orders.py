@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from typing import Any
 
@@ -694,11 +695,10 @@ def cancel_supplier_order(session, order_id: str, *, reason: str = "") -> dict[s
                 operation_id=operation_id,
                 module="Pedidos",
                 action="cancel_supplier_order",
-                entity_table="supplier_orders",
+                entity_type="supplier_orders",
                 entity_id=order_id,
                 before_data=before,
-                after_data=update_data,
-                metadata={"reason": reason},
+                reason=json.dumps({"reason": reason}, ensure_ascii=False, default=str),
             ),
         )
     except Exception:
@@ -713,11 +713,11 @@ def cancel_supplier_order(session, order_id: str, *, reason: str = "") -> dict[s
                 operation_id=operation_id,
                 module="Pedidos",
                 action="cancel_supplier_order",
-                entity_table="supplier_orders",
+                entity_type="supplier_orders",
                 entity_id=order_id,
                 status="success",
                 message=f"Pedido cancelado desde UI ERP: {order_id}",
-                metadata={"reason": reason},
+                after_data={"reason": reason},
             ),
         )
     except Exception:

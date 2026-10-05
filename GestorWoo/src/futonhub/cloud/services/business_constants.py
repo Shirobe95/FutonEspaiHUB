@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from collections.abc import Iterable
 from typing import Any
@@ -296,11 +297,10 @@ def save_business_constants(session, values: dict[str, Any]) -> dict[str, Any]:
                 operation_id=operation_id,
                 module="Configuracion",
                 action="save_business_constants",
-                entity_table="business_constants",
+                entity_type="business_constants",
                 entity_id="bulk",
                 before_data=before,
-                after_data={"values": payload},
-                metadata={"count": len(payload)},
+                reason=json.dumps({"count": len(payload)}, ensure_ascii=False, default=str),
             ),
         )
     except Exception:
@@ -315,11 +315,11 @@ def save_business_constants(session, values: dict[str, Any]) -> dict[str, Any]:
                 operation_id=operation_id,
                 module="Configuracion",
                 action="save_business_constants",
-                entity_table="business_constants",
+                entity_type="business_constants",
                 entity_id="bulk",
                 status="success",
                 message=f"Constantes actualizadas desde UI ERP: {len(payload)}",
-                metadata={"keys": [row["key"] for row in payload]},
+                after_data={"keys": [row["key"] for row in payload]},
             ),
         )
     except Exception:

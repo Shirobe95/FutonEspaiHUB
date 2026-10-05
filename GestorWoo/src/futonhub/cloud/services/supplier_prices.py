@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -303,16 +304,10 @@ def migrate_supplier_prices_to_supabase(
                 operation_id=operation_id,
                 module="Pedidos",
                 action="migrate_supplier_prices_to_inventory_items",
-                entity_table="inventory_items",
+                entity_type="inventory_items",
                 entity_id="bulk",
                 before_data={"cloud_inventory_items": preview.get("cloud_inventory_items")},
-                after_data={
-                    "local_supplier_price_rows": len(local_rows),
-                    "inventory_items_to_update": len(updates),
-                    "by_supplier": preview.get("by_supplier"),
-                    "conflict_count": preview.get("conflict_count"),
-                },
-                metadata={"source": "GestorWoo/data/gestorwoo.sqlite3 supplier_prices"},
+                reason=json.dumps({"source": "GestorWoo/data/gestorwoo.sqlite3 supplier_prices"}, ensure_ascii=False, default=str),
             ),
         )
     except Exception:
@@ -357,11 +352,11 @@ def migrate_supplier_prices_to_supabase(
                 operation_id=operation_id,
                 module="Pedidos",
                 action="migrate_supplier_prices_to_inventory_items",
-                entity_table="inventory_items",
+                entity_type="inventory_items",
                 entity_id="bulk",
                 status=status,
                 message=f"Migracion precios proveedor hacia inventory_items: {migrated}/{len(payload_rows)}",
-                metadata={
+                after_data={
                     "errors": errors[:5],
                     "skipped_missing_count": len(skipped_missing),
                     "skipped_missing_sample": skipped_missing[:20],
@@ -978,11 +973,10 @@ def update_supplier_price_inventory_item(
                 operation_id=operation_id,
                 module="Precio Proveedores",
                 action="update_supplier_prices",
-                entity_table="inventory_items",
+                entity_type="inventory_items",
                 entity_id=str(item_int),
                 before_data=before,
-                after_data=update_data,
-                metadata={"reason": reason},
+                reason=json.dumps({"reason": reason}, ensure_ascii=False, default=str),
             ),
         )
     except Exception:
@@ -1003,11 +997,11 @@ def update_supplier_price_inventory_item(
                 operation_id=operation_id,
                 module="Precio Proveedores",
                 action="update_supplier_prices",
-                entity_table="inventory_items",
+                entity_type="inventory_items",
                 entity_id=str(item_int),
                 status="success",
                 message=f"Precios proveedor actualizados para item {item_int}",
-                metadata={
+                after_data={
                     "reason": reason,
                     "primary_supplier_price": update_data.get("primary_supplier_price"),
                     "pascal_price": update_data.get("pascal_price"),
