@@ -2538,7 +2538,7 @@ class InventoryApp(tk.Tk):
             try:
                 result = self.store.link_with_woocommerce()
             except Exception as exc:  # pragma: no cover - UI guard
-                self.after(0, lambda: self._finish_woo_link(error=exc))
+                self.after(0, lambda error=exc: self._finish_woo_link(error=error))
                 return
             self.after(0, lambda: self._finish_woo_link(result=result))
 
@@ -2686,7 +2686,7 @@ class InventoryApp(tk.Tk):
             try:
                 result = self.store.import_heca_zip(Path(selected))
             except Exception as exc:  # pragma: no cover - UI guard
-                self.after(0, lambda: self._finish_heca_import(error=exc))
+                self.after(0, lambda error=exc: self._finish_heca_import(error=error))
                 return
             self.after(0, lambda: self._finish_heca_import(result=result))
 

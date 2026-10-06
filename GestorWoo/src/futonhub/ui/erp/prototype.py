@@ -2578,7 +2578,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 ) if changes else {"derived_lines": [], "blocked_lines": [], "excluded_lines": [], "all_lines": [], "counts": {}}
                 self.after(0, lambda: finish(refreshed, blocked, plan, ""))
             except Exception as exc:
-                self.after(0, lambda: finish(refreshed, blocked, None, str(exc)))
+                self.after(0, lambda message=str(exc): finish(refreshed, blocked, None, message))
 
         def finish(
             refreshed_rows: list[dict[str, Any]],
@@ -6398,7 +6398,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             selected = selected_results()
             if not selected:
                 self._price_edit_notice = "Selecciona al menos un candidato visible para previsualizar."
-                self._render_content()
+                self._show_view("precios")
                 return
             self._open_price_bulk_add_preview(selected, percent_entry.get(), exact_entry.get())
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import tkinter as tk
 from tkinter import messagebox, simpledialog, ttk
 
+from futonhub.cloud.audit import CloudAuditError
 from futonhub.core.config import load_settings
 from futonhub.ui.theme import C_BG, apply_theme
 from futonhub.ui.erp.responsive import center_window_safely, modal_dimensions_for_viewport, set_minsize_safely, widget_screen_size
