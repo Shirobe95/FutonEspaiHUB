@@ -9,7 +9,7 @@ FutonEspai_Organizado/
 ├─ CalculoCoste/                 # Calculadora individual, pedido y constantes
 │  ├─ coste_1.py                 # Calculo de coste individual + gestor de constantes
 │  ├─ coste_pedido.py            # Calculo masivo desde Excel de pedido
-│  ├─ constantes_negocio.json    # Cache local regenerada desde Supabase (no versionada)
+│  ├─ (las constantes viven solo en Supabase)
 │  └─ data.xlsx                  # Respaldo historico si no hay SQLite
 ├─ GestorWoo/                    # Aplicacion principal
 │  ├─ gestorwoo.py               # Lanzador en desarrollo
@@ -60,7 +60,7 @@ No muevas el `.exe` solo. Debe quedarse dentro de `GestorWoo`, con `CalculoCoste
 - `FutonEspaiHub/` fue eliminado porque duplicaba `GestorWoo/` y `CalculoCoste/`.
 - `.git`, `.vs`, `__pycache__`, `build`, `dist` y ejecutables antiguos fueron eliminados.
 - La base local vive en `GestorWoo/data/gestorwoo.sqlite3`.
-- Las constantes de negocio viven en Supabase (fuente de verdad, comun a todos los PCs). `CalculoCoste/constantes_negocio.json` es solo una cache local que el ERP regenera al leerlas; no se versiona.
+- Las constantes de negocio viven solo en Supabase (fuente de verdad, comun a todos los PCs); no hay constantes locales.
 - No subas `.env` ni `.sqlite3` a repositorios publicos.
 
 ## Gestor WooCommerce - Organización visual v1

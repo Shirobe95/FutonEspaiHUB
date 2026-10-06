@@ -40,63 +40,6 @@ SUPPLIER_ORDER_REQUIRED_CONSTANTS_BY_MODE: dict[str, tuple[str, ...]] = {
 }
 
 
-# ---------------------------------------------------------------------------
-# Cache local para las herramientas legacy (CalculoCoste/coste_pedido.py): se rellena SIEMPRE desde Supabase.
-# ---------------------------------------------------------------------------
-LEGACY_CACHE_KEYS: tuple[str, ...] = (
-    "IMPORTE_DESCARGA_MT",
-    "PC_GASTOS_MANIPULACION",
-    "PC_GASTOS_FINANCIACION",
-    "IMPORTES_VARIOS",
-    "COSTE_TOTAL_DESCARGA_FUTONES_IVA",
-    "COSTE_DESCARGA_FUTONES_UNIDAD",
-    "IVA_RECARGO_EQUIVALENCIA",
-    "COSTE_DIARIO_ALMACENAJE_M3",
-)
-_legacy_cache_path: Any = None
-
-
-def enable_legacy_constants_cache(path) -> None:
-    """Activa el volcado de las constantes leidas de Supabase a ``path`` (JSON). La UI lo activa al arrancar."""
-    global _legacy_cache_path
-    _legacy_cache_path = path
-
-
-def _write_legacy_cache(constants: dict[str, dict[str, Any]]) -> None:
-    """Mejor esfuerzo: nunca interrumpe la lectura de constantes. Solo escribe valores que vienen de Supabase."""
-    path = _legacy_cache_path
-    if path is None:
-        return
-    try:
-        import os
-        from pathlib import Path as _Path
-
-        target = _Path(path)
-        values = {
-            key: float(constants[key]["value"])
-            for key in LEGACY_CACHE_KEYS
-            if key in constants and "source_row" in constants[key] and isinstance(constants[key].get("value"), (int, float))
-        }
-        if not values:
-            return
-        current: dict[str, Any] = {}
-        if target.is_file():
-            try:
-                loaded = json.loads(target.read_text(encoding="utf-8"))
-                current = loaded if isinstance(loaded, dict) else {}
-            except Exception:
-                current = {}
-        merged = {**current, **values}
-        if merged == current:
-            return
-        target.parent.mkdir(parents=True, exist_ok=True)
-        temporary = target.with_suffix(".json.tmp")
-        temporary.write_text(json.dumps(merged, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        os.replace(temporary, target)
-    except Exception:
-        pass
-
-
 class BusinessConstantsValidationError(RuntimeError):
     """Raised when economic constants from Supabase are incomplete or invalid."""
 
@@ -209,7 +152,6 @@ def load_required_business_constants(session, required_keys: Iterable[str]) -> d
             missing_keys=missing,
             invalid_keys=invalid_unique,
         )
-    _write_legacy_cache(result)
     return result
 
 
@@ -249,7 +191,6 @@ def list_business_constants(
         if row.get("description") not in (None, ""):
             base["description"] = row.get("description")
         base["source_row"] = row
-    _write_legacy_cache(result)
     return result
 
 

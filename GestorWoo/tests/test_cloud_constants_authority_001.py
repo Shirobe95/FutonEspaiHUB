@@ -107,71 +107,22 @@ class CloudThresholdTests(unittest.TestCase):
         self.assertEqual(offenders, [])
 
 
-class LegacyCacheTests(unittest.TestCase):
-    ROWS = [
-        {"key": "COSTE_TOTAL_DESCARGA_FUTONES_IVA", "value": 375.35},
-        {"key": "COSTE_DIARIO_ALMACENAJE_M3", "value": 0.485},
-        {"key": "COSTE_DESCARGA_FUTONES_UNIDAD", "value": 2.3},
-        {"key": "PRICE_DROP_BLOCK_PERCENT", "value": 30},
-    ]
+class NoLocalConstantsTests(unittest.TestCase):
+    """Las constantes locales se eliminaron: solo se usan las de Supabase."""
 
-    def setUp(self) -> None:
-        import tempfile
+    def test_erp_does_not_read_or_write_a_local_constants_file(self) -> None:
+        for rel in ("futonhub/cloud/services/business_constants.py", "futonhub/ui/erp/prototype.py"):
+            text = (SRC / rel).read_text(encoding="utf-8")
+            self.assertNotIn("constantes_negocio.json", text, rel)
+            self.assertNotIn("legacy_constants_cache", text, rel)
 
-        self.temp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.temp.cleanup)
-        self.path = Path(self.temp.name) / "constantes_negocio.json"
-        self.addCleanup(bc.enable_legacy_constants_cache, None)
-
-    def test_disabled_by_default_writes_nothing(self) -> None:
-        bc.enable_legacy_constants_cache(None)
-        bc.list_business_constants(SimpleNamespace(client=_Client(self.ROWS)))
-        self.assertFalse(self.path.exists())
-
-    def test_cloud_values_overwrite_stale_local_ones_and_keep_the_rest(self) -> None:
-        import json
-
-        self.path.write_text(json.dumps({"COSTE_TOTAL_DESCARGA_FUTONES_IVA": 308.0, "COSTE_DESCARGA_FUTONES_UNIDAD": 1.69, "IMPORTES_VARIOS": 100.0}), encoding="utf-8")
-        bc.enable_legacy_constants_cache(self.path)
-        bc.list_business_constants(SimpleNamespace(client=_Client(self.ROWS)))
-        saved = json.loads(self.path.read_text(encoding="utf-8"))
-        self.assertEqual(saved["COSTE_TOTAL_DESCARGA_FUTONES_IVA"], 375.35)
-        self.assertEqual(saved["COSTE_DESCARGA_FUTONES_UNIDAD"], 2.3)
-        self.assertEqual(saved["COSTE_DIARIO_ALMACENAJE_M3"], 0.485)
-        self.assertEqual(saved["IMPORTES_VARIOS"], 100.0)
-        self.assertNotIn("PRICE_DROP_BLOCK_PERCENT", saved)  # solo las constantes que lee el calculo legacy
-
-    def test_defaults_without_cloud_rows_are_never_written(self) -> None:
-        bc.enable_legacy_constants_cache(self.path)
-        bc.list_business_constants(SimpleNamespace(client=_Client([])))
-        bc.list_business_constants(SimpleNamespace(client=_Client(error=True)))
-        self.assertFalse(self.path.exists())
-
-    def test_cache_errors_never_break_the_read(self) -> None:
-        bc.enable_legacy_constants_cache(Path(self.temp.name) / "no" / "\0bad" / "x.json")
-        result = bc.list_business_constants(SimpleNamespace(client=_Client(self.ROWS)))
-        self.assertEqual(result["COSTE_TOTAL_DESCARGA_FUTONES_IVA"]["value"], 375.35)
-
-    def test_required_constants_path_also_refreshes_the_cache(self) -> None:
-        import json
-
-        rows = [{"key": key, "value": value} for key, value in (("COSTE_TOTAL_DESCARGA_FUTONES_IVA", 375.35), ("COSTE_DIARIO_ALMACENAJE_M3", 0.485))]
-        bc.enable_legacy_constants_cache(self.path)
-        bc.list_business_constants(SimpleNamespace(client=_Client(rows)), required_keys=bc.SUPPLIER_ORDER_GENERAL_REQUIRED_CONSTANTS)
-        self.assertEqual(json.loads(self.path.read_text(encoding="utf-8"))["COSTE_DIARIO_ALMACENAJE_M3"], 0.485)
-
-    def test_stale_constants_file_is_no_longer_tracked_in_the_repo(self) -> None:
-        repo = ROOT.parent
-        self.assertFalse((repo / "CalculoCoste" / "constantes_negocio.json").exists() and (repo / ".git").exists() and self._is_tracked(repo))
-        lines = {line.strip() for line in (repo / ".gitignore").read_text(encoding="utf-8").splitlines()}
-        self.assertIn("CalculoCoste/constantes_negocio.json", lines)
-
-    @staticmethod
-    def _is_tracked(repo: Path) -> bool:
+    def test_constants_json_is_not_tracked(self) -> None:
         import subprocess
 
-        result = subprocess.run(["git", "ls-files", "--error-unmatch", "CalculoCoste/constantes_negocio.json"], cwd=repo, capture_output=True)
-        return result.returncode == 0
+        repo = ROOT.parent
+        result = subprocess.run(["git", "ls-files", "CalculoCoste/constantes_negocio.json"], cwd=repo, capture_output=True, text=True)
+        if result.returncode == 0:
+            self.assertEqual(result.stdout.strip(), "")
 
 
 if __name__ == "__main__":
