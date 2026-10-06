@@ -100,7 +100,11 @@ class ErpInventoryStockMixin:
 
             threading.Thread(target=worker, daemon=True).start()
 
+        applying = {"active": False}  # un segundo clic mientras el hilo corre duplicaria el movimiento
+
         def apply_change() -> None:
+            if applying["active"]:
+                return
             try:
                 preview_text = self._inventory_stock_preview_text(item, store_var.get(), warehouse_var.get(), notes_var.get())
             except Exception as exc:
@@ -110,12 +114,18 @@ class ErpInventoryStockMixin:
             if not messagebox.askyesno("Confirmar cambio inventario", preview_text + "\n\nAplicar movimiento interno", parent=win):
                 return
 
+            applying["active"] = True
+
             def worker() -> None:
                 try:
                     result_data = self._apply_inventory_stock_change(item, store_var.get(), warehouse_var.get(), notes_var.get())
                     self.after(0, lambda: finish_ok(result_data))
                 except Exception as exc:
-                    self.after(0, lambda exc=exc: messagebox.showerror("Inventario", f"No se pudo aplicar el cambio.\n\n{exc}", parent=win))
+                    def show_error(exc=exc) -> None:
+                        applying["active"] = False
+                        messagebox.showerror("Inventario", f"No se pudo aplicar el cambio.\n\n{exc}", parent=win)
+
+                    self.after(0, show_error)
 
             threading.Thread(target=worker, daemon=True).start()
 

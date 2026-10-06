@@ -5518,6 +5518,14 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             retry_only=True,
         )
 
+    def _price_edit_claim_catalog_reuse(self) -> bool:
+        """True solo la primera vez por generacion de catalogo (evita el bucle de re-render)."""
+        generation = int(self.__dict__.get("_price_catalog_generation", 0) or 0)
+        if self.__dict__.get("_price_edit_reuse_generation") == generation:
+            return False
+        self._price_edit_reuse_generation = generation
+        return True
+
     def _build_price_edit_workspace(self, parent: tk.Frame) -> None:
         self._prepare_price_edit_state()
         if (
@@ -5530,13 +5538,16 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             # sync. Opening the editor merely waits for, or reuses, that
             # session state; it must not launch another complete sync.
             if self.__dict__.get("_price_catalog_loaded_once", False):
-                self.after(
-                    50,
-                    lambda: self._finish_price_edit_items(
-                        list(self.__dict__.get("_price_catalog_items") or []),
-                        "",
-                    ),
-                )
+                # Con el catalogo vacio, _finish_price_edit_items vuelve a pintar esta misma
+                # vista y se reprogramaba sin fin (~20 renders/s). Una vez por generacion.
+                if self._price_edit_claim_catalog_reuse():
+                    self.after(
+                        50,
+                        lambda: self._finish_price_edit_items(
+                            list(self.__dict__.get("_price_catalog_items") or []),
+                            "",
+                        ),
+                    )
             elif not self.__dict__.get("_price_catalog_loading", False):
                 self.after(50, self._maybe_start_price_woo_sync)
 
@@ -6493,7 +6504,15 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         physical_item_id = str(source.get("physical_item_id") or raw.get("physical_item_id") or raw.get("item_id") or "").strip()
         physical_sku = str(source.get("physical_sku") or raw.get("physical_sku") or raw.get("hub_item_code") or raw.get("heca_reference") or result.get("code") or "").strip()
         if result_type == "Simple" and physical_item_id and physical_sku:
-            return "VALIDO", "La identidad Woo directa se resolvera por item fisico y SKU exactos.", None
+            # La identidad se resuelve por item fisico/SKU, pero el precio actual que muestra
+            # la busqueda (Woo vivo) es el que sirve de base para el calculo masivo.
+            direct_price: float | None = None
+            if price_text.lower() not in {"", "-", "pendiente", "none", "null"}:
+                try:
+                    direct_price = self._price_parse_money(price_text)
+                except ValueError:
+                    direct_price = None
+            return "VALIDO", "La identidad Woo directa se resolvera por item fisico y SKU exactos.", direct_price
         if source.get("item_kind") == "product" and product_type in {"variable", "variable-subscription"}:
             return "ERROR", "Producto padre sin precio unico", None
         if price_text.lower() in {"", "-", "pendiente", "none", "null"}:
@@ -6651,6 +6670,8 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                     counts["errors"] += 1
             else:
                 try:
+                    if eligible_price is None:
+                        raise ValueError("Precio Woo pendiente o no calculable.")
                     old_price = float(eligible_price)
                     new_price = self._price_calculate_new_price(old_price, percent_text.strip(), exact_text.strip())
                     validation, message = self._price_validate_proposed_price(old_price, new_price)

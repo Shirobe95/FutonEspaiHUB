@@ -141,6 +141,9 @@ class ErpInventoryEditMixin:
         if self._cloud_session is None:
             messagebox.showerror("Inventario", "No hay sesion Supabase activa.")
             return
+        if getattr(review, "_futon_saving", False):
+            return  # doble clic en «Aceptar y guardar» mientras el hilo sigue escribiendo
+        review._futon_saving = True
         payload = {field: after for field, (_before, after) in changes.items()}
         for child in review.winfo_children():
             child.configure(cursor="watch") if hasattr(child, "configure") else None
@@ -166,6 +169,7 @@ class ErpInventoryEditMixin:
                 on_applied()
 
         def finish_error(exc: Exception) -> None:
+            review._futon_saving = False
             if review.winfo_exists():
                 for child in review.winfo_children():
                     child.configure(cursor="") if hasattr(child, "configure") else None
