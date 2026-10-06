@@ -1,0 +1,54 @@
+=== 3. RPC con distintos usuarios
+acquire admin ok                                               -> ('OK', [({'details': 'd', 'acquired': True, 'locked_by': 'aaaaaaaa-0000-0000-0000-000000000001', 'expires_at': '2026-10-06T10:47:40.887738+00:00', 'operation_key': 'k1', 'locked_by_machine': 'pcA'},)])
+acquire worker (p_user_id=worker)                              -> ('ERR', 'FutonHUB lock: solo admin activo puede bloquear operaciones criticas')
+acquire inactive                                               -> ('ERR', 'FutonHUB lock: solo admin activo puede bloquear operaciones criticas')
+acquire worker con p_user_id=admin (suplantacion)              -> ('ERR', 'FutonHUB lock: usuario autenticado no coincide con p_user_id')
+acquire admin con p_user_id=worker                             -> ('ERR', 'FutonHUB lock: usuario autenticado no coincide con p_user_id')
+acquire anon (sin GRANT)                                       -> ('ERR', 'permission denied for function futonhub_acquire_system_lock')
+acquire admin key vacia                                        -> ('ERR', 'FutonHUB lock: operation_key vacio')
+acquire admin key NULL                                         -> ('ERR', 'FutonHUB lock: operation_key vacio')
+acquire TTL=0 -> minutos reales                                -> ('OK', [(Decimal('1.00000000000000000000'),)])
+acquire TTL=-5 -> minutos reales                               -> ('OK', [(Decimal('1.00000000000000000000'),)])
+acquire TTL=500 -> minutos reales                              -> ('OK', [(Decimal('120.0000000000000000'),)])
+acquire TTL=None -> minutos reales                             -> ('OK', [(Decimal('15.0000000000000000'),)])
+2o acquire misma key otro admin (running)                      -> ('OK', [({'details': 'd', 'acquired': False, 'locked_by': 'aaaaaaaa-0000-0000-0000-000000000001', 'expires_at': '2026-10-06T10:47:40.887738+00:00', 'operation_key': 'k1', 'locked_by_machine': 'pcA'},)])
+release por admin2 (no dueño)                                  -> ('OK', [({'status': 'released', 'released': False, 'operation_key': 'k1'},)])
+estado k1 tras release ajeno                                   -> [('running',)]
+release por worker                                             -> ('ERR', 'FutonHUB lock: solo admin puede liberar operaciones criticas')
+release dueño status bogus                                     -> ('OK', [({'status': 'released', 'released': True, 'operation_key': 'k1'},)])
+estado k1                                                      -> [('released', True)]
+re-acquire k1 tras release por admin2                          -> ('OK', [({'details': 'd', 'acquired': True, 'locked_by': 'dddddddd-0000-0000-0000-000000000004', 'expires_at': '2026-10-06T10:47:41.174882+00:00', 'operation_key': 'k1', 'locked_by_machine': 'pcB'},)])
+acquire k1 expirado (status running, expires pasado) por admin -> ('OK', [({'details': 'd', 'acquired': True, 'locked_by': 'aaaaaaaa-0000-0000-0000-000000000001', 'expires_at': '2026-10-06T10:47:41.199596+00:00', 'operation_key': 'k1', 'locked_by_machine': 'pcA'},)])
+quien tiene k1                                                 -> [('aaaaaaaa-0000-0000-0000-000000000001', 'running')]
+release status released sobre key inexistente                  -> ('OK', [({'status': 'released', 'released': False, 'operation_key': 'nokey'},)])
+admin inactivado -> acquire                                    -> (None, ('ERR', 'FutonHUB lock: solo admin activo puede bloquear operaciones criticas'))
+--- write_audit_log / write_operation_snapshot
+audit worker ok (role/email forzados del perfil)               -> ('OK', [({'id': 'f0e4b08b-ed99-4c9a-a9c4-688e60155eec', 'role': 'worker', 'action': 'a', 'module': 'm', 'status': 'OK', 'user_id': 'bbbbbbbb-0000-0000-0000-000000000002', 'severity': 'INFO', 'user_email': 'worker@lab.test', 'operation_id': 'o1'},)])
+   -> fila                                                     -> [('bbbbbbbb-0000-0000-0000-000000000002', 'worker@lab.test', 'worker', 'INFO', 'OK')]
+audit worker dice email admin                                  -> ('ERR', 'FutonHUB blackbox: email no coincide con el perfil autenticado')
+audit worker p_user_id=admin                                   -> ('ERR', 'FutonHUB blackbox: usuario autenticado no coincide con p_user_id')
+audit inactive                                                 -> ('ERR', 'FutonHUB blackbox: usuario no valido o inactivo para audit_log')
+audit anon                                                     -> ('ERR', 'permission denied for function futonhub_write_audit_log')
+audit worker device_id inexistente (FK)                        -> ('ERR', 'insert or update on table "audit_logs" violates foreign key constraint "audit_logs_device_id_fkey"')
+audit worker texto enorme 1MB                                  -> ('OK', [(True,)])
+snapshot worker ok before NULL->{}                             -> ('OK', [({'id': '0579ec7b-fddd-437a-be3c-0ca9a7285bd1', 'role': 'worker', 'action': 'a', 'module': 'm', 'user_id': 'bbbbbbbb-0000-0000-0000-000000000002', 'entity_id': '1', 'entity_type': 't', 'operation_id': 's1'},)])
+snapshot worker p_user_id=admin                                -> ('ERR', 'FutonHUB blackbox: usuario autenticado no coincide con p_user_id')
+snapshot inactive                                              -> ('ERR', 'FutonHUB blackbox: usuario no valido o inactivo para operation_snapshot')
+snapshot anon                                                  -> ('ERR', 'permission denied for function futonhub_write_operation_snapshot')
+snapshot worker sobrescribe operation_id de otro (duplicado)   -> ('OK', [({'id': '238724de-8215-4b7d-8751-7178978d4434', 'role': 'worker', 'action': 'a', 'module': 'm', 'user_id': 'bbbbbbbb-0000-0000-0000-000000000002', 'entity_id': '1', 'entity_type': 't', 'operation_id': 's1'},)])
+   -> filas con operation_id s1                                -> [(2,)]
+read_snapshot_by_operation_id admin dueño                      -> ('OK', [(1,)])
+   (rollback lee la MAS RECIENTE: s1 forjado por worker gana)  -> ('OK', [({'evil': 1},)])
+=== carreras de locks (2 sesiones concurrentes)
+carrera clave NUEVA (sin fila) x300                            -> {'both_acquired': 0, 'exactly_one': 300, 'neither_or_err': 0}
+carrera clave EXPIRADA (fila running vencida) x300             -> {'both_acquired': 0, 'exactly_one': 300, 'neither_or_err': 0}
+carrera clave RELEASED x300                                    -> {'both_acquired': 0, 'exactly_one': 300, 'neither_or_err': 0}
+--- release/expire ventana: tiempo de vida con TTL minimo (1 min) sin heartbeat
+Traceback (most recent call last):
+  File "/tmp/audit/db_lab/fix/rpc_race_fix.py", line 101, in <module>
+    rec("no hay funcion de renovacion/heartbeat en public", sup("select count(*) from pg_proc where pronamespace='public'::regnamespace and proname ilike '%renew%' or proname ilike '%heartbeat%'"))
+                                                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/audit/db_lab/fix/rpc_race_fix.py", line 17, in sup
+    c=psycopg2.connect(DSN); c.autocommit=True; cur=c.cursor(); cur.execute(sql,args)
+                                                                ^^^^^^^^^^^^^^^^^^^^^
+IndexError: tuple index out of range

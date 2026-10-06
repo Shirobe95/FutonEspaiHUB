@@ -1,0 +1,730 @@
+=== (a) price_change_proposals como worker
+### a-published | authenticated uid=bbbb | UPDATE price_change_proposals SET status='published' WHERE id='11111111-1111-1111-1111-111111111111';
+    BEGIN
+    SET
+    bbbbbbbb-0000-0000-0000-000000000002
+    ERROR:  Solo un admin puede cambiar una propuesta a published
+    CONTEXT:  PL/pgSQL function price_change_proposals_guard() line 7 at RAISE
+    ROLLBACK
+### a-approved | authenticated uid=bbbb | UPDATE price_change_proposals SET status='approved' WHERE id='11111111-1111-1111-1111-111111111111';
+    BEGIN
+    SET
+    bbbbbbbb-0000-0000-0000-000000000002
+    ERROR:  Solo un admin puede cambiar una propuesta a approved
+    CONTEXT:  PL/pgSQL function price_change_proposals_guard() line 7 at RAISE
+    ROLLBACK
+### a-publishing | authenticated uid=bbbb | UPDATE price_change_proposals SET status='publishing' WHERE id='11111111-1111-1111-1111-111111111111';
+    BEGIN
+    SET
+    bbbbbbbb-0000-0000-0000-000000000002
+    ERROR:  Solo un admin puede cambiar una propuesta a publishing
+    CONTEXT:  PL/pgSQL function price_change_proposals_guard() line 7 at RAISE
+    ROLLBACK
+### a-rolled_back | authenticated uid=bbbb | UPDATE price_change_proposals SET status='rolled_back' WHERE id='11111111-1111-1111-1111-111111111111';
+    BEGIN
+    SET
+    bbbbbbbb-0000-0000-0000-000000000002
+    ERROR:  Solo un admin puede cambiar una propuesta a rolled_back
+    CONTEXT:  PL/pgSQL function price_change_proposals_guard() line 7 at RAISE
+    ROLLBACK
+### a-reviewed_by | authenticated uid=bbbb | UPDATE price_change_proposals SET reviewed_by='aaaaaaaa-0000-0000-0000-000000000001', published_by='aaaaaaaa-0000-0000-0000-000000000001', reviewed_at=now(), published_at=now() WHERE id='11111111-1111-1111-1111-111111111111'; SELECT reviewed_by,published_by FROM price_change_proposals WHERE id='11111111-1111-1111-1111-111111111111';
+    BEGIN
+    SET
+    bbbbbbbb-0000-0000-0000-000000000002
+    ERROR:  Solo un admin puede modificar los campos de revision/publicacion
+    CONTEXT:  PL/pgSQL function price_change_proposals_guard() line 11 at RAISE
+    ERROR:  current transaction is aborted, commands ignored until end of transaction block
+    ROLLBACK
+### a-source_row | authenticated uid=bbbb | UPDATE price_change_proposals SET source_row='{"forged":true}', new_price=0.01 WHERE id='11111111-1111-1111-1111-111111111111'; SELECT source_row,new_price FROM price_change_proposals WHERE id='11111111-1111-1111-1111-111111111111';
+    BEGIN
+    SET
+    bbbbbbbb-0000-0000-0000-000000000002
+    UPDATE 1
+    {"forged": true}|0.01
+    ROLLBACK
+### a-inactive | authenticated uid=cccc | UPDATE price_change_proposals SET status='approved' WHERE id='11111111-1111-1111-1111-111111111111';
+    BEGIN
+    SET
+    cccccccc-0000-0000-0000-000000000003
+    UPDATE 0
+    ROLLBACK
+### a-anon | anon uid=NONE | UPDATE price_change_proposals SET status='approved' WHERE id='11111111-1111-1111-1111-111111111111';
+    BEGIN
+    SET
+    
+    ERROR:  permission denied for table price_change_proposals
+    ROLLBACK
+### a-delete-worker | authenticated uid=bbbb | DELETE FROM price_change_proposals WHERE id='11111111-1111-1111-1111-111111111111';
+    BEGIN
+    SET
+    bbbbbbbb-0000-0000-0000-000000000002
+    DELETE 0
+    ROLLBACK
+=== (b) inventory_items / business_constants / supplier_prices como worker
+### b-woo_id | authenticated uid=bbbb | UPDATE inventory_items SET woo_id=9999, woo_link_status='Enlazado' WHERE item_id=1; SELECT woo_id FROM inventory_items WHERE item_id=1;
+    BEGIN
+    SET
+    bbbbbbbb-0000-0000-0000-000000000002
+    UPDATE 1
+    9999
+    ROLLBACK
+### b-costes | authenticated uid=bbbb | UPDATE inventory_items SET weighted_average_cost=0.01, primary_supplier_price='0.01', source_row='{}' WHERE item_id=1; SELECT weighted_average_cost FROM inventory_items WHERE item_id=1;
+    BEGIN
+    SET
+    bbbbbbbb-0000-0000-0000-000000000002
+    UPDATE 1
+    0.01
+    ROLLBACK
+### b-insert-inv | authenticated uid=bbbb | INSERT INTO inventory_items(item_id,name,woo_id) VALUES(77,'x',1001); SELECT count(*) FROM inventory_items WHERE woo_id=1001;
+    BEGIN
+    SET
+    bbbbbbbb-0000-0000-0000-000000000002
+    INSERT 0 1
+    2
+    ROLLBACK
+### b-delete-inv | authenticated uid=bbbb | DELETE FROM inventory_items WHERE item_id=1; SELECT count(*) FROM inventory_items WHERE item_id=1;
+    BEGIN
+    SET
+    bbbbbbbb-0000-0000-0000-000000000002
+    DELETE 0
+    1
+    ROLLBACK
+### b-bc-update | authenticated uid=bbbb | UPDATE business_constants SET value='0' WHERE key='PRICE_DROP_BLOCK_PERCENT'; SELECT value FROM business_constants;
+    BEGIN
+    SET
+    bbbbbbbb-0000-0000-0000-000000000002
+    UPDATE 1
+    0
+    ROLLBACK
+### b-bc-insert | authenticated uid=bbbb | INSERT INTO business_constants(key,value) VALUES('X','1');
+    BEGIN
+    SET
+    bbbbbbbb-0000-0000-0000-000000000002
+    INSERT 0 1
+    ROLLBACK
+### b-bc-delete-worker | authenticated uid=bbbb | DELETE FROM business_constants WHERE key='PRICE_DROP_BLOCK_PERCENT'; SELECT count(*) FROM business_constants;
+    BEGIN
+    SET
+    bbbbbbbb-0000-0000-0000-000000000002
+    DELETE 0
+    1
+    ROLLBACK
+### b-bc-delete-admin | authenticated uid=aaaa | DELETE FROM business_constants WHERE key='PRICE_DROP_BLOCK_PERCENT'; SELECT count(*) FROM business_constants;
+    BEGIN
+    SET
+    aaaaaaaa-0000-0000-0000-000000000001
+    DELETE 1
+    0
+    ROLLBACK
+### b-sp-update | authenticated uid=bbbb | UPDATE supplier_prices SET price='0.01' WHERE item_id=1; SELECT price FROM supplier_prices;
+    BEGIN
+    SET
+    bbbbbbbb-0000-0000-0000-000000000002
+    UPDATE 1
+    0.01
+    ROLLBACK
+### b-sp-delete | authenticated uid=bbbb | DELETE FROM supplier_prices WHERE item_id=1; SELECT count(*) FROM supplier_prices;
+    BEGIN
+    SET
+    bbbbbbbb-0000-0000-0000-000000000002
+    DELETE 0
+    1
+    ROLLBACK
+### b-inactive-update | authenticated uid=cccc | UPDATE inventory_items SET name='h' WHERE item_id=1; SELECT name FROM inventory_items WHERE item_id=1;
+    BEGIN
+    SET
+    cccccccc-0000-0000-0000-000000000003
+    UPDATE 0
+    Item uno
+    ROLLBACK
+=== (c) anon RPC
+### c-read_audit_logs-anon | anon uid=NONE | SELECT * FROM futonhub_read_audit_logs('aaaaaaaa-0000-0000-0000-000000000001',10);
+    BEGIN
+    SET
+    
+    ERROR:  permission denied for function futonhub_read_audit_logs
+    ROLLBACK
+### c-read_snapshots-anon | anon uid=NONE | SELECT operation_id,before_data FROM futonhub_read_operation_snapshots('aaaaaaaa-0000-0000-0000-000000000001',10);
+    BEGIN
+    SET
+    
+    ERROR:  permission denied for function futonhub_read_operation_snapshots
+    ROLLBACK
+### c-snapshot_by_op-anon | anon uid=NONE | SELECT * FROM futonhub_read_snapshot_by_operation_id('aaaaaaaa-0000-0000-0000-000000000001','op-seed');
+    BEGIN
+    SET
+    
+    ERROR:  permission denied for function futonhub_read_snapshot_by_operation_id
+    ROLLBACK
+### c-clean_order-anon | anon uid=NONE | SELECT futonhub_clean_worker_simulated_order('aaaaaaaa-0000-0000-0000-000000000001','TEST_WORKER_ORDER'); SELECT count(*) FROM supplier_orders;
+    BEGIN
+    SET
+    
+    ERROR:  permission denied for function futonhub_clean_worker_simulated_order
+    ERROR:  current transaction is aborted, commands ignored until end of transaction block
+    ROLLBACK
+### c-clean_inventory-anon | anon uid=NONE | SELECT futonhub_clean_worker_simulated_inventory('aaaaaaaa-0000-0000-0000-000000000001',-900001); SELECT count(*) FROM inventory_items WHERE item_id=-900001;
+    BEGIN
+    SET
+    
+    ERROR:  permission denied for function futonhub_clean_worker_simulated_inventory
+    ERROR:  current transaction is aborted, commands ignored until end of transaction block
+    ROLLBACK
+### c-clean_price-anon | anon uid=NONE | SELECT futonhub_clean_worker_simulated_price_proposal('aaaaaaaa-0000-0000-0000-000000000001',-990001);
+    BEGIN
+    SET
+    
+    ERROR:  permission denied for function futonhub_clean_worker_simulated_price_proposal
+    ROLLBACK
+### c-review_price-anon | anon uid=NONE | SELECT * FROM futonhub_review_worker_simulated_price_proposal('aaaaaaaa-0000-0000-0000-000000000001',-990001,'approved','x');
+    BEGIN
+    SET
+    
+    ERROR:  permission denied for function futonhub_review_worker_simulated_price_proposal
+    ROLLBACK
+### c-read_audit_logs-worker-with-admin-uuid | authenticated uid=bbbb | SELECT count(*) FROM futonhub_read_audit_logs('aaaaaaaa-0000-0000-0000-000000000001',10);
+    BEGIN
+    SET
+    bbbbbbbb-0000-0000-0000-000000000002
+    ERROR:  FutonHUB blackbox: usuario autenticado no coincide con p_user_id
+    CONTEXT:  PL/pgSQL function futonhub_read_audit_logs(uuid,integer) line 4 at RAISE
+    ROLLBACK
+### c-read_audit_logs-inactive | authenticated uid=cccc | SELECT count(*) FROM futonhub_read_audit_logs('aaaaaaaa-0000-0000-0000-000000000001',10);
+    BEGIN
+    SET
+    cccccccc-0000-0000-0000-000000000003
+    ERROR:  FutonHUB blackbox: usuario autenticado no coincide con p_user_id
+    CONTEXT:  PL/pgSQL function futonhub_read_audit_logs(uuid,integer) line 4 at RAISE
+    ROLLBACK
+### c-read_audit_logs-worker-own | authenticated uid=bbbb | SELECT count(*) FROM futonhub_read_audit_logs('bbbbbbbb-0000-0000-0000-000000000002',10);
+    BEGIN
+    SET
+    bbbbbbbb-0000-0000-0000-000000000002
+    ERROR:  FutonHUB blackbox: solo admin puede leer audit_logs
+    CONTEXT:  PL/pgSQL function futonhub_read_audit_logs(uuid,integer) line 7 at RAISE
+    ROLLBACK
+### c-clean_order-worker | authenticated uid=bbbb | SELECT futonhub_clean_worker_simulated_order('aaaaaaaa-0000-0000-0000-000000000001','TEST_WORKER_ORDER');
+    BEGIN
+    SET
+    bbbbbbbb-0000-0000-0000-000000000002
+    ERROR:  Usuario autenticado no coincide con p_user_id
+    CONTEXT:  PL/pgSQL function futonhub_clean_worker_simulated_order(uuid,text) line 4 at RAISE
+    ROLLBACK
+### c-snapshot_by_op-worker | authenticated uid=bbbb | SELECT count(*) FROM futonhub_read_snapshot_by_operation_id('aaaaaaaa-0000-0000-0000-000000000001','op-seed');
+    BEGIN
+    SET
+    bbbbbbbb-0000-0000-0000-000000000002
+    ERROR:  Solo admin puede leer snapshots para rollback
+    CONTEXT:  PL/pgSQL function futonhub_read_snapshot_by_operation_id(uuid,text) line 4 at RAISE
+    ROLLBACK
+### c-clean_price-anon-nouid | anon uid=NONE | SELECT futonhub_clean_worker_simulated_price_proposal('bbbbbbbb-0000-0000-0000-000000000002',-990001);
+    BEGIN
+    SET
+    
+    ERROR:  permission denied for function futonhub_clean_worker_simulated_price_proposal
+    ROLLBACK
+=== (d) vistas como anon
+### d-v_inventory_component_search | anon uid=NONE | SELECT count(*) FROM v_inventory_component_search;
+    BEGIN
+    SET
+    
+    ERROR:  permission denied for view v_inventory_component_search
+    ROLLBACK
+### d-v_inventory_hub_search_exact | anon uid=NONE | SELECT count(*) FROM v_inventory_hub_search_exact;
+    BEGIN
+    SET
+    
+    ERROR:  permission denied for view v_inventory_hub_search_exact
+    ROLLBACK
+### d-v_inventory_hub_search_ranked | anon uid=NONE | SELECT count(*) FROM v_inventory_hub_search_ranked;
+    BEGIN
+    SET
+    
+    ERROR:  permission denied for view v_inventory_hub_search_ranked
+    ROLLBACK
+### d-view-cols | anon uid=NONE | SELECT result_name,result_woo_id,related_name FROM v_inventory_hub_search_ranked LIMIT 3;
+    BEGIN
+    SET
+    
+    ERROR:  permission denied for view v_inventory_hub_search_ranked
+    ROLLBACK
+### d-base-anon | anon uid=NONE | SELECT count(*) FROM inventory_items;
+    BEGIN
+    SET
+    
+    ERROR:  permission denied for table inventory_items
+    ROLLBACK
+### d-view-update | anon uid=NONE | UPDATE v_inventory_hub_search_ranked SET result_name='x';
+    BEGIN
+    SET
+    
+    ERROR:  cannot update view "v_inventory_hub_search_ranked"
+    DETAIL:  Views containing WITH are not automatically updatable.
+    HINT:  To enable updating the view, provide an INSTEAD OF UPDATE trigger or an unconditional ON UPDATE DO INSTEAD rule.
+    ROLLBACK
+=== (e) INSERT falso audit_logs/snapshots
+### e-audit-forge | authenticated uid=bbbb | INSERT INTO audit_logs(operation_id,user_id,user_email,role,module,action,status) VALUES('forged','aaaaaaaa-0000-0000-0000-000000000001','admin@lab.test','admin','m','a','OK'); SELECT 'inserted';
+    BEGIN
+    SET
+    bbbbbbbb-0000-0000-0000-000000000002
+    ERROR:  new row violates row-level security policy for table "audit_logs"
+    ERROR:  current transaction is aborted, commands ignored until end of transaction block
+    ROLLBACK
+### e-snap-forge | authenticated uid=bbbb | INSERT INTO operation_snapshots(operation_id,user_id,module,action,entity_type,entity_id,before_data) VALUES('forged','aaaaaaaa-0000-0000-0000-000000000001','m','a','t','1','{}'); SELECT 'inserted';
+    BEGIN
+    SET
+    bbbbbbbb-0000-0000-0000-000000000002
+    ERROR:  new row violates row-level security policy for table "operation_snapshots"
+    ERROR:  current transaction is aborted, commands ignored until end of transaction block
+    ROLLBACK
+### e-audit-anon | anon uid=NONE | INSERT INTO audit_logs(operation_id,module,action,status) VALUES('x','m','a','OK');
+    BEGIN
+    SET
+    
+    ERROR:  permission denied for table audit_logs
+    ROLLBACK
+### e-audit-inactive | authenticated uid=cccc | INSERT INTO audit_logs(operation_id,user_id,module,action,status) VALUES('x','aaaaaaaa-0000-0000-0000-000000000001','m','a','OK'); SELECT 'inserted';
+    BEGIN
+    SET
+    cccccccc-0000-0000-0000-000000000003
+    ERROR:  new row violates row-level security policy for table "audit_logs"
+    ERROR:  current transaction is aborted, commands ignored until end of transaction block
+    ROLLBACK
+### e-audit-uid-null | authenticated uid=NONE | INSERT INTO audit_logs(operation_id,module,action,status) VALUES('x','m','a','OK'); SELECT 'inserted';
+    BEGIN
+    SET
+    
+    ERROR:  new row violates row-level security policy for table "audit_logs"
+    ERROR:  current transaction is aborted, commands ignored until end of transaction block
+    ROLLBACK
+### e-audit-flood | authenticated uid=bbbb | INSERT INTO audit_logs(operation_id,module,action,status) SELECT 'f'||g,'m','a','OK' FROM generate_series(1,1000) g; SELECT count(*) FROM audit_logs;
+    BEGIN
+    SET
+    bbbbbbbb-0000-0000-0000-000000000002
+    ERROR:  new row violates row-level security policy for table "audit_logs"
+    ERROR:  current transaction is aborted, commands ignored until end of transaction block
+    ROLLBACK
+=== (f) DELETE/UPDATE audit_logs/snapshots
+### f-audit-update | authenticated uid=bbbb | UPDATE audit_logs SET message='tampered'; SELECT count(*) FROM audit_logs WHERE message='tampered';
+    BEGIN
+    SET
+    bbbbbbbb-0000-0000-0000-000000000002
+    UPDATE 0
+    0
+    ROLLBACK
+### f-audit-delete | authenticated uid=bbbb | DELETE FROM audit_logs; SELECT count(*) FROM audit_logs;
+    BEGIN
+    SET
+    bbbbbbbb-0000-0000-0000-000000000002
+    DELETE 0
+    0
+    ROLLBACK
+### f-snap-update | authenticated uid=bbbb | UPDATE operation_snapshots SET reason='t'; SELECT count(*) FROM operation_snapshots WHERE reason='t';
+    BEGIN
+    SET
+    bbbbbbbb-0000-0000-0000-000000000002
+    UPDATE 0
+    0
+    ROLLBACK
+### f-snap-delete | authenticated uid=bbbb | DELETE FROM operation_snapshots; SELECT count(*) FROM operation_snapshots;
+    BEGIN
+    SET
+    bbbbbbbb-0000-0000-0000-000000000002
+    DELETE 0
+    0
+    ROLLBACK
+### f-audit-update | authenticated uid=aaaa | UPDATE audit_logs SET message='tampered'; SELECT count(*) FROM audit_logs WHERE message='tampered';
+    BEGIN
+    SET
+    aaaaaaaa-0000-0000-0000-000000000001
+    UPDATE 0
+    0
+    ROLLBACK
+### f-audit-delete | authenticated uid=aaaa | DELETE FROM audit_logs; SELECT count(*) FROM audit_logs;
+    BEGIN
+    SET
+    aaaaaaaa-0000-0000-0000-000000000001
+    DELETE 0
+    1
+    ROLLBACK
+### f-snap-update | authenticated uid=aaaa | UPDATE operation_snapshots SET reason='t'; SELECT count(*) FROM operation_snapshots WHERE reason='t';
+    BEGIN
+    SET
+    aaaaaaaa-0000-0000-0000-000000000001
+    UPDATE 0
+    0
+    ROLLBACK
+### f-snap-delete | authenticated uid=aaaa | DELETE FROM operation_snapshots; SELECT count(*) FROM operation_snapshots;
+    BEGIN
+    SET
+    aaaaaaaa-0000-0000-0000-000000000001
+    DELETE 0
+    1
+    ROLLBACK
+### f-audit-update | anon uid=NONE | UPDATE audit_logs SET message='tampered'; SELECT count(*) FROM audit_logs WHERE message='tampered';
+    BEGIN
+    SET
+    
+    ERROR:  permission denied for table audit_logs
+    ERROR:  current transaction is aborted, commands ignored until end of transaction block
+    ROLLBACK
+### f-audit-delete | anon uid=NONE | DELETE FROM audit_logs; SELECT count(*) FROM audit_logs;
+    BEGIN
+    SET
+    
+    ERROR:  permission denied for table audit_logs
+    ERROR:  current transaction is aborted, commands ignored until end of transaction block
+    ROLLBACK
+### f-snap-update | anon uid=NONE | UPDATE operation_snapshots SET reason='t'; SELECT count(*) FROM operation_snapshots WHERE reason='t';
+    BEGIN
+    SET
+    
+    ERROR:  permission denied for table operation_snapshots
+    ERROR:  current transaction is aborted, commands ignored until end of transaction block
+    ROLLBACK
+### f-snap-delete | anon uid=NONE | DELETE FROM operation_snapshots; SELECT count(*) FROM operation_snapshots;
+    BEGIN
+    SET
+    
+    ERROR:  permission denied for table operation_snapshots
+    ERROR:  current transaction is aborted, commands ignored until end of transaction block
+    ROLLBACK
+### f-truncate-worker | authenticated uid=bbbb | TRUNCATE audit_logs; SELECT count(*) FROM audit_logs;
+    BEGIN
+    SET
+    bbbbbbbb-0000-0000-0000-000000000002
+    ERROR:  permission denied for table audit_logs
+    ERROR:  current transaction is aborted, commands ignored until end of transaction block
+    ROLLBACK
+### f-truncate-anon | anon uid=NONE | TRUNCATE operation_snapshots;
+    BEGIN
+    SET
+    
+    ERROR:  permission denied for table operation_snapshots
+    ROLLBACK
+### f-select-worker | authenticated uid=bbbb | SELECT count(*) FROM audit_logs; SELECT count(*) FROM operation_snapshots;
+    BEGIN
+    SET
+    bbbbbbbb-0000-0000-0000-000000000002
+    0
+    0
+    ROLLBACK
+### f-select-admin | authenticated uid=aaaa | SELECT count(*) FROM audit_logs; SELECT count(*) FROM operation_snapshots;
+    BEGIN
+    SET
+    aaaaaaaa-0000-0000-0000-000000000001
+    1
+    1
+    ROLLBACK
+=== (g) components / backups
+### g-inventory_item_components-select | authenticated uid=bbbb | SELECT count(*) FROM inventory_item_components;
+    BEGIN
+    SET
+    bbbbbbbb-0000-0000-0000-000000000002
+    0
+    ROLLBACK
+### g-inventory_item_components-select-admin | authenticated uid=aaaa | SELECT count(*) FROM inventory_item_components;
+    BEGIN
+    SET
+    aaaaaaaa-0000-0000-0000-000000000001
+    0
+    ROLLBACK
+### g-inventory_item_components-delete | authenticated uid=bbbb | DELETE FROM inventory_item_components; SELECT count(*) FROM inventory_item_components;
+    BEGIN
+    SET
+    bbbbbbbb-0000-0000-0000-000000000002
+    DELETE 0
+    0
+    ROLLBACK
+### g-inventory_item_components-update-admin | authenticated uid=aaaa | UPDATE inventory_item_components SET quantity=0;
+    BEGIN
+    SET
+    aaaaaaaa-0000-0000-0000-000000000001
+    UPDATE 0
+    ROLLBACK
+### g-inventory_stock_reset_backups-select | authenticated uid=bbbb | SELECT count(*) FROM inventory_stock_reset_backups;
+    BEGIN
+    SET
+    bbbbbbbb-0000-0000-0000-000000000002
+    0
+    ROLLBACK
+### g-inventory_stock_reset_backups-select-admin | authenticated uid=aaaa | SELECT count(*) FROM inventory_stock_reset_backups;
+    BEGIN
+    SET
+    aaaaaaaa-0000-0000-0000-000000000001
+    0
+    ROLLBACK
+### g-inventory_stock_reset_backups-delete | authenticated uid=bbbb | DELETE FROM inventory_stock_reset_backups; SELECT count(*) FROM inventory_stock_reset_backups;
+    BEGIN
+    SET
+    bbbbbbbb-0000-0000-0000-000000000002
+    DELETE 0
+    0
+    ROLLBACK
+### g-inventory_stock_reset_backups-update-admin | authenticated uid=aaaa | UPDATE inventory_stock_reset_backups SET quantity=0;
+    BEGIN
+    SET
+    aaaaaaaa-0000-0000-0000-000000000001
+    ERROR:  column "quantity" of relation "inventory_stock_reset_backups" does not exist
+    LINE 1: UPDATE inventory_stock_reset_backups SET quantity=0;
+                                                     ^
+    ROLLBACK
+### g-components-insert | authenticated uid=bbbb | INSERT INTO inventory_item_components(parent_item_code,component_item_code) VALUES('A','B');
+    BEGIN
+    SET
+    bbbbbbbb-0000-0000-0000-000000000002
+    ERROR:  new row violates row-level security policy for table "inventory_item_components"
+    ROLLBACK
+### g-components-insert-admin | authenticated uid=aaaa | INSERT INTO inventory_item_components(parent_item_code,component_item_code) VALUES('A','B');
+    BEGIN
+    SET
+    aaaaaaaa-0000-0000-0000-000000000001
+    ERROR:  new row violates row-level security policy for table "inventory_item_components"
+    ROLLBACK
+### g-backups-insert | authenticated uid=bbbb | INSERT INTO inventory_stock_reset_backups(run_id,source_name,stock_field,item_id) VALUES(gen_random_uuid(),'s','f','1');
+    BEGIN
+    SET
+    bbbbbbbb-0000-0000-0000-000000000002
+    ERROR:  new row violates row-level security policy for table "inventory_stock_reset_backups"
+    ROLLBACK
+### g-backups-truncate | authenticated uid=bbbb | TRUNCATE inventory_stock_reset_backups;
+    BEGIN
+    SET
+    bbbbbbbb-0000-0000-0000-000000000002
+    ERROR:  permission denied for table inventory_stock_reset_backups
+    ROLLBACK
+### g-components-truncate-anon | anon uid=NONE | TRUNCATE inventory_item_components;
+    BEGIN
+    SET
+    
+    ERROR:  permission denied for table inventory_item_components
+    ROLLBACK
+### g-view-worker | authenticated uid=bbbb | SELECT count(*) FROM v_inventory_component_search;
+    BEGIN
+    SET
+    bbbbbbbb-0000-0000-0000-000000000002
+    2
+    ROLLBACK
+### g-view-anon-components-leak | anon uid=NONE | SELECT parent_item_code,component_item_code,quantity FROM v_inventory_component_search LIMIT 3;
+    BEGIN
+    SET
+    
+    ERROR:  permission denied for view v_inventory_component_search
+    ROLLBACK
+=== (h) is_admin/has_role anon
+### h-is_admin-anon | anon uid=NONE | SELECT is_admin(), is_worker_or_admin(), has_role(array['admin']), current_user_role();
+    BEGIN
+    SET
+    
+    f|f|f|
+    ROLLBACK
+### h-is_admin-admin | authenticated uid=aaaa | SELECT is_admin(), is_worker_or_admin(), has_role(array['admin']), current_user_role();
+    BEGIN
+    SET
+    aaaaaaaa-0000-0000-0000-000000000001
+    t|t|t|admin
+    ROLLBACK
+### h-inactive | authenticated uid=cccc | SELECT is_admin(), is_worker_or_admin(), current_user_role();
+    BEGIN
+    SET
+    cccccccc-0000-0000-0000-000000000003
+    f|f|
+    ROLLBACK
+### h-has_role-probe-anon | anon uid=NONE | SELECT has_role(array['worker']);
+    BEGIN
+    SET
+    
+    f
+    ROLLBACK
+=== (i) profiles / devices
+### i-selfpromote | authenticated uid=bbbb | UPDATE profiles SET role='admin' WHERE id='bbbbbbbb-0000-0000-0000-000000000002'; SELECT role FROM profiles WHERE id='bbbbbbbb-0000-0000-0000-000000000002';
+    BEGIN
+    SET
+    bbbbbbbb-0000-0000-0000-000000000002
+    UPDATE 0
+    worker
+    ROLLBACK
+### i-selfactivate | authenticated uid=cccc | UPDATE profiles SET active=true WHERE id='cccccccc-0000-0000-0000-000000000003'; SELECT active FROM profiles WHERE id='cccccccc-0000-0000-0000-000000000003';
+    BEGIN
+    SET
+    cccccccc-0000-0000-0000-000000000003
+    UPDATE 0
+    f
+    ROLLBACK
+### i-insert-profile | authenticated uid=bbbb | INSERT INTO profiles(id,email,role) VALUES('bbbbbbbb-0000-0000-0000-000000000002','x@y.z','admin');
+    BEGIN
+    SET
+    bbbbbbbb-0000-0000-0000-000000000002
+    ERROR:  new row violates row-level security policy for table "profiles"
+    ROLLBACK
+### i-insert-profile-new | authenticated uid=bbbb | INSERT INTO auth.users(id,email) VALUES(gen_random_uuid(),'q'); SELECT 1;
+    BEGIN
+    SET
+    bbbbbbbb-0000-0000-0000-000000000002
+    ERROR:  permission denied for table users
+    ERROR:  current transaction is aborted, commands ignored until end of transaction block
+    ROLLBACK
+### i-delete-profile | authenticated uid=bbbb | DELETE FROM profiles WHERE id='aaaaaaaa-0000-0000-0000-000000000001'; SELECT count(*) FROM profiles;
+    BEGIN
+    SET
+    bbbbbbbb-0000-0000-0000-000000000002
+    DELETE 0
+    1
+    ROLLBACK
+### i-select-profiles-worker | authenticated uid=bbbb | SELECT count(*) FROM profiles;
+    BEGIN
+    SET
+    bbbbbbbb-0000-0000-0000-000000000002
+    1
+    ROLLBACK
+### i-profiles-anon | anon uid=NONE | SELECT count(*) FROM profiles;
+    BEGIN
+    SET
+    
+    ERROR:  permission denied for table profiles
+    ROLLBACK
+### i-devices-insert-own | authenticated uid=bbbb | INSERT INTO devices(user_id,machine_name,role) VALUES('bbbbbbbb-0000-0000-0000-000000000002','pc1','admin'); SELECT 'inserted';
+    BEGIN
+    SET
+    bbbbbbbb-0000-0000-0000-000000000002
+    INSERT 0 1
+    inserted
+    ROLLBACK
+=== (k) devices user_id ajeno
+### k-devices-foreign | authenticated uid=bbbb | INSERT INTO devices(user_id,machine_name) VALUES('aaaaaaaa-0000-0000-0000-000000000001','pcX'); SELECT 'inserted';
+    BEGIN
+    SET
+    bbbbbbbb-0000-0000-0000-000000000002
+    ERROR:  new row violates row-level security policy for table "devices"
+    ERROR:  current transaction is aborted, commands ignored until end of transaction block
+    ROLLBACK
+### k-devices-null-user | authenticated uid=bbbb | INSERT INTO devices(user_id,machine_name) VALUES(NULL,'pcX'); SELECT 'inserted';
+    BEGIN
+    SET
+    bbbbbbbb-0000-0000-0000-000000000002
+    ERROR:  new row violates row-level security policy for table "devices"
+    ERROR:  current transaction is aborted, commands ignored until end of transaction block
+    ROLLBACK
+### k-devices-update | authenticated uid=bbbb | UPDATE devices SET active=false;
+    BEGIN
+    SET
+    bbbbbbbb-0000-0000-0000-000000000002
+    UPDATE 0
+    ROLLBACK
+### k-devices-inactive-own | authenticated uid=cccc | INSERT INTO devices(user_id,machine_name) VALUES('cccccccc-0000-0000-0000-000000000003','pcI'); SELECT 'inserted';
+    BEGIN
+    SET
+    cccccccc-0000-0000-0000-000000000003
+    INSERT 0 1
+    inserted
+    ROLLBACK
+=== (j) locks directos
+### j-system_locks-insert-worker | authenticated uid=bbbb | INSERT INTO system_locks(operation_key,locked_by,expires_at) VALUES('k2','bbbbbbbb-0000-0000-0000-000000000002',now()+interval '1h'); SELECT 'inserted';
+    BEGIN
+    SET
+    bbbbbbbb-0000-0000-0000-000000000002
+    ERROR:  new row violates row-level security policy for table "system_locks"
+    ERROR:  current transaction is aborted, commands ignored until end of transaction block
+    ROLLBACK
+### j-system_locks-update-worker | authenticated uid=bbbb | UPDATE system_locks SET status='released' WHERE operation_key='seedlock'; SELECT status FROM system_locks WHERE operation_key='seedlock';
+    BEGIN
+    SET
+    bbbbbbbb-0000-0000-0000-000000000002
+    UPDATE 0
+    running
+    ROLLBACK
+### j-system_locks-delete-worker | authenticated uid=bbbb | DELETE FROM system_locks WHERE operation_key='seedlock'; SELECT count(*) FROM system_locks;
+    BEGIN
+    SET
+    bbbbbbbb-0000-0000-0000-000000000002
+    DELETE 0
+    1
+    ROLLBACK
+### j-system_locks-admin-direct | authenticated uid=aaaa | UPDATE system_locks SET status='released' WHERE operation_key='seedlock'; SELECT status FROM system_locks;
+    BEGIN
+    SET
+    aaaaaaaa-0000-0000-0000-000000000001
+    UPDATE 1
+    released
+    ROLLBACK
+### j-system_locks-read-worker | authenticated uid=bbbb | SELECT operation_key,locked_by FROM system_locks;
+    BEGIN
+    SET
+    bbbbbbbb-0000-0000-0000-000000000002
+    seedlock|aaaaaaaa-0000-0000-0000-000000000001
+    ROLLBACK
+### j-entity_locks-insert-own | authenticated uid=bbbb | INSERT INTO entity_locks(entity_type,entity_id,locked_by,expires_at) VALUES('t','1','bbbbbbbb-0000-0000-0000-000000000002',now()+interval '1h'); SELECT 'inserted';
+    BEGIN
+    SET
+    bbbbbbbb-0000-0000-0000-000000000002
+    INSERT 0 1
+    inserted
+    ROLLBACK
+### j-entity_locks-insert-foreign | authenticated uid=bbbb | INSERT INTO entity_locks(entity_type,entity_id,locked_by,expires_at) VALUES('t','1','aaaaaaaa-0000-0000-0000-000000000001',now()+interval '1h'); SELECT 'inserted';
+    BEGIN
+    SET
+    bbbbbbbb-0000-0000-0000-000000000002
+    ERROR:  new row violates row-level security policy for table "entity_locks"
+    ERROR:  current transaction is aborted, commands ignored until end of transaction block
+    ROLLBACK
+### j-entity_locks-insert-null | authenticated uid=bbbb | INSERT INTO entity_locks(entity_type,entity_id,locked_by,expires_at) VALUES('t','1',NULL,now()+interval '1h'); SELECT 'inserted';
+    BEGIN
+    SET
+    bbbbbbbb-0000-0000-0000-000000000002
+    ERROR:  new row violates row-level security policy for table "entity_locks"
+    ERROR:  current transaction is aborted, commands ignored until end of transaction block
+    ROLLBACK
+### j-entity_locks-update | authenticated uid=bbbb | UPDATE entity_locks SET status='released';
+    BEGIN
+    SET
+    bbbbbbbb-0000-0000-0000-000000000002
+    UPDATE 0
+    ROLLBACK
+### j-entity_locks-delete | authenticated uid=bbbb | DELETE FROM entity_locks;
+    BEGIN
+    SET
+    bbbbbbbb-0000-0000-0000-000000000002
+    DELETE 0
+    ROLLBACK
+=== (l) uid nulo con rol authenticated
+### l-uid-null | authenticated uid=NONE | SELECT auth.uid() IS NULL, is_admin(), is_worker_or_admin(), current_user_role();
+    BEGIN
+    SET
+    
+    t|f|f|
+    ROLLBACK
+### l-uid-null-update | authenticated uid=NONE | UPDATE inventory_items SET name='x' WHERE item_id=1; SELECT name FROM inventory_items WHERE item_id=1;
+    BEGIN
+    SET
+    
+    UPDATE 0
+    Item uno
+    ROLLBACK
+### l-uid-null-select | authenticated uid=NONE | SELECT count(*) FROM inventory_items;
+    BEGIN
+    SET
+    
+    3
+    ROLLBACK
+### l-uid-null-rpc | authenticated uid=NONE | SELECT futonhub_acquire_system_lock('k','aaaaaaaa-0000-0000-0000-000000000001','m');
+    BEGIN
+    SET
+    
+    ERROR:  FutonHUB lock: usuario autenticado no coincide con p_user_id
+    CONTEXT:  PL/pgSQL function futonhub_acquire_system_lock(text,uuid,text,text,integer) line 7 at RAISE
+    ROLLBACK
+### l-uid-null-readlogs | authenticated uid=NONE | SELECT count(*) FROM futonhub_read_audit_logs('aaaaaaaa-0000-0000-0000-000000000001',5);
+    BEGIN
+    SET
+    
+    ERROR:  FutonHUB blackbox: usuario autenticado no coincide con p_user_id
+    CONTEXT:  PL/pgSQL function futonhub_read_audit_logs(uuid,integer) line 4 at RAISE
+    ROLLBACK
+### l-uid-garbage | authenticated uid=not- | SELECT is_admin();
+    BEGIN
+    SET
+    not-a-uuid
+    ERROR:  invalid input syntax for type uuid: "not-a-uuid"
+    CONTEXT:  SQL function "current_user_role" during startup
+    SQL function "is_admin" statement 1
+    ROLLBACK
