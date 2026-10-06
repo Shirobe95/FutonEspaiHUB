@@ -11,6 +11,10 @@ AUDITORIA = ROOT.parent / "auditoria"
 sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(AUDITORIA))
 
+from _audit_artifacts import skip_unless_script  # noqa: E402
+
+skip_unless_script("pre_fire_001a_apply.py")
+
 from pre_fire_001a_apply import (  # noqa: E402
     MACAO_TARGET_FAMILY,
     macao_state,

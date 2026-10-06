@@ -10,6 +10,9 @@ ROOT = Path(__file__).resolve().parents[1]
 REPOSITORY_ROOT = ROOT.parent
 
 
+from _audit_artifacts import requires_audit_out  # noqa: E402
+
+
 def load_finalizer():
     spec = importlib.util.spec_from_file_location("inv_org_003b_3_finalize_preflight", REPOSITORY_ROOT / "auditoria" / "inv_org_003b_3_finalize.py")
     module = importlib.util.module_from_spec(spec)
@@ -19,6 +22,7 @@ def load_finalizer():
     return module
 
 
+@requires_audit_out
 class InvOrg003B3FinalizePreflightTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:

@@ -21,6 +21,9 @@ from futonhub.ui.erp.prototype import FutonHubErpPrototype  # noqa: E402
 from futonhub.ui.erp.shared_ui import ProposalLine  # noqa: E402
 
 
+from _audit_artifacts import requires_audit_out  # noqa: E402
+
+
 class Query:
     def __init__(self, rows):
         self.rows = list(rows)
@@ -342,6 +345,7 @@ class PriceComb001B6DirectResolutionTests(unittest.TestCase):
         self.assertFalse(validate_incremental_destination(destination, "201001", "0201002"))
         self.assertFalse(validate_incremental_destination(destination, "201002", "0201001"))
 
+    @requires_audit_out
     def test_popup_for_0201002_does_not_include_13092_without_exact_edge(self):
         service = CombinationPriceImpactService(ROOT.parent / "auditoria" / "out")
         prepared = prepare_price_addition(

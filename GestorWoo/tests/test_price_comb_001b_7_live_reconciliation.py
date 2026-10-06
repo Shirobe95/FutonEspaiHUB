@@ -27,6 +27,9 @@ from futonhub.ui.erp.prototype import FutonHubErpPrototype  # noqa: E402
 from futonhub.ui.erp.shared_ui import ProposalLine  # noqa: E402
 
 
+from _audit_artifacts import requires_audit_out  # noqa: E402
+
+
 def product(woo_id: int, sku: str, price: str = "134.90", *, status: str = "publish") -> dict:
     return {
         "id": woo_id,
@@ -167,6 +170,7 @@ class GraphWoo(Woo):
         return super().get(endpoint, params)
 
 
+@requires_audit_out
 class PriceComb001B7LiveReconciliationTests(unittest.TestCase):
     def setUp(self):
         self.service = CombinationPriceImpactService(ROOT.parent / "auditoria" / "out")

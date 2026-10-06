@@ -23,6 +23,8 @@ class PostRc7PerformanceTests(unittest.TestCase):
             capture_output=True,
             text=True,
             env={"PYTHONPATH": str(SRC)},
+            # cwd=SRC: con cwd=GestorWoo, GestorWoo/gestorwoo.py ocultaria al paquete src/gestorwoo.
+            cwd=str(SRC),
         )
 
         self.assertEqual(completed.stdout.strip(), "False")

@@ -21,6 +21,9 @@ from futonhub.services.price_proposal_live_context import prepare_price_addition
 from futonhub.ui.erp.prototype import FutonHubErpPrototype  # noqa: E402
 
 
+from _audit_artifacts import requires_audit_out  # noqa: E402
+
+
 class Response:
     def __init__(self, data):
         self.data = data
@@ -361,6 +364,7 @@ class LiveVariationSynchronizationTests(unittest.TestCase):
         self.assertEqual(row["price_stale"], "NO")
         self.assertEqual(row["apply_allowed"], "NO")
 
+    @requires_audit_out
     def test_tatami_0201001_returns_its_known_exact_variations(self):
         service = CombinationPriceImpactService(ROOT / "auditoria" / "out")
         prepared = prepare_price_addition(
@@ -394,6 +398,7 @@ class LiveVariationSynchronizationTests(unittest.TestCase):
         self.assertEqual(target["combination_parent_woo_id"], "3658")
         self.assertEqual(target["modified_components"][0]["component_sku"], "0201001")
 
+    @requires_audit_out
     def test_both_tatamis_deduplicate_exact_woo_destinations(self):
         service = CombinationPriceImpactService(ROOT / "auditoria" / "out")
         product = lambda woo_id, sku: {

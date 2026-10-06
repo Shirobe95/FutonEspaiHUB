@@ -8,6 +8,10 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
+from _audit_artifacts import skip_unless_script  # noqa: E402
+
+skip_unless_script("woo_map_001a_0_audit.py")
+
 AUDIT_PATH = ROOT / "auditoria" / "woo_map_001a_0_audit.py"
 spec = importlib.util.spec_from_file_location("woo_map_001a_0_audit", AUDIT_PATH)
 audit = importlib.util.module_from_spec(spec)

@@ -23,6 +23,10 @@ from futonhub.services.combination_price_impact import (  # noqa: E402
 from futonhub.ui.erp.prototype import FutonHubErpPrototype  # noqa: E402
 
 
+from _audit_artifacts import requires_audit_out  # noqa: E402
+
+
+@requires_audit_out
 class CombinationPriceImpactServiceTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:

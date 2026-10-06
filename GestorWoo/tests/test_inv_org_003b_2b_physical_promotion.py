@@ -37,11 +37,15 @@ LIVE_ONLY_ITEM_IDS = {
 }
 
 
+from _audit_artifacts import requires_audit_out  # noqa: E402
+
+
 def read_csv(path: Path) -> list[dict[str, str]]:
     with path.open("r", encoding="utf-8-sig", newline="") as handle:
         return list(csv.DictReader(handle))
 
 
+@requires_audit_out
 class InvOrg003B2BPhysicalPromotionTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:

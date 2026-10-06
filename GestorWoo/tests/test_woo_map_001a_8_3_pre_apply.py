@@ -25,6 +25,9 @@ REPO_ROOT = ROOT.parent
 AUDIT_ROOT = REPO_ROOT / "auditoria" / "out"
 
 
+from _audit_artifacts import requires_audit_out  # noqa: E402
+
+
 def minimal_row(*, item_id: str, write_count: str) -> dict[str, str]:
     return {
         "physical_item_id": item_id,
@@ -91,6 +94,7 @@ class WooMap001A83PreApplyTests(unittest.TestCase):
         self.assertEqual(ready[0]["fields_to_write"], "woo_id")
         self.assertEqual(preflight_summary(normalized)["field_writes_total"], 1)
 
+    @requires_audit_out
     def test_master_preserves_254_and_promotes_okinawa_only_as_technical_safe(self) -> None:
         master = read_csv(AUDIT_ROOT / "woo_map_001a_7_1_1" / "WOO_MAP_001A_7_1_1_MASTER_254.csv")
         private = read_csv(AUDIT_ROOT / "woo_map_001a_8_2" / "WOO_MAP_001A_8_2_PRIVATE_PRICE_ELIGIBILITY_AUDIT.csv")
@@ -129,6 +133,7 @@ class WooMap001A83PreApplyTests(unittest.TestCase):
         self.assertEqual(status, "VALID")
         self.assertIn("Validacion live exacta completada", reason)
 
+    @requires_audit_out
     def test_macao_remains_separate_and_missing_64_have_no_relation_action(self) -> None:
         master = read_csv(AUDIT_ROOT / "woo_map_001a_7_1_1" / "WOO_MAP_001A_7_1_1_MASTER_254.csv")
         missing = read_csv(AUDIT_ROOT / "woo_map_001a_8_1" / "WOO_MAP_001A_8_1_MISSING_64_GROUPED.csv")

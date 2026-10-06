@@ -11,6 +11,10 @@ REPOSITORY_ROOT = ROOT.parent
 sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(REPOSITORY_ROOT / "auditoria"))
 
+from _audit_artifacts import skip_unless_script  # noqa: E402
+
+skip_unless_script("inv_ui_001a_2_taxonomy.py")
+
 from futonhub.cloud.services.inventory import (  # noqa: E402
     INVENTORY_SELECT_COLUMNS,
     list_all_cloud_inventory_items,

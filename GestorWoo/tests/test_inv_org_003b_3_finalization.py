@@ -20,6 +20,9 @@ sys.path.insert(0, str(ROOT / "src"))
 from futonhub.ui.erp.catalog_filters import CatalogFilterConfigurationError, PhysicalCatalogSnapshot  # noqa: E402
 
 
+from _audit_artifacts import requires_audit_out  # noqa: E402
+
+
 def read_csv(path: Path) -> list[dict[str, str]]:
     with path.open("r", encoding="utf-8-sig", newline="") as handle:
         return list(csv.DictReader(handle))
@@ -33,6 +36,7 @@ def load_finalizer():
     return module
 
 
+@requires_audit_out
 class InvOrg003B3FinalizationTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:

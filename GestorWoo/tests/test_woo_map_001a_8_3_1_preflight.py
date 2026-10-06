@@ -29,6 +29,9 @@ from futonhub.ui.erp.prototype import FutonHubErpPrototype  # noqa: E402
 AUDIT_ROOT = ROOT.parent / "auditoria" / "out"
 
 
+from _audit_artifacts import requires_audit_out  # noqa: E402
+
+
 def read_csv(path: Path) -> list[dict[str, str]]:
     with path.open(encoding="utf-8-sig", newline="") as handle:
         return [dict(row) for row in csv.DictReader(handle)]
@@ -141,6 +144,7 @@ class WooMap001A831PreflightTests(unittest.TestCase):
         self.assertEqual(summary["safe_master_count"], summary["rows_no_action"] + summary["rows_ready"] + summary["rows_blocked"])
         self.assertEqual(sum(row["physical_sku"] == "0902005" for row in rows), 1)
 
+    @requires_audit_out
     def test_frozen_master_keeps_private_prices_and_macao_away_from_3661(self) -> None:
         master = read_csv(AUDIT_ROOT / "woo_map_001a_8_3" / "WOO_MAP_001A_8_3_MASTER_PRE_APPLY.csv")
         safe = [row for row in master if row["safe_to_persist"] == "YES"]

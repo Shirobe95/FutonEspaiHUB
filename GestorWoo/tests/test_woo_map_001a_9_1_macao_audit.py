@@ -8,6 +8,10 @@ import unittest
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "auditoria"))
 
+from _audit_artifacts import skip_unless_script  # noqa: E402
+
+skip_unless_script("woo_map_001a_9_1_macao_audit.py")
+
 from woo_map_001a_9_1_macao_audit import (  # noqa: E402
     FORBIDDEN_SHARED_WOO_ID,
     MACAO_SKU,

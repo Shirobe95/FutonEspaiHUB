@@ -29,6 +29,9 @@ from futonhub.services.combination_proposal_integration import (  # noqa: E402
 )
 
 
+from _audit_artifacts import requires_audit_out  # noqa: E402
+
+
 class FixedImpact:
     def impact_for_changes(self, changes):
         return {
@@ -109,6 +112,7 @@ def context(**updates):
     return value
 
 
+@requires_audit_out
 class PriceCombinationIntegrationTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

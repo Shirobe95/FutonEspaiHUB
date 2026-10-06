@@ -8,6 +8,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT.parent))
 
+from _audit_artifacts import skip_unless_script  # noqa: E402
+
+skip_unless_script("woo_map_001a_8_1_decision_package.py")
+
 from auditoria.woo_map_001a_8_1_decision_package import missing_classification
 
 
