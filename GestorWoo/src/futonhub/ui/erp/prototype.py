@@ -278,83 +278,7 @@ def _updates_process_options_for_user(user_email: object) -> tuple[tuple[str, st
     return tuple((process, UPDATE_PROCESS_DEFINITIONS[process]["label"]) for process in visible_processes)
 
 
-INVENTORY_ITEMS = [
-    InventoryItem(
-        "FUT-ALG-140",
-        "Futon algodon 140x200",
-        "249.00",
-        "8",
-        "OK",
-        "Futones",
-        "Ekomat",
-        "0.42",
-        "woo-3841",
-        "140 x 200 x 14 cm",
-        "Algodon",
-        "Sin diferencias criticas",
-        "Producto revisado. Sin bloqueo para propuesta de precio.",
-    ),
-    InventoryItem(
-        "TAT-160",
-        "Tatami 160x200",
-        "315.00",
-        "3",
-        "Info",
-        "Tatamis",
-        "Heimei",
-        "0.31",
-        "woo-2210",
-        "160 x 200 x 5.5 cm",
-        "Paja de arroz",
-        "Pendiente de comparacion",
-        "Revisar condiciones del proveedor antes de pedido grande.",
-    ),
-    InventoryItem(
-        "SOFA-IND-01",
-        "Sofa cama individual",
-        "0.00",
-        "0",
-        "Critical",
-        "Sofas",
-        "Pascal",
-        "0.86",
-        "woo-611",
-        "90 x 200 cm",
-        "Madera y algodon",
-        "Precio Woo distinto al interno",
-        "Precio interno en cero. Bloquea propuesta y publicacion.",
-    ),
-    InventoryItem(
-        "FUNDA-90",
-        "Funda futon 90 cm",
-        "48.00",
-        "21",
-        "Warning",
-        "Fundas",
-        "Cipta",
-        "0.08",
-        "woo-5122",
-        "90 x 200 cm",
-        "Algodon",
-        "Sincronizacion pendiente",
-        "Confirmar color y variante antes de incluir en propuesta.",
-    ),
-    InventoryItem(
-        "COLCH-LAT-150",
-        "Colchon latex 150x200",
-        "429.00",
-        "2",
-        "OK",
-        "Colchones",
-        "Ekomat",
-        "0.58",
-        "woo-7740",
-        "150 x 200 x 18 cm",
-        "Latex",
-        "Sin diferencias criticas",
-        "Stock bajo pero operativo.",
-    ),
-]
+INVENTORY_ITEMS: list = []  # sin datos de muestra: solo se muestra informacion real
 
 
 DEFAULT_PROPOSAL_LINES = (
@@ -367,36 +291,7 @@ DEFAULT_PROPOSAL_LINES = (
 )
 
 
-SAVED_PROPOSALS = [
-    PriceProposal("Subida general junio", "28/05/2026", 23, 19, 1, 3, "+6.8%", "Warning", DEFAULT_PROPOSAL_LINES),
-    PriceProposal(
-        "Revision tatamis Heimei",
-        "27/05/2026",
-        8,
-        8,
-        0,
-        0,
-        "+4.1%",
-        "OK",
-        (
-            ProposalLine("TAT-160", "Tatami 160x200", "315.00", "329.00", "+4.44%", "up"),
-            ProposalLine("TAT-90", "Tatami 90x200", "179.00", "185.00", "+3.35%", "up"),
-        ),
-    ),
-    PriceProposal(
-        "Correccion productos criticos",
-        "26/05/2026",
-        3,
-        0,
-        0,
-        3,
-        "Bloq.",
-        "Critical",
-        (ProposalLine("SOFA-IND-01", "Sofa cama individual", "0.00", "389.00", "Bloqueado", "critical"),),
-    ),
-    PriceProposal("Complementos temporada", "24/05/2026", 11, 7, 0, 4, "+2.3%", "Info", DEFAULT_PROPOSAL_LINES[:3]),
-    PriceProposal("Ajuste outlet", "22/05/2026", 6, 0, 6, 0, "-8.5%", "Error", DEFAULT_PROPOSAL_LINES[3:5]),
-]
+SAVED_PROPOSALS: list = []  # sin datos de muestra: solo se muestra informacion real
 
 
 ORDER_ITEMS_HEIMEI = (
@@ -407,215 +302,13 @@ ORDER_ITEMS_HEIMEI = (
 )
 
 
-SUPPLIER_ORDERS = [
-    SupplierOrder("PED-HEI-028", "Heimei", "28/05/2026", 23, "8.42", "Warning", "3654.00", "Validacion pendiente por item a medida.", ORDER_ITEMS_HEIMEI),
-    SupplierOrder(
-        "PED-EKO-017",
-        "Ekomat",
-        "27/05/2026",
-        41,
-        "12.10",
-        "OK",
-        "6840.00",
-        "Pedido calculado y listo para exportar.",
-        (
-            OrderItem("FUT-ALG-140", "Futon algodon 140x200", 8, "3.36", "1992.00", "OK"),
-            OrderItem("COLCH-LAT-150", "Colchon latex 150x200", 5, "2.90", "2145.00", "OK"),
-        ),
-    ),
-    SupplierOrder(
-        "PED-PAS-011",
-        "Pascal",
-        "25/05/2026",
-        14,
-        "6.88",
-        "Info",
-        "2790.00",
-        "Borrador guardado para revision.",
-        (OrderItem("SOFA-IND-01", "Sofa cama individual", 3, "2.58", "1167.00", "Info"),),
-    ),
-    SupplierOrder(
-        "PED-EKO-016",
-        "Ekomat",
-        "22/05/2026",
-        29,
-        "9.02",
-        "Error",
-        "Bloqueado",
-        "Faltan datos M3 en una linea.",
-        (OrderItem("A MEDIDA", "Pedido personalizado", 1, "Pendiente", "Bloqueado", "Error"),),
-    ),
-]
+SUPPLIER_ORDERS: list = []  # sin datos de muestra: solo se muestra informacion real
 
 
-WOO_DIFFERENCES = [
-    WooDifference(
-        "FUT-ALG-140",
-        "3841",
-        "Futon algodon 140x200",
-        "Precio",
-        "249.00 EUR",
-        "269.00 EUR",
-        "Woo +20.00 EUR",
-        "Futones - Algodon",
-        "Actualizar local",
-        "Warning",
-        "WooCommerce tiene un precio mas alto que la base local. Pendiente de traer el cambio al HUB.",
-    ),
-    WooDifference(
-        "TAT-160",
-        "4102",
-        "Tatami 160x200",
-        "Stock",
-        "2",
-        "3",
-        "Woo +1",
-        "Tatamis",
-        "Actualizar local",
-        "Info",
-        "Diferencia de stock leve. Puede actualizarse localmente tras revision.",
-    ),
-    WooDifference(
-        "SOFA-IND-01",
-        "611",
-        "Sofa cama individual",
-        "Familia",
-        "Sin definir",
-        "Sofa cama",
-        "Clasificacion nueva",
-        "Sofa camas",
-        "Auto-clasificar",
-        "Warning",
-        "Woo aporta familia util para organizar la base local.",
-    ),
-    WooDifference(
-        "FUNDA-90",
-        "5120",
-        "Funda futon 90 cm",
-        "Material / grupo",
-        "Sin clasificar",
-        "Funda algodon",
-        "Clasificacion nueva",
-        "Complementos - Fundas",
-        "Auto-clasificar",
-        "OK",
-        "La clasificacion propuesta es limpia y no presenta conflicto visible.",
-    ),
-    WooDifference(
-        "PORT-001",
-        "5201",
-        "Futon portatil plegable",
-        "Familia",
-        "Fundas",
-        "Futon portatil",
-        "Posible mala familia",
-        "Revisar manual",
-        "Revisar",
-        "Error",
-        "La familia local parece incompatible con el producto Woo. Debe revisarse manualmente.",
-    ),
-    WooDifference(
-        "SYNC-000",
-        "0",
-        "Producto Woo sin pareja local",
-        "Relacion",
-        "No existe",
-        "Woo ID 7009",
-        "Sin enlace local",
-        "Pendiente",
-        "Revisar manual",
-        "Critical",
-        "No se puede actualizar nada hasta enlazar o descartar este producto.",
-    ),
-]
+WOO_DIFFERENCES: list = []  # sin datos de muestra: solo se muestra informacion real
 
 
-EXPORT_RECORDS = [
-    ExportRecord(
-        "31/05/2026 19:05",
-        "Inventario completo",
-        "Inventario",
-        "XLSX",
-        "Admin",
-        "OK",
-        "inventario_20260531.xlsx",
-        "842",
-        "EXP-INV-1905",
-        "Familias: todas - Estado: todos - Stock: todos",
-        "ID, nombre, precio, stock, familia, proveedor, M3, estado",
-        "/exports/2026/05/inventario_20260531.xlsx",
-    ),
-    ExportRecord(
-        "31/05/2026 18:44",
-        "Incidencias WooCommerce",
-        "WooCommerce",
-        "XLSX",
-        "Admin",
-        "Warning",
-        "woo_incidencias_1844.xlsx",
-        "27",
-        "EXP-WOO-1844",
-        "Estado: Warning/Error - Accion: revisar",
-        "ID local, ID Woo, diferencia, clasificacion, accion, estado",
-        "/exports/2026/05/woo_incidencias_1844.xlsx",
-    ),
-    ExportRecord(
-        "31/05/2026 18:20",
-        "Detalle de pedido",
-        "Pedidos",
-        "PDF",
-        "Admin",
-        "OK",
-        "PED-HEI-029_detalle.pdf",
-        "23",
-        "EXP-PED-1820",
-        "Proveedor: Heimei - Pedido: PED-HEI-029",
-        "ID, nombre, cantidad, M3, coste final",
-        "/exports/2026/05/PED-HEI-029_detalle.pdf",
-    ),
-    ExportRecord(
-        "31/05/2026 17:58",
-        "Propuesta de precios",
-        "Cambio de Precios",
-        "XLSX",
-        "Admin",
-        "OK",
-        "propuesta_junio.xlsx",
-        "23",
-        "EXP-PRC-1758",
-        "Propuesta: Subida general junio",
-        "ID, nombre, precio anterior, precio nuevo, cambio, estado",
-        "/exports/2026/05/propuesta_junio.xlsx",
-    ),
-    ExportRecord(
-        "31/05/2026 17:35",
-        "Auditoria de logs",
-        "Seguridad / Logs",
-        "PDF",
-        "Admin",
-        "OK",
-        "auditoria_logs_1735.pdf",
-        "128",
-        "EXP-LOG-1735",
-        "Nivel: todos - Modulo: todos",
-        "fecha, nivel, modulo, accion, usuario, resultado, referencia",
-        "/exports/2026/05/auditoria_logs_1735.pdf",
-    ),
-    ExportRecord(
-        "31/05/2026 16:50",
-        "Pedido calculado",
-        "Pedidos",
-        "XLSX",
-        "Admin",
-        "Error",
-        "No generado",
-        "0",
-        "EXP-PED-1650",
-        "Proveedor: Heimei - faltan M3",
-        "No disponible",
-        "No generado",
-    ),
-]
+EXPORT_RECORDS: list = []  # sin datos de muestra: solo se muestra informacion real
 
 
 class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpInventoryEditMixin, ErpInventoryDetailMixin, ErpInventoryListMixin, ErpFormulaLibraryMixin, ErpDashboardMixin, ErpShellNavigationMixin, ErpSharedUiMixin, tk.Tk):
@@ -672,7 +365,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         self._inventory_catalog_snapshot_cache: PhysicalCatalogSnapshot | None = None
         self._selected_inventory_item: InventoryItem | None = None
         self._proposal_source_item: InventoryItem | None = None
-        self._selected_price_proposal = SAVED_PROPOSALS[0]
+        self._selected_price_proposal = None
         self._price_proposals = list(SAVED_PROPOSALS)
         self._price_loading = False
         self._price_loaded_once = False
@@ -758,7 +451,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         self._orders_loading = False
         self._orders_error = ""
         self._selected_supplier_order: SupplierOrder | None = None
-        self._selected_woo_difference = WOO_DIFFERENCES[0]
+        self._selected_woo_difference = None
         self._woo_sync_preview: dict[str, Any] | None = None
         self._woo_sync_rows: list[dict[str, Any]] = []
         self._woo_sync_loading = False
@@ -767,7 +460,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         self._woo_sync_filter_review = "Todos"
         self._woo_sync_filter_status = "Todos"
         self._woo_sync_filter_link = "Todos"
-        self._selected_export_record = EXPORT_RECORDS[0]
+        self._selected_export_record = None
         self._settings_tab = "Generales"
         self._business_constants: dict[str, dict[str, Any]] = {key: dict(value) for key, value in DEFAULT_BUSINESS_CONSTANTS.items()}
         self._business_constants_cloud_loaded = False
@@ -1209,7 +902,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         self._inventory_catalog_snapshot_cache = None
         self._selected_inventory_item = None
         self._proposal_source_item = None
-        self._selected_price_proposal = SAVED_PROPOSALS[0]
+        self._selected_price_proposal = None
         self._price_proposals = list(SAVED_PROPOSALS)
         self._price_loading = False
         self._price_loaded_once = False
@@ -12778,6 +12471,9 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
 
     def _open_woo_action_modal(self, action: str) -> None:
         difference = self._selected_woo_difference
+        if difference is None:
+            messagebox.showinfo("WooCommerce", "No hay ninguna diferencia seleccionada.")
+            return
         win = tk.Toplevel(self)
         win.title(action)
         win.configure(bg=BG)
@@ -13525,12 +13221,13 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
 
         summary = tk.Frame(parent, bg=BG)
         summary.pack(fill=tk.X, pady=(0, 18))
+        records = list(EXPORT_RECORDS)
+        errors = sum(1 for record in records if record.status == "Error")
         for index, (label, value, status) in enumerate(
             [
-                ("Exportaciones", "128", "Info"),
-                ("Este mes", "21", "OK"),
-                ("Errores", "2", "Error"),
-                ("Ultima", "Hoy", "Info"),
+                ("Exportaciones", str(len(records)), "Info"),
+                ("Con error", str(errors), "Error" if errors else "Info"),
+                ("Ultima", records[0].date if records else "-", "Info"),
             ]
         ):
             summary.columnconfigure(index, weight=1)
@@ -13598,8 +13295,15 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         detail_host = tk.Frame(body, bg=BG)
         detail_host.grid(row=0, column=1, sticky="nsew")
 
-        def render_detail(record: ExportRecord) -> None:
+        def render_detail(record: ExportRecord | None) -> None:
             self._selected_export_record = record
+            if record is None:
+                for child in detail_host.winfo_children():
+                    child.destroy()
+                empty = self._card(detail_host)
+                empty.pack(fill=tk.BOTH, expand=True)
+                tk.Label(empty, text="Todavia no hay exportaciones registradas.", bg=CARD, fg=MUTED, font=("Segoe UI", 10), wraplength=300, justify=tk.LEFT).pack(anchor=tk.W, padx=18, pady=18)
+                return
             self._render_export_detail(detail_host, record)
 
         def on_select(_event: object | None = None) -> None:
@@ -13747,36 +13451,42 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         show_tab(self._settings_tab)
 
     def _render_settings_general(self, parent: tk.Frame) -> None:
+        """Solo informacion real (sin campos de muestra ni botones que no guardan nada)."""
         body = tk.Frame(parent, bg=BG)
         body.pack(fill=tk.BOTH, expand=True)
         body.columnconfigure(0, weight=2)
         body.columnconfigure(1, weight=1)
         card = self._card(body)
         card.grid(row=0, column=0, sticky="nsew", padx=(0, 14))
-        card.columnconfigure(0, weight=1)
-        tk.Label(card, text="Generales", bg=CARD, fg=TEXT, font=("Segoe UI", 14, "bold")).grid(row=0, column=0, sticky="w", padx=18, pady=(16, 10))
-        form = tk.Frame(card, bg=CARD)
-        form.grid(row=1, column=0, sticky="ew", padx=18)
-        form.columnconfigure(0, weight=1)
-        form.columnconfigure(1, weight=1)
-        self._field(form, "Entorno", tk.StringVar(value="FutonHUB Produccion")).grid(row=0, column=0, sticky="ew", padx=(0, 8), pady=8)
-        self._combo_field(form, "Modo", ["Online + Local", "Solo local", "Solo lectura"], "Online + Local").grid(row=0, column=1, sticky="ew", padx=(8, 0), pady=8)
-        self._field(form, "Rol actual", tk.StringVar(value="Admin")).grid(row=1, column=0, sticky="ew", padx=(0, 8), pady=8)
-        self._combo_field(form, "Tema", ["Claro ERP", "Oscuro ERP", "Sistema"], "Claro ERP").grid(row=1, column=1, sticky="ew", padx=(8, 0), pady=8)
-        self._field(form, "Ruta base local", tk.StringVar(value="GestorWoo/data/gestorwoo.sqlite3")).grid(row=2, column=0, columnspan=2, sticky="ew", pady=8)
-        footer = tk.Frame(card, bg=CARD, highlightbackground=SOFT, highlightthickness=1)
-        footer.grid(row=2, column=0, sticky="ew", padx=18, pady=(12, 18))
-        self._button(footer, "Guardar generales", primary=True).pack(side=tk.RIGHT, padx=12, pady=12)
-        self._button(footer, "Cancelar").pack(side=tk.RIGHT, pady=12)
+        tk.Label(card, text="Generales", bg=CARD, fg=TEXT, font=("Segoe UI", 14, "bold")).pack(anchor=tk.W, padx=18, pady=(16, 8))
+        session = self.__dict__.get("_cloud_session")
+        try:
+            machine = load_settings().machine_name
+        except Exception:
+            machine = "No disponible"
+        for label, value in (
+            ("Version", app_version_label()),
+            ("Equipo", machine),
+            ("Usuario", getattr(session, "email", None) or "Sin sesion"),
+            ("Rol", getattr(session, "role", None) or "Sin sesion"),
+        ):
+            self._status_row(card, label, str(value), "Info").pack(fill=tk.X, padx=18, pady=5)
+        tk.Label(
+            card,
+            text="Sin ajustes configurables por ahora.",
+            bg=CARD,
+            fg=MUTED,
+            font=("Segoe UI", 9),
+            anchor=tk.W,
+        ).pack(fill=tk.X, padx=18, pady=(10, 18))
 
         side = self._card(body)
         side.grid(row=0, column=1, sticky="nsew")
         tk.Label(side, text="Conexiones", bg=CARD, fg=TEXT, font=("Segoe UI", 14, "bold")).pack(anchor=tk.W, padx=16, pady=(16, 8))
+        supabase = ("Sesion activa", "OK") if session is not None else ("Sin sesion", "Info")
         for label, value, status in [
-            ("SQLite local", "OK", "OK"),
-            ("Supabase", "Online", "OK"),
-            ("WooCommerce", "Conectado", "OK"),
-            ("Backups", "Activo", "Info"),
+            ("Supabase", *supabase),
+            ("WooCommerce", "Se comprueba al publicar", "Info"),
         ]:
             self._status_row(side, label, value, status).pack(fill=tk.X, padx=16, pady=5)
 
@@ -13898,19 +13608,14 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         card = self._card(body)
         card.grid(row=0, column=0, sticky="nsew", padx=(0, 14))
         tk.Label(card, text="Seguridad", bg=CARD, fg=TEXT, font=("Segoe UI", 14, "bold")).pack(anchor=tk.W, padx=18, pady=(16, 8))
+        # Solo reglas que el ERP aplica de verdad (antes eran interruptores de muestra que no hacian nada).
         for title, subtitle in [
-            ("Preview interno obligatorio", "Validacion antes de operaciones sensibles"),
-            ("Bloquear precios en 0", "Critical automatico si un precio queda en cero"),
-            ("Confirmacion por palabra", "Requiere escribir CONFIRMAR"),
-            ("Cancelar operacion ante Critical", "Bloqueo completo del flujo"),
-            ("Backups automaticos", "Antes de cambios sensibles"),
-            ("Registro de operaciones", "Guardar accion, usuario, fecha y resultado"),
+            ("Preview antes de aplicar", "Cambios de precios, pedidos e inventario muestran un preview y piden confirmacion"),
+            ("Registro de operaciones", "Las operaciones guardan snapshot y log de auditoria en Supabase"),
+            ("Bloqueo de bajada de precio", "El umbral se lee de Supabase y se compara con el precio actual de WooCommerce"),
         ]:
-            self._setting_switch_row(card, title, subtitle).pack(fill=tk.X, padx=18, pady=5)
-        footer = tk.Frame(card, bg=CARD, highlightbackground=SOFT, highlightthickness=1)
-        footer.pack(fill=tk.X, padx=18, pady=(12, 18))
-        self._button(footer, "Guardar seguridad", primary=True).pack(side=tk.RIGHT, padx=12, pady=12)
-        self._button(footer, "Cancelar").pack(side=tk.RIGHT, pady=12)
+            self._status_row(card, title, subtitle, "Info").pack(fill=tk.X, padx=18, pady=5)
+        tk.Label(card, text="Sin ajustes configurables por ahora.", bg=CARD, fg=MUTED, font=("Segoe UI", 9), anchor=tk.W).pack(fill=tk.X, padx=18, pady=(10, 18))
 
         side = self._card(body)
         side.grid(row=0, column=1, sticky="nsew")
