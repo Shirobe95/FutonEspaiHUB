@@ -122,6 +122,7 @@ PROTOTYPE_SOURCE = "GestorWoo/src/futonhub/ui/erp/prototype.py"
 LEGACY_ORDER_SOURCE = "CalculoCoste/coste_pedido.py"
 ORDERS_SOURCE = "GestorWoo/src/futonhub/cloud/services/orders.py"
 PRICE_PROPOSALS_SOURCE = "GestorWoo/src/futonhub/cloud/services/price_proposals.py"
+PRICES_SOURCE = "GestorWoo/src/futonhub/cloud/services/prices.py"
 COMBINATION_PRICE_SOURCE = "GestorWoo/src/futonhub/services/combination_price_impact.py"
 
 
@@ -486,8 +487,8 @@ FORMULA_LIBRARY: tuple[FormulaRecord, ...] = (
         ("precio_propuesto", "precio_actual"),
         "EUR",
         "Propuestas y publicacion WooCommerce",
-        PRICE_PROPOSALS_SOURCE,
-        "_legacy_price_safety_preview",
+        PRICES_SOURCE,
+        "price_safety_preview",
         purpose="Calcula la diferencia absoluta que se revisa antes de publicar precios.",
         status="AUXILIAR",
         calculation_family="direct_price_change",
@@ -500,8 +501,8 @@ FORMULA_LIBRARY: tuple[FormulaRecord, ...] = (
         ("precio_propuesto", "precio_actual"),
         "%",
         "Propuestas y publicacion WooCommerce",
-        PRICE_PROPOSALS_SOURCE,
-        "_legacy_price_safety_preview",
+        PRICES_SOURCE,
+        "price_safety_preview",
         purpose="Mide la variacion y permite aplicar umbrales de aviso o bloqueo antes de WooCommerce.",
         status="AUXILIAR",
         notes="Solo se calcula cuando el precio actual es positivo.",

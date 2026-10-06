@@ -51,7 +51,6 @@ def _normalize_inventory_edit_value(field: str, value: Any) -> Any:
     return text if text else None
 
 
-
 def _format_relation_quantity(value: Any) -> str:
     try:
         n = float(str(value).replace(',', '.'))
@@ -936,7 +935,6 @@ def update_internal_inventory_item(session, item_id: int, store_stock: Any = Non
     return {'operation_id': operation_id, 'before': before, 'after': written, 'preview': preview}
 
 
-
 def fetch_inventory_item_history(session, item_id: int, limit: int = 80) -> list[dict[str, Any]]:
     """Devuelve historial real conocido para un item.
 
@@ -1394,48 +1392,6 @@ def update_inventory_item_fields(session, item_id: int, changes: dict[str, Any],
     )
     write_audit_event(session, event, settings)
     return {'operation_id': operation_id, 'before': before, 'after': written, 'preview': preview}
-
-
-def run_cloud_search_inventory(query: str, limit: int = 25) -> int:
-    try:
-        session, _settings = _login_from_console()
-        rows = search_cloud_inventory_items(session, query, limit)
-    except (SupabaseAuthError, CloudAuditError) as exc:
-        print(f'ERROR: {exc}')
-        return 2
-    except Exception as exc:
-        print(f'ERROR inesperado: {exc}')
-        return 2
-    print(format_cloud_inventory_search(rows))
-    return 0
-
-
-def run_cloud_inventory_update_internal(item_id: int, store_stock: str = '', warehouse_stock: str = '', notes: str = '', execute: bool = False) -> int:
-    try:
-        session, settings = _login_from_console()
-        preview = preview_internal_inventory_update(session, item_id, store_stock or None, warehouse_stock or None, notes)
-        print(format_internal_inventory_preview(preview))
-        if not execute:
-            print('\nPREVIEW ONLY: no se aplico nada. Repite con --execute para actualizar Supabase.')
-            return 0
-        typed = input('\nEscribe APLICAR para confirmar cambio interno de inventario: ').strip().upper()
-        if typed != 'APLICAR':
-            print('Cancelado. No se aplico nada.')
-            return 1
-        result = update_internal_inventory_item(session, item_id, store_stock or None, warehouse_stock or None, notes, settings)
-    except (SupabaseAuthError, CloudAuditError) as exc:
-        print(f'ERROR: {exc}')
-        return 2
-    except Exception as exc:
-        print(f'ERROR inesperado: {exc}')
-        return 2
-    print('\nCAMBIO INVENTARIO INTERNO APLICADO')
-    print('=' * 42)
-    print(f"operation_id: {result['operation_id']}")
-    print(f'item_id: {item_id}')
-    print('Supabase actualizado. WooCommerce no fue tocado.')
-    print('Caja negra: audit_log + operation_snapshot generados.')
-    return 0
 
 
 coerce_optional_float = _coerce_optional_float

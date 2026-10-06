@@ -36,8 +36,6 @@ class PriceProposalRevalidationRequired(CloudAuditError):
         self.differences = differences
 
 
-
-
 def _blackbox_record_exists(session, table: str, operation_id: str) -> bool:
     """Comprueba que la caja negra se persistio realmente, no solo que la RPC respondio."""
     try:
@@ -2041,21 +2039,6 @@ def format_woocommerce_publish_preview(result: dict[str, Any]) -> str:
     else:
         lines.append("Preview limpio: listo para revalidar y aplicar sin un paso adicional.")
     return "\n".join(lines)
-
-
-def run_cloud_woocommerce_publish_preview(limit: int = 20, proposal_id: str = "") -> int:
-    try:
-        session, settings = _login_from_console()
-        result = preview_woocommerce_publish(session, proposal_id=proposal_id or None, limit=limit, settings=settings)
-    except (SupabaseAuthError, CloudAuditError, WooCommerceError) as exc:
-        print(f"ERROR: {exc}")
-        return 2
-    except Exception as exc:
-        print(f"ERROR inesperado: {exc}")
-        return 2
-    print(format_woocommerce_publish_preview(result))
-    return 0
-
 
 
 def _format_publish_row_for_confirm(row: dict[str, Any]) -> str:
@@ -4250,7 +4233,6 @@ def format_woocommerce_publish_result(result: dict[str, Any]) -> str:
     if row.get("status") == "WARNING":
         lines.append("AVISO: se publico con warnings reconocidos explicitamente por admin.")
     return "\n".join(lines)
-
 
 
 proposal_item_snapshot = _proposal_item_snapshot
