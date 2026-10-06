@@ -27,18 +27,13 @@ def short_row_value(row: dict[str, Any], *keys: str) -> Any:
     return None
 
 
+from futonhub.core.money import parse_amount  # noqa: E402
+
+
 def money_or_none(value: Any) -> float | None:
-    if value is None:
-        return None
-    text = str(value).strip()
-    if text == "":
-        return None
-    try:
-        number = float(text.replace(",", "."))
-    except Exception:
-        return None
-    # "nan"/"inf" se parsean como float validos pero nunca son un precio: se tratan como ausentes.
-    return number if math.isfinite(number) else None
+    # parse_amount aplica la regla acordada («1.250» = 1250, «1.25» = 1,25) y trata
+    # nan/inf/texto como ausentes: nunca son un precio.
+    return parse_amount(value)
 
 
 def current_price_from_item(item: dict[str, Any]) -> float | None:

@@ -44,6 +44,29 @@ class LoadEnvFileTests(unittest.TestCase):
         self.assertEqual(values["A_KEY"], "ok")
         self.assertEqual(values["C_KEY"], "")
 
+    def test_real_environment_variables_win_over_the_env_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temp, patch.dict(os.environ, {"A_KEY": "del_equipo"}, clear=False):
+            path = Path(temp) / ".env"
+            path.write_text("A_KEY=del_env\nB_KEY=nuevo\n", encoding="utf-8")
+            os.environ.pop("B_KEY", None)
+            load_env_file(path)
+            self.assertEqual(os.environ["A_KEY"], "del_equipo")
+            self.assertEqual(os.environ["B_KEY"], "nuevo")
+            os.environ.pop("B_KEY", None)
+
+
+class MachineNameTests(unittest.TestCase):
+    def test_machine_name_is_detected_not_copied_from_env_file(self) -> None:
+        from gestorwoo import config
+
+        with tempfile.TemporaryDirectory() as temp:
+            (Path(temp) / ".env").write_text("GESTORWOO_MACHINE_NAME=PC-COPIADO\n", encoding="utf-8")
+            with patch.dict(os.environ, {}, clear=False), patch.object(config, "gestorwoo_root", return_value=Path(temp)), patch.object(config.socket, "gethostname", return_value="PC-REAL"):
+                os.environ.pop("GESTORWOO_MACHINE_NAME", None)
+                settings = config.load_settings()
+                os.environ.pop("GESTORWOO_MACHINE_NAME", None)
+        self.assertEqual(settings.machine_name, "PC-REAL")
+
 
 if __name__ == "__main__":
     unittest.main()

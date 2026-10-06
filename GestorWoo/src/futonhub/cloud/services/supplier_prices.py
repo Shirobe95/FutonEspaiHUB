@@ -32,13 +32,15 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+from futonhub.core.money import parse_amount  # noqa: E402
+
+
 def _safe_float(value: Any, default: float = 0.0) -> float:
     try:
         if value is None or value == "":
             return default
-        text = str(value).strip().replace("\u20ac", "").replace("\u00e2\u201a\u00ac", "").replace("$", "").replace("%", "")
-        text = text.replace(".", "").replace(",", ".") if "," in text else text
-        return float(text)
+        number = parse_amount(str(value).replace("%", ""))
+        return default if number is None else number
     except Exception:
         return default
 

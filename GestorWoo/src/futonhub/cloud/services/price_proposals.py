@@ -61,11 +61,15 @@ def _json_safe(value: Any) -> Any:
         return {"_raw": str(value)}
 
 
+from futonhub.core.money import parse_amount  # noqa: E402
+
+
 def _safe_float(value: Any, default: float = 0.0) -> float:
     try:
         if value is None or value == "":
             return default
-        return float(str(value).replace(",", "."))
+        number = parse_amount(value)
+        return default if number is None else number
     except Exception:
         return default
 
@@ -448,7 +452,8 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
     try:
         if value is None or value == "":
             return default
-        return float(str(value).replace(",", "."))
+        number = parse_amount(value)
+        return default if number is None else number
     except Exception:
         return default
 

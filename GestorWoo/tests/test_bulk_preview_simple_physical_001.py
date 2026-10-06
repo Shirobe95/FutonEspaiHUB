@@ -54,5 +54,16 @@ class BulkPreviewTests(unittest.TestCase):
         self.assertNotIn("NoneType", row["reason"])
 
 
+    def test_ambiguous_exact_value_is_read_as_thousands_and_the_preview_says_so(self) -> None:
+        preview = Shell()._price_build_bulk_preview([result("100.00")], "", "1.250")
+        self.assertAlmostEqual(preview["rows"][0]["new_price_value"], 1350.0)
+        self.assertIn("miles", preview["interpretation_note"])
+
+    def test_clear_exact_value_has_no_note(self) -> None:
+        preview = Shell()._price_build_bulk_preview([result("100.00")], "", "1,25")
+        self.assertAlmostEqual(preview["rows"][0]["new_price_value"], 101.25)
+        self.assertIsNone(preview["interpretation_note"])
+
+
 if __name__ == "__main__":
     unittest.main()

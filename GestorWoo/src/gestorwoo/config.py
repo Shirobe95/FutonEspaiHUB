@@ -45,6 +45,10 @@ class Settings:
 def load_settings() -> Settings:
     # Carga .env desde la carpeta real de GestorWoo, aunque se lance desde otro cwd.
     env_path = gestorwoo_root() / ".env"
+    # El nombre del equipo se detecta solo (hostname). Un GESTORWOO_MACHINE_NAME copiado en el
+    # .env se ignora: antes se cambiaba a mano en cada PC y asi el registro mostraba el equipo
+    # equivocado. Solo vale el definido en el entorno real del sistema (no en el .env).
+    real_machine_name = os.environ.get("GESTORWOO_MACHINE_NAME")
     load_env_file(env_path)
 
     url = os.getenv("WOOCOMMERCE_URL", "").rstrip("/")
@@ -57,7 +61,7 @@ def load_settings() -> Settings:
     app_mode = os.getenv("GESTORWOO_MODE", "local_guarded").strip().lower() or "local_guarded"
     if app_mode not in VALID_APP_MODES:
         app_mode = "local_guarded"
-    machine_name = _machine_name(os.getenv("GESTORWOO_MACHINE_NAME"))
+    machine_name = _machine_name(real_machine_name)
     sync_role = os.getenv("GESTORWOO_SYNC_ROLE", "standalone").strip().lower() or "standalone"
     if sync_role not in VALID_SYNC_ROLES:
         sync_role = "standalone"
@@ -126,7 +130,10 @@ def load_env_file(path: Path) -> None:
         key = key.strip()
         if key.startswith("export "):
             key = key[len("export "):].strip()
-        os.environ[key] = _parse_env_value(value)
+        # Las variables de entorno reales del equipo mandan sobre el .env: asi el ERP
+        # identifica automaticamente el equipo/usuario que lo usa en vez de depender de
+        # valores copiados a mano en el .env.
+        os.environ.setdefault(key, _parse_env_value(value))
 
 
 def _machine_name(configured: str | None = None) -> str:

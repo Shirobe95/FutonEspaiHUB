@@ -184,6 +184,7 @@ from futonhub.security.remembered_session import (
 )
 from futonhub.ui.theme import apply_theme
 from futonhub.ui.windowing import center_window
+from futonhub.core.money import describe_amount_interpretation, parse_amount
 from futonhub.ui.erp.preview_text import format_reception_line
 from futonhub.ui.erp.dashboard import ErpDashboardMixin
 from futonhub.ui.erp.formula_library import ErpFormulaLibraryMixin
@@ -6731,6 +6732,8 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             "rejected_lines": rejected_lines,
             "counts": counts,
             "combination_impact": combination_impact,
+            # «1.250» es el unico caso ambiguo: se avisa de como se ha leido lo escrito.
+            "interpretation_note": describe_amount_interpretation(exact_text) if mode == "Valor" else None,
         }
 
     def _open_price_bulk_add_preview(
@@ -6782,6 +6785,8 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             f"Ya presentes: {counts['existing']} - Packs incluidos: {counts['packs_included']} - "
             f"Packs excluidos: {counts['packs_excluded']} - Total que se anadira: {counts['total_add']}"
         )
+        if preview.get("interpretation_note"):
+            summary_text += "\nAviso: " + str(preview["interpretation_note"])
         tk.Label(summary, text=summary_text, bg=CARD, fg=TEXT, justify=tk.LEFT, anchor=tk.W).pack(fill=tk.X, padx=12, pady=12)
 
         table_host = tk.Frame(win, bg=CARD)
@@ -7507,11 +7512,8 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             self._price_add_in_progress = False
 
     def _price_parse_money(self, value: str) -> float:
-        try:
-            number = float(str(value or "0").replace("EUR", "").replace(",", ".").strip())
-        except Exception as exc:
-            raise ValueError("Precio actual no numerico.") from exc
-        if not math.isfinite(number):
+        number = parse_amount(value if value not in (None, "") else "0")
+        if number is None:
             raise ValueError("Precio actual no numerico.")
         return number
 
@@ -7519,7 +7521,10 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         if percent_text:
             result = round(old_price * (1 + float(percent_text.replace(",", ".")) / 100), 2)
         else:
-            result = round(old_price + float(exact_text.replace(",", ".")), 2)
+            delta = parse_amount(exact_text)
+            if delta is None:
+                raise ValueError("El valor introducido no es un numero valido.")
+            result = round(old_price + delta, 2)
         if not math.isfinite(result):
             raise ValueError("El valor introducido no es un numero valido.")
         return result
@@ -9464,15 +9469,10 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
     def _money_float(self, value: Any, default: float = 0.0) -> float:
         if value in (None, ""):
             return default
-        text = str(value).strip().replace("EUR", "").replace("$", "").replace("%", "")
-        text = text.replace(".", "").replace(",", ".") if "," in text else text
-        try:
-            return float(text)
-        except Exception:
-            try:
-                return float(str(value).replace(",", "."))
-            except Exception:
-                return default
+        # Los numeros (int/float) pasan tal cual: no se convierten a texto, porque un 94.652
+        # calculado se leeria como «miles». Solo el texto escrito por personas sigue la regla.
+        number = parse_amount(value.replace("%", "") if isinstance(value, str) else value)
+        return default if number is None else number
 
     def _money_round_half_up(self, value: Any, places: str = "0.01") -> float:
         try:
