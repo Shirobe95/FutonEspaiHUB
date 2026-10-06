@@ -98,5 +98,12 @@ class PublishGuardsTests(unittest.TestCase):
         self.assertNotIn("confirmacion explicita", str(caught.exception))
 
 
+class PublishButtonRoleTests(unittest.TestCase):
+    def test_price_window_shows_publish_buttons_to_workers_too(self) -> None:
+        source = (SRC / "futonhub" / "ui" / "erp" / "cloud_prices.py").read_text(encoding="utf-8")
+        self.assertIn('self._effective_role() or "") in {"admin", "worker"}', source)
+        self.assertNotIn("if self._is_authenticated_admin():\n            ttk.Button(buttons, text=\"Preview Woo\"", source)
+
+
 if __name__ == "__main__":
     unittest.main()

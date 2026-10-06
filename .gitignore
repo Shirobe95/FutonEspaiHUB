@@ -34,3 +34,6 @@ GestorWoo/data/backups/
 /auditoria/.codex_spreadsheet_work/
 /node_modules/
 /dat.zip
+
+# Cache local de constantes: se regenera desde Supabase (la fuente de verdad); no se versiona
+CalculoCoste/constantes_negocio.json

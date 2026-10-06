@@ -40,6 +40,63 @@ SUPPLIER_ORDER_REQUIRED_CONSTANTS_BY_MODE: dict[str, tuple[str, ...]] = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Cache local para las herramientas legacy (CalculoCoste/coste_pedido.py): se rellena SIEMPRE desde Supabase.
+# ---------------------------------------------------------------------------
+LEGACY_CACHE_KEYS: tuple[str, ...] = (
+    "IMPORTE_DESCARGA_MT",
+    "PC_GASTOS_MANIPULACION",
+    "PC_GASTOS_FINANCIACION",
+    "IMPORTES_VARIOS",
+    "COSTE_TOTAL_DESCARGA_FUTONES_IVA",
+    "COSTE_DESCARGA_FUTONES_UNIDAD",
+    "IVA_RECARGO_EQUIVALENCIA",
+    "COSTE_DIARIO_ALMACENAJE_M3",
+)
+_legacy_cache_path: Any = None
+
+
+def enable_legacy_constants_cache(path) -> None:
+    """Activa el volcado de las constantes leidas de Supabase a ``path`` (JSON). La UI lo activa al arrancar."""
+    global _legacy_cache_path
+    _legacy_cache_path = path
+
+
+def _write_legacy_cache(constants: dict[str, dict[str, Any]]) -> None:
+    """Mejor esfuerzo: nunca interrumpe la lectura de constantes. Solo escribe valores que vienen de Supabase."""
+    path = _legacy_cache_path
+    if path is None:
+        return
+    try:
+        import os
+        from pathlib import Path as _Path
+
+        target = _Path(path)
+        values = {
+            key: float(constants[key]["value"])
+            for key in LEGACY_CACHE_KEYS
+            if key in constants and "source_row" in constants[key] and isinstance(constants[key].get("value"), (int, float))
+        }
+        if not values:
+            return
+        current: dict[str, Any] = {}
+        if target.is_file():
+            try:
+                loaded = json.loads(target.read_text(encoding="utf-8"))
+                current = loaded if isinstance(loaded, dict) else {}
+            except Exception:
+                current = {}
+        merged = {**current, **values}
+        if merged == current:
+            return
+        target.parent.mkdir(parents=True, exist_ok=True)
+        temporary = target.with_suffix(".json.tmp")
+        temporary.write_text(json.dumps(merged, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        os.replace(temporary, target)
+    except Exception:
+        pass
+
+
 class BusinessConstantsValidationError(RuntimeError):
     """Raised when economic constants from Supabase are incomplete or invalid."""
 
@@ -152,6 +209,7 @@ def load_required_business_constants(session, required_keys: Iterable[str]) -> d
             missing_keys=missing,
             invalid_keys=invalid_unique,
         )
+    _write_legacy_cache(result)
     return result
 
 
@@ -191,7 +249,64 @@ def list_business_constants(
         if row.get("description") not in (None, ""):
             base["description"] = row.get("description")
         base["source_row"] = row
+    _write_legacy_cache(result)
     return result
+
+
+# ---------------------------------------------------------------------------
+# Umbrales de precio: la fuente de verdad es Supabase (decision del negocio 2026-10-06)
+# ---------------------------------------------------------------------------
+PRICE_DROP_BLOCK_KEY = "PRICE_DROP_BLOCK_PERCENT"
+_THRESHOLD_CACHE_SECONDS = 30.0
+_threshold_cache: dict[int, tuple[float, float | None]] = {}
+
+
+def cloud_price_drop_block_percent(session, *, use_cache: bool = True) -> float | None:
+    """Valor vigente de PRICE_DROP_BLOCK_PERCENT en Supabase, o None si no se puede leer o no es valido (0 < x <= 100)."""
+    import math
+    import time
+
+    client = getattr(session, "client", None)
+    if client is None:
+        return None
+    key = id(client)
+    now = time.monotonic()
+    cached = _threshold_cache.get(key)
+    if use_cache and cached is not None and now - cached[0] < _THRESHOLD_CACHE_SECONDS:
+        return cached[1]
+    value: float | None = None
+    try:
+        response = client.table("business_constants").select("*").eq("key", PRICE_DROP_BLOCK_KEY).limit(1).execute()
+        rows = getattr(response, "data", None) or []
+        if rows:
+            raw = _value_from_row(rows[0])
+            number = _safe_float(raw, float("nan"))
+            if math.isfinite(number) and 0 < number <= 100:
+                value = number
+    except Exception:
+        value = None
+    _threshold_cache[key] = (now, value)
+    return value
+
+
+def apply_cloud_price_thresholds(session, settings):
+    """Devuelve ``settings`` con el bloqueo de bajada de precio de Supabase (si esta disponible).
+
+    Si Supabase no responde o el valor no es valido se conserva el valor de ``settings`` (.env): el servicio sigue
+    protegido en lugar de quedarse sin umbral. El aviso (warning) se ajusta para no superar nunca al bloqueo.
+    """
+    import dataclasses
+
+    block = cloud_price_drop_block_percent(session)
+    if block is None or settings is None:
+        return settings
+    warning = getattr(settings, "price_drop_warning_percent", 0.0)
+    if warning >= block:
+        warning = max(0.0, block / 2)
+    try:
+        return dataclasses.replace(settings, price_drop_block_percent=block, price_drop_warning_percent=warning)
+    except TypeError:
+        return settings
 
 
 def _strip_missing_schema_columns(payload: list[dict[str, Any]], error_text: str) -> tuple[list[dict[str, Any]], bool]:

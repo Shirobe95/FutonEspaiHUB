@@ -114,11 +114,13 @@ from futonhub.cloud.services.business_constants import (
     DEFAULT_BUSINESS_CONSTANTS,
     IVA_RECARGO_EQUIVALENCIA_FACTOR,
     IVA_RECARGO_EQUIVALENCIA_PERCENT,
+    enable_legacy_constants_cache,
     list_business_constants,
     save_business_constants,
     supplier_order_required_business_constant_keys,
 )
 from futonhub.core import codes as codes_module
+from gestorwoo.pathing import calculo_coste_root
 from futonhub.core.codes import supplier_order_eligibility_reason
 from futonhub.core.config import load_settings
 from futonhub.core.guard import active_locks, stale_locks
@@ -769,6 +771,8 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         self._settings_tab = "Generales"
         self._business_constants: dict[str, dict[str, Any]] = {key: dict(value) for key, value in DEFAULT_BUSINESS_CONSTANTS.items()}
         self._business_constants_cloud_loaded = False
+        # Supabase manda: cada lectura de constantes actualiza la cache JSON que usa CalculoCoste/coste_pedido.py
+        enable_legacy_constants_cache(calculo_coste_root() / "constantes_negocio.json")
         self._security_events: list[SecurityEvent] = []
         self._security_log_rows: list[dict[str, Any]] = []
         self._security_visible_rows: list[dict[str, Any]] = []

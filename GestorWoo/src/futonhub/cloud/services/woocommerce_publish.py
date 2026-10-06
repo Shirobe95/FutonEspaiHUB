@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from futonhub.cloud.services.business_constants import apply_cloud_price_thresholds
 from datetime import datetime, timezone
 from hashlib import sha256
 from typing import Any
@@ -1916,7 +1917,7 @@ def preview_woocommerce_publish(session, *, proposal_id: str | None = None, limi
             kind = (proposal.get("item_kind") or "").strip().lower()
             new_price = _safe_money(proposal.get("new_price"))
             cloud_item = _fetch_cloud_item_for_proposal(session, proposal)
-            validation = _price_safety_preview(cloud_item, kind, new_price, settings)
+            validation = _price_safety_preview(cloud_item, kind, new_price, apply_cloud_price_thresholds(session, settings))
             woo_data = None
             woo_price = None
             woo_regular_price = None
@@ -2636,7 +2637,7 @@ def preview_price_proposal_group_publish(
                     target["cloud_item"],
                     kind,
                     new_price,
-                    settings,
+                    apply_cloud_price_thresholds(session, settings),
                 )
                 messages = list(validation.get("messages") or [])
                 if validation.get("status") == "ERROR":

@@ -460,7 +460,7 @@ class CloudPriceBoardMixin:
         ttk.Button(buttons, text="Preview propuesta", command=show_proposal_preview).pack(side=tk.LEFT, padx=(0, 8))
         ttk.Button(buttons, text="Aprobar", command=lambda: review_selected("approved")).pack(side=tk.LEFT, padx=(0, 8))
         ttk.Button(buttons, text="Rechazar", command=lambda: review_selected("rejected")).pack(side=tk.LEFT, padx=(0, 8))
-        if self._is_authenticated_admin():
+        if (self._effective_role() or "") in {"admin", "worker"}:  # los workers tambien publican precios
             ttk.Button(buttons, text="Preview Woo", command=preview_selected).pack(side=tk.LEFT, padx=(18, 8))
             ttk.Button(buttons, text="Publicar Woo", command=publish_selected).pack(side=tk.LEFT, padx=(0, 8))
         ttk.Button(buttons, text="Cerrar", command=win.destroy).pack(side=tk.RIGHT)

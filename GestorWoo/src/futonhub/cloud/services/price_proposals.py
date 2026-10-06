@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from futonhub.cloud.services.business_constants import apply_cloud_price_thresholds
 from datetime import datetime, timezone
 from hashlib import sha256
 from typing import Any, Iterable, Mapping
@@ -697,7 +698,7 @@ def preview_real_price_proposal(
         validation_item["price"] = authoritative_price
         validation_item["regular_price"] = authoritative_price
         validation_item["sale_price"] = None
-    validation = _price_safety_preview(validation_item, kind, proposed_price, settings)
+    validation = _price_safety_preview(validation_item, kind, proposed_price, apply_cloud_price_thresholds(session, settings))
     old_price = authoritative_price if authoritative_price is not None else validation.get("current_price")
     return {
         "item": item,
@@ -767,7 +768,7 @@ def preview_existing_price_proposal(session, proposal_id: str, settings: Setting
         item_snapshot=source.get("item_snapshot"),
     )
     proposed = _safe_float(row.get("new_price"), 0.0)
-    validation = _price_safety_preview(item, kind, proposed, settings)
+    validation = _price_safety_preview(item, kind, proposed, apply_cloud_price_thresholds(session, settings))
     return {
         "proposal": row,
         "item": item,
@@ -865,7 +866,7 @@ def create_real_price_proposal(
         validation_item["price"] = authoritative_price
         validation_item["regular_price"] = authoritative_price
         validation_item["sale_price"] = None
-    validation = _price_safety_preview(validation_item, kind, proposed_price, settings)
+    validation = _price_safety_preview(validation_item, kind, proposed_price, apply_cloud_price_thresholds(session, settings))
     old_price = authoritative_price if authoritative_price is not None else validation.get("current_price")
     operation_id = new_operation_id("REALPRICE")
     before = None

@@ -3,6 +3,7 @@ from __future__ import annotations
 import getpass
 import json
 import sqlite3
+from futonhub.cloud.services.business_constants import apply_cloud_price_thresholds
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
@@ -1322,7 +1323,7 @@ def preview_real_price_proposal(session, item_kind: str, woo_id: int, new_price:
     kind = (item_kind or "").strip().lower()
     item = _fetch_cloud_item_for_price(session, kind, int(woo_id))
     proposed_price = _safe_float(new_price, 0.0)
-    validation = _price_safety_preview(item, kind, proposed_price, settings)
+    validation = _price_safety_preview(item, kind, proposed_price, apply_cloud_price_thresholds(session, settings))
     old_price = validation.get("current_price")
     return {
         "item": item,
@@ -1385,7 +1386,7 @@ def preview_existing_price_proposal(session, proposal_id: str, settings: Setting
     woo_id = int(row.get("item_woo_id"))
     item = _fetch_cloud_item_for_price(session, kind, woo_id)
     proposed = _safe_float(row.get("new_price"), 0.0)
-    validation = _price_safety_preview(item, kind, proposed, settings)
+    validation = _price_safety_preview(item, kind, proposed, apply_cloud_price_thresholds(session, settings))
     return {
         "proposal": row,
         "item": item,
@@ -1456,7 +1457,7 @@ def create_real_price_proposal(session, item_kind: str, woo_id: int, new_price: 
     kind = (item_kind or "").strip().lower()
     item = _fetch_cloud_item_for_price(session, kind, int(woo_id))
     proposed_price = _safe_float(new_price, 0.0)
-    validation = _price_safety_preview(item, kind, proposed_price, settings)
+    validation = _price_safety_preview(item, kind, proposed_price, apply_cloud_price_thresholds(session, settings))
     old_price = validation.get("current_price")
     operation_id = new_operation_id("REALPRICE")
     before = None
@@ -1779,7 +1780,7 @@ def price_heart_attack_tests(session, item_kind: str, woo_id: int, settings: Set
     ]
     results: list[dict[str, Any]] = []
     for case in cases:
-        validation = _price_safety_preview(item, kind, case["proposed_price"], settings)
+        validation = _price_safety_preview(item, kind, case["proposed_price"], apply_cloud_price_thresholds(session, settings))
         results.append({**case, "validation": validation})
     return {
         "item": item,
@@ -2553,7 +2554,7 @@ def preview_woocommerce_publish(session, *, proposal_id: str | None = None, limi
             kind = (proposal.get("item_kind") or "").strip().lower()
             new_price = _safe_money(proposal.get("new_price"))
             cloud_item = _fetch_cloud_item_for_proposal(session, proposal)
-            validation = _price_safety_preview(cloud_item, kind, new_price, settings)
+            validation = _price_safety_preview(cloud_item, kind, new_price, apply_cloud_price_thresholds(session, settings))
             woo_data = None
             woo_price = None
             woo_regular_price = None
