@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 from typing import Any
 
 
@@ -32,9 +34,11 @@ def money_or_none(value: Any) -> float | None:
     if text == "":
         return None
     try:
-        return float(text.replace(",", "."))
+        number = float(text.replace(",", "."))
     except Exception:
         return None
+    # "nan"/"inf" se parsean como float validos pero nunca son un precio: se tratan como ausentes.
+    return number if math.isfinite(number) else None
 
 
 def current_price_from_item(item: dict[str, Any]) -> float | None:
@@ -54,7 +58,10 @@ def price_safety_preview(item: dict[str, Any], kind: str, proposed_price: float 
     messages: list[str] = []
     status = "OK"
 
-    if proposed_price is not None and proposed_price <= 0:
+    if proposed_price is not None and not math.isfinite(proposed_price):
+        messages.append("ERROR: el precio propuesto no es un numero valido (NaN o infinito).")
+        status = "ERROR"
+    elif proposed_price is not None and proposed_price <= 0:
         messages.append("ERROR: el precio propuesto debe ser mayor que 0.")
         status = "ERROR"
 

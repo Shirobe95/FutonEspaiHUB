@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import tkinter as tk
 from tkinter import messagebox, simpledialog, ttk
 
@@ -158,6 +159,8 @@ class CloudPriceBoardMixin:
         ) or ""
         try:
             proposed = float(new_price_text.replace(",", "."))
+            if not math.isfinite(proposed):
+                raise ValueError("El precio propuesto no es un numero valido.")
             preview = preview_real_price_proposal(self._cloud_session, item_kind, int(woo_id), proposed, notes, load_settings())
         except CloudAuditError as exc:
             messagebox.showerror("Preview propuesta", str(exc), parent=parent)

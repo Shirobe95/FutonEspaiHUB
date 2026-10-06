@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import json
+import math
 import os
 import re
 import tkinter as tk
@@ -7471,18 +7472,25 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
 
     def _price_parse_money(self, value: str) -> float:
         try:
-            return float(str(value or "0").replace("EUR", "").replace(",", ".").strip())
+            number = float(str(value or "0").replace("EUR", "").replace(",", ".").strip())
         except Exception as exc:
             raise ValueError("Precio actual no numerico.") from exc
+        if not math.isfinite(number):
+            raise ValueError("Precio actual no numerico.")
+        return number
 
     def _price_calculate_new_price(self, old_price: float, percent_text: str, exact_text: str) -> float:
         if percent_text:
-            percent = float(percent_text.replace(",", "."))
-            return round(old_price * (1 + percent / 100), 2)
-        exact = float(exact_text.replace(",", "."))
-        return round(old_price + exact, 2)
+            result = round(old_price * (1 + float(percent_text.replace(",", ".")) / 100), 2)
+        else:
+            result = round(old_price + float(exact_text.replace(",", ".")), 2)
+        if not math.isfinite(result):
+            raise ValueError("El valor introducido no es un numero valido.")
+        return result
 
     def _price_validate_proposed_price(self, old_price: float, proposed: float) -> tuple[str, str]:
+        if not math.isfinite(proposed):
+            return "Critical", "Precio propuesto no numerico (NaN o infinito). Operacion bloqueada."
         if proposed <= 0:
             return "Critical", "Precio propuesto 0 o negativo. Operacion bloqueada."
         if old_price <= 0:
