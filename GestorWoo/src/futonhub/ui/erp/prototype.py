@@ -31,6 +31,7 @@ from futonhub.cloud.services.security_logs import (
 )
 from futonhub.cloud.auth import (
     SupabaseAuthError,
+    sign_out_session,
     SupabaseRefreshSessionError,
     register_device_seen,
     sign_in_with_password,
@@ -1152,11 +1153,15 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         self._logout_change_user_confirmed()
 
     def _logout_change_user_confirmed(self) -> None:
-        previous_email = str(getattr(getattr(self, "_cloud_session", None), "email", "") or "").strip()
+        ending_session = getattr(self, "_cloud_session", None)
+        previous_email = str(getattr(ending_session, "email", "") or "").strip()
         self._remembered_login_cancelled = True
         self._login_in_progress = False
         clear_remembered_session()
         self._cloud_session = None
+        if ending_session is not None:
+            # Revoca el refresh token de ESTA sesion en Supabase sin bloquear la interfaz.
+            threading.Thread(target=sign_out_session, args=(ending_session,), daemon=True).start()
         self._hide_login_loading()
         self._reset_session_state_after_logout()
         try:

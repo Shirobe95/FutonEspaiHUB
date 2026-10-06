@@ -56,6 +56,22 @@ def _apply_authenticated_token(client: Any, access_token: str | None, refresh_to
             pass
 
 
+def sign_out_session(session: "CloudUserSession | None") -> bool:
+    """Revoca en Supabase SOLO esta sesion (scope local) al cerrar sesion en el ERP.
+
+    Mejor esfuerzo: nunca lanza. Scope ``local`` para no cerrar la sesion del mismo usuario en
+    otros PCs. Devuelve True si Supabase confirmo el cierre.
+    """
+    sign_out = getattr(getattr(getattr(session, "client", None), "auth", None), "sign_out", None)
+    if not callable(sign_out):
+        return False
+    try:
+        sign_out({"scope": "local"})
+    except Exception:
+        return False
+    return True
+
+
 def sign_in_with_password(
     email: str,
     password: str,
