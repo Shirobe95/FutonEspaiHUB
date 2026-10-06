@@ -119,5 +119,23 @@ class UiRuntimeContractTests(unittest.TestCase):
         self.assertEqual(undefined_exception_names(source), set())
 
 
+class PreviewCloseWhilePublishingTests(unittest.TestCase):
+    """Cerrar la ventana de publicacion/restauracion durante la operacion dejaba lanzar otra en paralelo."""
+
+    def test_close_is_ignored_while_the_operation_runs(self) -> None:
+        source = (SRC / "futonhub" / "ui" / "erp" / "prototype.py").read_text(encoding="utf-8")
+        for flag in ("publishing", "restoring"):
+            self.assertIn(f'{flag} = {{"active": False}}', source)
+            self.assertIn(f'if {flag}["active"] and not force:', source)
+            self.assertIn(f'{flag}["active"] = True', source)
+            self.assertIn(f'{flag}["active"] = False', source)
+
+    def test_finished_callbacks_release_the_flag_before_closing(self) -> None:
+        source = (SRC / "futonhub" / "ui" / "erp" / "prototype.py").read_text(encoding="utf-8")
+        for finished, flag in (("publish_finished", "publishing"), ("restore_finished", "restoring")):
+            head = source.split(f"def {finished}(", 1)[1].split("\n", 2)[1]
+            self.assertIn(f'{flag}["active"] = False', head)
+
+
 if __name__ == "__main__":
     unittest.main()

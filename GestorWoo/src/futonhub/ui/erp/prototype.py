@@ -4347,7 +4347,13 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         progress_label = tk.Label(footer, text="", bg=BG, fg=INDIGO, anchor=tk.W)
         progress_label.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=12)
 
-        def close_preview() -> None:
+        # Mientras se publica no se puede cerrar la ventana (X o Escape): cerrarla reseteaba la marca de
+        # "publicacion en curso" con el hilo todavia escribiendo en WooCommerce y permitia lanzar otra publicacion.
+        publishing = {"active": False}
+
+        def close_preview(force: bool = False) -> None:
+            if publishing["active"] and not force:
+                return
             if not win.winfo_exists():
                 return
             try:
@@ -4358,6 +4364,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             self._price_publish_in_progress = False
 
         def publish() -> None:
+            publishing["active"] = True
             publish_button.configure(state=tk.DISABLED)
             cancel_button.configure(state=tk.DISABLED)
             progress_label.configure(text="Publicando precios en WooCommerce...")
@@ -4389,6 +4396,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             threading.Thread(target=publish_worker, daemon=True).start()
 
         def publish_finished(result: dict[str, Any] | None, error: str) -> None:
+            publishing["active"] = False
             if error:
                 progress_label.configure(text=error, fg=ROSE)
                 publish_button.configure(state=tk.NORMAL)
@@ -4599,7 +4607,11 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         progress_label = tk.Label(footer, text="", bg=BG, fg=INDIGO, anchor=tk.W)
         progress_label.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=12)
 
-        def close_preview() -> None:
+        restoring = {"active": False}  # ver el comentario equivalente de la ventana de publicacion
+
+        def close_preview(force: bool = False) -> None:
+            if restoring["active"] and not force:
+                return
             if not win.winfo_exists():
                 return
             try:
@@ -4610,6 +4622,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             self._price_restore_in_progress = False
 
         def restore() -> None:
+            restoring["active"] = True
             restore_button.configure(state=tk.DISABLED)
             cancel_button.configure(state=tk.DISABLED)
             progress_label.configure(text="Restaurando precios en WooCommerce...")
@@ -4634,6 +4647,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             threading.Thread(target=restore_worker, daemon=True).start()
 
         def restore_finished(result: dict[str, Any] | None, error: str) -> None:
+            restoring["active"] = False
             if error:
                 progress_label.configure(text=error, fg=ROSE)
                 restore_button.configure(state=tk.NORMAL)
