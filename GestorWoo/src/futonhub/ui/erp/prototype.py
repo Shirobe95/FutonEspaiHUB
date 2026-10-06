@@ -14649,11 +14649,14 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
     def _system_status(self, parent: tk.Frame) -> tk.Frame:
         frame = self._card(parent)
         tk.Label(frame, text="Estado del sistema", bg=CARD, fg=TEXT, font=("Segoe UI", 14, "bold")).pack(anchor=tk.W, padx=16, pady=(16, 8))
+        # Solo se afirma lo que se sabe: antes eran textos fijos («Conectado», «API disponible»).
+        session = self.__dict__.get("_cloud_session")
+        supabase = ("Sesion activa", "OK") if session is not None else ("Sin sesion", "Info")
         for label, detail, status in [
-            ("Supabase", "Conectado", "OK"),
-            ("WooCommerce", "API disponible", "OK"),
+            ("Supabase", *supabase),
+            ("WooCommerce", "Se comprueba al publicar", "Info"),
             ("Modo protegido", "Preview obligatorio", "OK"),
-            ("Locks", "Sin bloqueos activos", "Info"),
+            ("Locks", "No comprobado", "Info"),
         ]:
             self._status_row(frame, label, detail, status).pack(fill=tk.X, padx=16, pady=5)
         return frame
