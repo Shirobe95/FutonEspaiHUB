@@ -6,11 +6,11 @@ Código: `preview_price_proposal_group` / `publish_price_proposal_group` (`cloud
 
 | Hallazgo | ¿Afecta al flujo real? | Estado en esta rama | Propuesta |
 |---|---|---|---|
-| W1 fechas de oferta ignoradas en `_effective_woo_price` | **Sí** (grupo y verificación usan ese cálculo). Solo ocurre si el producto tiene oferta programada/futura. | Sin cambio (toca la lógica de precios) | Diario: usar el precio visible de Woo (`price`) o respetar `date_on_sale_from/to`; tests con casos de oferta futura y caducada. |
+| W1 fechas de oferta ignoradas en `_effective_woo_price` | Sí, pero **decisión de negocio: se trabaja siempre con el precio vigente en Woo** y Futón Espai decide si tiene en cuenta ofertas programadas. | Sin cambio (decidido) | — |
 | W2 `confirm`/rol | **No** (era del flujo individual y el CLI, no usados; además los workers pueden publicar). | Retirado del requisito | — |
-| W3 bajada validada contra el espejo (`cloud_item`), no contra Woo vivo | **Sí**: el preview lee Woo vivo para mostrar el precio actual, pero el umbral de bajada se evalúa con el espejo. | Umbral ahora de Supabase | Diario: evaluar el % contra el precio vivo de Woo en el preview y en la revalidación bajo lock. |
+| W3 bajada validada contra el espejo, no contra Woo vivo | Sí | **Corregido**: el preview de grupo compara aviso y bloqueo con el precio vivo de Woo (`_item_with_live_price`); 3 tests (espejo bajo/alto/aviso). La creación de propuestas ya usaba el precio vivo (`price_at_creation`). El flujo individual legacy no se usa y queda como estaba. | — |
 | W4 `nan`/`inf` | Sí | **Corregido** (`money_or_none`, validadores de UI) | — |
-| W5 WARNING publica sin confirmación; sin tope a subidas; sin comprobar `status` | **Sí**, pero el preview muestra el estado de cada línea antes de aplicar. | Sin cambio | Diario: pedir confirmación explícita si hay líneas WARNING y definir tope de subida y estados (`publish`) permitidos. |
+| W5 WARNING publica sin confirmación; sin tope a subidas; sin comprobar `status` | Sí, pero **decisión de negocio**: los avisos se muestran en el preview y la decisión de publicar es de Futón Espai. | Sin cambio (decidido) | — |
 | W6/W7/W8 fallos intermedios y rollback | Parcial: afectan a fallos a mitad de lote. | Sin cambio | Diario: revisar `except: pass` de los UPDATE de estado y el reintento del target ya fallido. |
 | U2 cerrar ventana mientras publica | Sí | **Corregido** | — |
 | D1 trazabilidad con kwargs inexistentes | Sí (constantes, proveedores, importación) | **Corregido** + test de contrato | — |

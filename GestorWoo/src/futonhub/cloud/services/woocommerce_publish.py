@@ -116,6 +116,17 @@ def _authenticated_actor(session) -> dict[str, str]:
 def _safe_money(value: Any) -> float | None:
     return _money_or_none(value)
 
+def _item_with_live_price(cloud_item: dict[str, Any] | None, live_price: Any) -> dict[str, Any]:
+    """Copia del item con el precio vivo de Woo como precio actual (sin tocar el original)."""
+    item = dict(cloud_item or {})
+    price = _safe_money(live_price)
+    if price is not None:
+        item["price"] = price
+        item["regular_price"] = price
+        item["sale_price"] = None
+    return item
+
+
 def _effective_woo_price(data: dict[str, Any] | None) -> float | None:
     data = data or {}
     sale = _safe_money(data.get("sale_price"))
@@ -2632,8 +2643,10 @@ def preview_price_proposal_group_publish(
                         functional_status = status
                         reason = "El payload recalculado no coincide con el preview persistido."
                         raise CloudAuditError(reason)
+                # El umbral de bajada se compara con el precio vivo de Woo (el que se va a
+                # sobrescribir), no con el espejo de Supabase, que puede estar desfasado.
                 validation = _price_safety_preview(
-                    target["cloud_item"],
+                    _item_with_live_price(target["cloud_item"], woo_price),
                     kind,
                     new_price,
                     apply_cloud_price_thresholds(session, settings),
