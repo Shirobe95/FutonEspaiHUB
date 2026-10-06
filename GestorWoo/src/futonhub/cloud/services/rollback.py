@@ -4,7 +4,15 @@ import json
 from datetime import datetime, timezone
 from typing import Any
 
-from futonhub.cloud.audit import CloudAuditError
+from futonhub.cloud.audit import (
+    AuditEvent,
+    CloudAuditError,
+    OperationSnapshot,
+    new_operation_id,
+    write_audit_event,
+    write_snapshot,
+)
+from futonhub.core.config import Settings, load_settings
 
 def json_safe(value: Any) -> Any:
     try:
@@ -154,7 +162,7 @@ def rollback_update_payload(table: str, key: str, before: dict[str, Any], *, use
 def preview_rollback_from_snapshot(session, operation_id: str) -> dict[str, Any]:
     _require_admin_role(session)
     snapshot = _fetch_snapshot_by_operation_id(session, operation_id)
-    before, table, key, key_value = _rollback_target_from_snapshot(snapshot)
+    before, table, key, key_value = rollback_target_from_snapshot(snapshot)
     current = _fetch_current_row_for_rollback(session, table, key, key_value)
     if current is None:
         raise CloudAuditError(f'No existe fila actual en {table} donde {key}={key_value}. No se puede revertir automaticamente.')
@@ -189,7 +197,7 @@ def format_rollback_preview(preview: dict[str, Any]) -> str:
     snap = preview.get('snapshot') or {}
     current = preview.get('current_data') or {}
     before = preview.get('before_data') or {}
-    diff = _short_json_diff(before, current)
+    diff = short_json_diff(before, current)
     lines = [
         'PREVIEW ROLLBACK DESDE SNAPSHOT',
         '=' * 48,
@@ -237,7 +245,7 @@ def execute_rollback_from_snapshot(session, operation_id: str, settings: Setting
     )
     write_snapshot(session, rollback_snapshot)
 
-    payload = _rollback_update_payload(table, key, before, user_id=session.user_id)
+    payload = rollback_update_payload(table, key, before, user_id=session.user_id)
     if not payload:
         raise CloudAuditError('No hay datos restaurables en el snapshot despues de limpiar claves protegidas.')
     resp = session.client.table(table).update(payload).eq(key, key_value).execute()
