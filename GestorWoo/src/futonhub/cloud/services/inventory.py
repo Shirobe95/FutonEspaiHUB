@@ -40,13 +40,20 @@ INVENTORY_EDITABLE_FIELDS = {
 }
 
 NUMERIC_INVENTORY_FIELDS = {'cubic_meters', 'rotation_c', 'packages', 'primary_supplier_price', 'pascal_price', 'store_stock', 'warehouse_stock'}
+# En Supabase estas columnas son ``integer``: enviar 3.0 hace que PostgREST rechace el UPDATE.
+INTEGER_INVENTORY_FIELDS = {'packages'}
 
 
 def _normalize_inventory_edit_value(field: str, value: Any) -> Any:
     if value is None:
         return None
     if field in NUMERIC_INVENTORY_FIELDS:
-        return _coerce_optional_float(value)
+        number = _coerce_optional_float(value)
+        if number is not None and field in INTEGER_INVENTORY_FIELDS:
+            if not float(number).is_integer():
+                raise CloudAuditError(f'{field} debe ser un número entero (recibido {value!r}).')
+            return int(number)
+        return number
     text = str(value).strip()
     return text if text else None
 

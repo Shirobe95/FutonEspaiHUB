@@ -102,18 +102,31 @@ def _safe_float_env(key: str, default: float) -> float:
     except Exception:
         return float(default)
 
+def _parse_env_value(raw: str) -> str:
+    value = raw.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+        return value[1:-1]
+    # Sin comillas: " # comentario" al final de la línea no forma parte del valor.
+    for index in range(1, len(value)):
+        if value[index] == "#" and value[index - 1] in " \t":
+            return value[:index].rstrip()
+    return value
+
+
 def load_env_file(path: Path) -> None:
     if not path.exists():
         return
 
-    for raw_line in path.read_text(encoding="utf-8").splitlines():
+    # utf-8-sig: un BOM (Bloc de notas de Windows) no debe pegarse a la primera clave.
+    for raw_line in path.read_text(encoding="utf-8-sig").splitlines():
         line = raw_line.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
         key, value = line.split("=", 1)
         key = key.strip()
-        value = value.strip().strip('"').strip("'")
-        os.environ[key] = value
+        if key.startswith("export "):
+            key = key[len("export "):].strip()
+        os.environ[key] = _parse_env_value(value)
 
 
 def _machine_name(configured: str | None = None) -> str:

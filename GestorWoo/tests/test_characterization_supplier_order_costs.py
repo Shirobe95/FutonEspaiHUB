@@ -272,6 +272,16 @@ def inventory_row(
 
 
 class SupplierOrderCostTests(unittest.TestCase):
+    def setUp(self) -> None:
+        # Hermético: estas pruebas describen el flujo con credenciales Woo presentes,
+        # sin depender de que la máquina tenga WOOCOMMERCE_* en el entorno.
+        patcher = patch.dict(
+            "os.environ",
+            {"WOOCOMMERCE_URL": "http://woo.invalid", "WOOCOMMERCE_CONSUMER_KEY": "k", "WOOCOMMERCE_CONSUMER_SECRET": "s"},
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def download_constants(self, total_download_cost: float = 302.50) -> dict[str, float]:
         return {
             "IMPORTE_DESCARGA_MT": 0.0,

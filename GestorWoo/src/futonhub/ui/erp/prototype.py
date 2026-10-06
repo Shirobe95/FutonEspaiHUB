@@ -184,6 +184,7 @@ from futonhub.security.remembered_session import (
 )
 from futonhub.ui.theme import apply_theme
 from futonhub.ui.windowing import center_window
+from futonhub.ui.erp.preview_text import format_reception_line
 from futonhub.ui.erp.dashboard import ErpDashboardMixin
 from futonhub.ui.erp.formula_library import ErpFormulaLibraryMixin
 from futonhub.ui.erp.catalog_filters import (
@@ -1230,7 +1231,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         self._price_catalog_items = []
         self._price_catalog_loaded_once = False
         self._price_catalog_loading = False
-        self._price_catalog_generation = 0
+        self._price_catalog_generation = int(self.__dict__.get("_price_catalog_generation", 0) or 0) + 1
         self._price_catalog_error = ""
         self._price_catalog_stage_counts = {}
         self._price_catalog_reconciliation = {}
@@ -1238,13 +1239,13 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         self._price_approved_woo_edges_by_item_id = {}
         self._price_filter_metadata_by_physical_item = {}
         self._price_filter_options_cache = {}
-        self._price_filter_metadata_generation = 0
+        self._price_filter_metadata_generation = int(self.__dict__.get("_price_filter_metadata_generation", 0) or 0) + 1
         self._price_filter_performance = {}
         self._price_selectable_catalog_audit = {}
         self._price_search_results = []
         self._price_items_loading = False
         self._price_items_error = ""
-        self._price_items_generation = 0
+        self._price_items_generation = int(self.__dict__.get("_price_items_generation", 0) or 0) + 1
         self._price_candidate_page = 0
         self._price_candidate_page_size = PRICE_CANDIDATE_PAGE_SIZE
         self._price_visible_candidate_ids = set()
@@ -1255,7 +1256,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         self._price_live_price_traces = []
         self._price_live_sync_in_progress = False
         self._price_live_sync_completed = False
-        self._price_live_sync_generation = 0
+        self._price_live_sync_generation = int(self.__dict__.get("_price_live_sync_generation", 0) or 0) + 1
         self._price_live_sync_summary = {}
         self._price_live_sync_error_physical_item_ids = set()
         self._price_live_sync_required = False
@@ -1268,7 +1269,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         self._price_add_in_progress = False
         self._price_bulk_add_in_progress = False
         self._price_save_token = ""
-        self._price_refresh_generation = 0
+        self._price_refresh_generation = int(self.__dict__.get("_price_refresh_generation", 0) or 0) + 1
         self._price_refresh_diagnostics = []
         self._price_next_refresh_source = ""
         self._price_refresh_preferred_token = ""
@@ -1276,7 +1277,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         self._price_history_page_size = PRICE_PROPOSAL_HISTORY_DEFAULT_PAGE_SIZE
         self._price_history_has_next_page = False
         self._price_detail_loading_key = ""
-        self._price_detail_generation = 0
+        self._price_detail_generation = int(self.__dict__.get("_price_detail_generation", 0) or 0) + 1
         self._supplier_orders = []
         self._orders_loaded_once = False
         self._orders_loading = False
@@ -11914,12 +11915,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 "",
             ]
             for line in lines[:12]:
-                msg.append(
-                    f"{line.get('item_code')} - {line.get('item_name')}: "
-                    f"+{line.get('quantity_received_now'):g} "
-                    f"Stock tienda {line.get('store_stock_before'):g}{line.get('store_stock_after'):g} - "
-                    f"almacen {line.get('warehouse_stock_before'):g}{line.get('warehouse_stock_after'):g}"
-                )
+                msg.append(format_reception_line(line))
             if len(lines) > 12:
                 msg.append(f"... y {len(lines) - 12} lineas mas")
             messagebox.showinfo("Preview recepcion", "\n".join(msg))
