@@ -2,8 +2,8 @@
 -- PROPUESTA (NO APLICADA EN PRODUCCION) · S_hardening_001 · rama test/upgrade-001
 -- Endurecimiento de seguridad de Supabase derivado de la auditoria 2026-10 (S1-S10).
 -- Probada SOLO en un Postgres de laboratorio con el esquema vivo reconstruido.
--- Bloques independientes (A..F); cada uno se puede aplicar por separado. El bloque E
--- (guarda de estados de propuestas) requiere una decision de negocio.
+-- Bloques independientes (A..F); cada uno se puede aplicar por separado. El bloque E es la guarda de integridad
+-- de propuestas de precio (NO restringe quien aprueba/publica: los workers publican).
 -- =====================================================================================
 begin;
 
@@ -176,25 +176,25 @@ begin
 end;
 $function$;
 
--- ---------- E. (REQUIERE DECISION) Un worker no puede aprobar/publicar propuestas de precio ----------
--- Hoy la politica UPDATE permite a un worker poner status='published'/'approved'/'publishing' y rellenar
--- reviewed_by/published_by. Este trigger lo restringe a admin. Si los workers deben poder publicar, no aplicar E.
+-- ---------- E. Integridad de propuestas de precio (los workers SI pueden aprobar/publicar) ----------
+-- Decision de negocio 2026-10-06: los workers publican precios. Este trigger NO restringe el flujo de estados; solo evita
+--  (1) que alguien se atribuya la revision/publicacion de OTRO usuario (reviewed_by/published_by solo pueden ser auth.uid()), y
+--  (2) que se modifique el precio/destino de una propuesta ya aprobada, en publicacion o publicada (lo aprobado es lo que se publica).
 create or replace function public.price_change_proposals_guard() returns trigger
  language plpgsql security definer set search_path to 'public' as $function$
 begin
   if public.is_admin() or auth.uid() is null then
-    return new;  -- admin, o service_role/sesiones sin JWT de usuario (migraciones, mantenimiento)
+    return new;  -- admin, o service_role/mantenimiento sin JWT de usuario
   end if;
-  if new.status is distinct from old.status and new.status in ('approved','publishing','published','rolled_back') then
-    raise exception 'Solo un admin puede cambiar una propuesta a %', new.status;
+  if new.reviewed_by is distinct from old.reviewed_by and new.reviewed_by is not null and new.reviewed_by <> auth.uid() then
+    raise exception 'reviewed_by solo puede ser el usuario autenticado';
   end if;
-  if new.reviewed_by is distinct from old.reviewed_by or new.published_by is distinct from old.published_by
-     or new.reviewed_at is distinct from old.reviewed_at or new.published_at is distinct from old.published_at then
-    raise exception 'Solo un admin puede modificar los campos de revision/publicacion';
+  if new.published_by is distinct from old.published_by and new.published_by is not null and new.published_by <> auth.uid() then
+    raise exception 'published_by solo puede ser el usuario autenticado';
   end if;
-  if old.status in ('approved','publishing','published','rolled_back') and
+  if old.status in ('approved','publishing','published') and
      (new.new_price is distinct from old.new_price or new.old_price is distinct from old.old_price or new.item_woo_id is distinct from old.item_woo_id) then
-    raise exception 'No se puede modificar el precio de una propuesta ya %', old.status;
+    raise exception 'No se puede modificar el precio o el destino de una propuesta ya %', old.status;
   end if;
   return new;
 end;

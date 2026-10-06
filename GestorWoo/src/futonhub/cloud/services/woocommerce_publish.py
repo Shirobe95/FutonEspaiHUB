@@ -2068,8 +2068,8 @@ def publish_woocommerce_price(session, *, proposal_id: str, confirm: str = "", a
     """
     settings = settings or load_settings()
     _authenticated_actor(session)
-    if (getattr(session, "role", "") or "").strip().lower() != "admin":
-        raise CloudAuditError("Solo un admin puede publicar precios en WooCommerce.")
+    # Los workers pueden publicar precios (decision del negocio 2026-10-06): solo se exige sesion de usuario
+    # identificable (arriba) y la confirmacion explicita.
     if (confirm or "").strip().upper() != "PUBLICAR":
         raise CloudAuditError("Publicacion no confirmada: se requiere la confirmacion explicita PUBLICAR.")
     proposal_id = (proposal_id or "").strip()

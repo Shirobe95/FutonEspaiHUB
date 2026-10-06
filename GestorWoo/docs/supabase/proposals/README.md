@@ -13,17 +13,17 @@ revisión y la reversión lista (`S_hardening_001_rollback.sql`).
 | C | `GRANT ALL` a `anon` y `TRUNCATE/TRIGGER/REFERENCES` a `authenticated` sobre todas las tablas: un worker podía `TRUNCATE audit_logs` (RLS no protege `TRUNCATE`). Se quitan. | Ninguna prevista: el ERP no usa `TRUNCATE` ni accede como `anon`. |
 | D | Vistas `v_inventory_*` legibles por `anon` (cubierto por C). **No** se usa `security_invoker`: dejaría la búsqueda de componentes en 0 filas. | — |
 | F | `futonhub_acquire_system_lock` no era atómico para claves nuevas (en la prueba, 284 de 300 carreras terminaron con **dos** locks adquiridos). Ahora `INSERT … ON CONFLICT DO NOTHING` primero. | Ninguna (misma firma y mismo contrato JSON). |
-| E | **Requiere decisión de negocio.** Un worker podía poner `status='published'/'approved'/'publishing'` y rellenar `reviewed_by/published_by`. Un trigger lo limita a admin y congela el precio de propuestas ya aprobadas/publicadas. | Si los workers deben poder publicar precios, **no aplicar E** (o ajustar la lista de estados). Hoy el ERP publica con la sesión del usuario: un worker que publique empezaría a recibir error. |
+| E | Los workers **sí** pueden aprobar y publicar precios (decisión del negocio 2026-10-06): el estado no se restringe. Un trigger evita (1) atribuirse la revisión/publicación de **otro** usuario (`reviewed_by`/`published_by` solo pueden ser el propio `auth.uid()`) y (2) cambiar precio o destino de una propuesta ya aprobada, en publicación o publicada. | Ninguna prevista: el ERP ya rellena esos campos con el usuario de la sesión. |
 
 ## Evidencia en laboratorio
 - 108 ataques de la auditoría, antes/después: `evidence_attacks_before.txt` / `evidence_attacks_after.txt`
   (`../lab/run_lab.sh ../proposals/S_hardening_001.sql` los regenera).
-- Antes → después: `UPDATE status='published'` por worker (UPDATE 1 → error), RPC de logs por `anon` (devuelve filas → denegado),
+- Antes → después: RPC de logs por `anon` (devuelve filas → denegado),
   `TRUNCATE audit_logs` por worker (TRUNCATE → denegado), `INSERT` de auditoría falsa (insertado → violación de RLS),
   vistas como `anon` (legibles → denegado), `clean_*` por `anon` (borraba → denegado).
 - Carreras de locks (300 × 3 escenarios): clave nueva **0/300 dobles** (antes 284/300) — `evidence_lock_race_after.txt`.
-- Flujos legítimos comprobados tras aplicar: worker escribe su auditoría (fallback REST), edita/rechaza una propuesta
-  pendiente, admin aprueba→publica→revierte, admin lee logs por RPC y limpia el inventario simulado, `service_role` sigue
+- Flujos legítimos comprobados tras aplicar: worker escribe su auditoría (fallback REST), edita una propuesta
+  pendiente y la aprueba→publica él mismo, admin aprueba→publica→revierte, admin lee logs por RPC y limpia el inventario simulado, `service_role` sigue
   pudiendo mantener estados, y los workers siguen viendo la búsqueda de componentes.
 - Reversión: aplicar + revertir en dos bases limpias deja el esquema y los ACL **idénticos** (diff de `pg_dump -s`).
 

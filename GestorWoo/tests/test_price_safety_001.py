@@ -1,4 +1,4 @@
-"""Seguridad de precios (auditoria 2026-10, corte 5a): NaN/inf, confirmacion y rol al publicar."""
+"""Seguridad de precios (auditoria 2026-10, corte 5a): NaN/inf y confirmacion al publicar (los workers SI pueden publicar)."""
 from __future__ import annotations
 
 import math
@@ -78,9 +78,12 @@ class PublishGuardsTests(unittest.TestCase):
             self.session(role), proposal_id="p-1", confirm=confirm, acknowledge_warnings=True, settings=SimpleNamespace()
         )
 
-    def test_worker_cannot_publish(self) -> None:
-        with self.assertRaisesRegex(CloudAuditError, "admin"):
+    def test_worker_can_publish_when_confirmed(self) -> None:
+        # Decision de negocio: los workers publican. Pasa los controles y falla despues, en la E/S (cliente falso).
+        with self.assertRaises(Exception) as caught:
             self.publish("worker", "PUBLICAR")
+        self.assertNotIn("admin", str(caught.exception).lower().replace("administr", ""))
+        self.assertNotIn("confirmacion explicita", str(caught.exception))
 
     def test_missing_or_wrong_confirmation_is_rejected_before_any_io(self) -> None:
         for confirm in ("", "publicar ya", "SI", None):

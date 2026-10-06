@@ -3,36 +3,32 @@
     BEGIN
     SET
     bbbbbbbb-0000-0000-0000-000000000002
-    ERROR:  Solo un admin puede cambiar una propuesta a published
-    CONTEXT:  PL/pgSQL function price_change_proposals_guard() line 7 at RAISE
+    UPDATE 1
     ROLLBACK
 ### a-approved | authenticated uid=bbbb | UPDATE price_change_proposals SET status='approved' WHERE id='11111111-1111-1111-1111-111111111111';
     BEGIN
     SET
     bbbbbbbb-0000-0000-0000-000000000002
-    ERROR:  Solo un admin puede cambiar una propuesta a approved
-    CONTEXT:  PL/pgSQL function price_change_proposals_guard() line 7 at RAISE
+    UPDATE 1
     ROLLBACK
 ### a-publishing | authenticated uid=bbbb | UPDATE price_change_proposals SET status='publishing' WHERE id='11111111-1111-1111-1111-111111111111';
     BEGIN
     SET
     bbbbbbbb-0000-0000-0000-000000000002
-    ERROR:  Solo un admin puede cambiar una propuesta a publishing
-    CONTEXT:  PL/pgSQL function price_change_proposals_guard() line 7 at RAISE
+    UPDATE 1
     ROLLBACK
 ### a-rolled_back | authenticated uid=bbbb | UPDATE price_change_proposals SET status='rolled_back' WHERE id='11111111-1111-1111-1111-111111111111';
     BEGIN
     SET
     bbbbbbbb-0000-0000-0000-000000000002
-    ERROR:  Solo un admin puede cambiar una propuesta a rolled_back
-    CONTEXT:  PL/pgSQL function price_change_proposals_guard() line 7 at RAISE
+    UPDATE 1
     ROLLBACK
 ### a-reviewed_by | authenticated uid=bbbb | UPDATE price_change_proposals SET reviewed_by='aaaaaaaa-0000-0000-0000-000000000001', published_by='aaaaaaaa-0000-0000-0000-000000000001', reviewed_at=now(), published_at=now() WHERE id='11111111-1111-1111-1111-111111111111'; SELECT reviewed_by,published_by FROM price_change_proposals WHERE id='11111111-1111-1111-1111-111111111111';
     BEGIN
     SET
     bbbbbbbb-0000-0000-0000-000000000002
-    ERROR:  Solo un admin puede modificar los campos de revision/publicacion
-    CONTEXT:  PL/pgSQL function price_change_proposals_guard() line 11 at RAISE
+    ERROR:  reviewed_by solo puede ser el usuario autenticado
+    CONTEXT:  PL/pgSQL function price_change_proposals_guard() line 7 at RAISE
     ERROR:  current transaction is aborted, commands ignored until end of transaction block
     ROLLBACK
 ### a-source_row | authenticated uid=bbbb | UPDATE price_change_proposals SET source_row='{"forged":true}', new_price=0.01 WHERE id='11111111-1111-1111-1111-111111111111'; SELECT source_row,new_price FROM price_change_proposals WHERE id='11111111-1111-1111-1111-111111111111';
