@@ -18,6 +18,7 @@ from typing import Any, Callable
 from urllib.parse import quote
 
 from gestorwoo.woocommerce import WooCommerceClient, WooCommerceError
+from futonhub.version_info import app_version_label
 from futonhub.cloud.audit import CloudAuditError, list_audit_logs as legacy_list_audit_logs, list_operation_snapshots as legacy_list_operation_snapshots
 from futonhub.cloud.services.security_logs import (
     build_before_after_diff,
@@ -641,7 +642,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
 
     def __init__(self) -> None:
         super().__init__()
-        self.title("FutonHUB - UI ERP Prototype")
+        self.title(f"FutonHUB ERP {app_version_label()}")
         center_window(self, 1280, 760)
         self.minsize(1000, 620)
         self.configure(bg=BG)

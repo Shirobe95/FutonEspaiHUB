@@ -1,5 +1,22 @@
 # Changelog
 
+## Sin publicar · rama test/upgrade-001
+
+Auditoría 2026-10 (cortes 1-4), sin cambios funcionales de negocio:
+
+- Las 12 llamadas a `AuditEvent`/`OperationSnapshot` con campos inexistentes usan ya los campos
+  del modelo; las operaciones vuelven a dejar snapshot y registro de auditoría.
+- UI: lambdas que usaban la variable de un `except` (NameError), `_render_content` inexistente
+  y `CloudAuditError` sin importar.
+- Eliminadas 23 funciones duplicadas e inalcanzables de `services/` con nombres sin definir;
+  `services/rollback.py` corregido; la biblioteca de fórmulas apunta a `prices.py`.
+- Tests: los que dependen de artefactos no versionados (`auditoria/out`, scripts de auditoría)
+  se omiten con motivo explícito en lugar de fallar.
+- Higiene de release: eliminado `MANIFEST_SHA256.txt` (obsoleto y sin uso; la trazabilidad es el
+  commit/tag y el `SOURCE_COMMIT` que escribe el launcher), `.gitignore` cubre `.venv*/`, la ventana
+  principal muestra `vX.Y.Z · commit` y un test comprueba que pyproject, `__version__` y CHANGELOG
+  coinciden.
+
 ## 0.6.4 · Funda 14 cm Catalogue & Graph Hotfix
 
 - Normaliza Fundas 90x200x14,5 cm a la familia operativa 90x200x14.
