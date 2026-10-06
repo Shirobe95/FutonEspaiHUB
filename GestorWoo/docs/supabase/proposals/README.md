@@ -32,3 +32,15 @@ revisión y la reversión lista (`S_hardening_001_rollback.sql`).
 - El esquema vivo se reconstruyó por lectura; si el proyecto cambió desde entonces, regenerar `live_schema.sql`.
 - Cubre S1–S4 y el bloqueo de TRUNCATE. **No** cubre aún: `script 19 elimina 'rolled_back' del CHECK tras 011`, ni que el SQL
   versionado del repo no reconstruya el esquema vivo (S10): `../lab/live_schema.sql` es un primer paso, no una migración.
+
+---
+# Propuesta D_integrity_001 (Supabase) — NO aplicada en producción
+`supplier_order_items` no tiene política `DELETE`: al editar un borrador de pedido el ERP borra las líneas sobrantes y
+PostgREST responde 0 filas **sin error**, así que el código cree que borró y las líneas reaparecen («fantasmas») con datos viejos
+(auditoría, flujo `update_supplier_order_draft`). `D_integrity_001.sql` añade la política para worker/admin activos
+(los mismos que ya pueden insertar/actualizar líneas). Probada en laboratorio: antes `DELETE 0`, después `DELETE 1`; un worker
+inactivo y `anon` siguen sin poder. Reversión: `D_integrity_001_rollback.sql`.
+
+Pendiente (no es solo SQL): `receive_supplier_order` no es atómica ni usa bloqueo optimista (dos recepciones simultáneas pierden
+una actualización; un fallo a mitad duplica stock al reintentar) y nunca actualiza `weighted_average_cost`. Requiere una RPC
+transaccional y un cambio de aplicación: corte 6, modo DIARIO.
