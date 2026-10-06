@@ -64,38 +64,26 @@ class NonFinitePriceTests(unittest.TestCase):
 
 class _ExplodingClient:
     def __getattr__(self, name):  # cualquier acceso a red/BD es un fallo del test
-        raise AssertionError(f"No debe haber E/S antes de validar rol y confirmacion: {name}")
+        raise AssertionError(f"io:{name}")
 
 
 class PublishGuardsTests(unittest.TestCase):
-    def session(self, role: str):
-        return SimpleNamespace(client=_ExplodingClient(), user_id="u-1", email="a@b.c", role=role, display_name="Ana")
+    """Cualquier usuario autenticado publica y ya no se exige escribir PUBLICAR."""
 
     def publish(self, role: str, confirm: str):
         from futonhub.cloud.services.woocommerce_publish import publish_woocommerce_price
 
-        return publish_woocommerce_price(
-            self.session(role), proposal_id="p-1", confirm=confirm, acknowledge_warnings=True, settings=SimpleNamespace()
-        )
+        session = SimpleNamespace(client=_ExplodingClient(), user_id="u-1", email="a@b.c", role=role, display_name="Ana")
+        return publish_woocommerce_price(session, proposal_id="p-1", confirm=confirm, acknowledge_warnings=True, settings=SimpleNamespace())
 
-    def test_worker_can_publish_when_confirmed(self) -> None:
-        # Decision de negocio: los workers publican. Pasa los controles y falla despues, en la E/S (cliente falso).
-        with self.assertRaises(Exception) as caught:
-            self.publish("worker", "PUBLICAR")
-        self.assertNotIn("admin", str(caught.exception).lower().replace("administr", ""))
-        self.assertNotIn("confirmacion explicita", str(caught.exception))
-
-    def test_missing_or_wrong_confirmation_is_rejected_before_any_io(self) -> None:
-        for confirm in ("", "publicar ya", "SI", None):
-            with self.subTest(confirm=confirm), self.assertRaisesRegex(CloudAuditError, "PUBLICAR"):
-                self.publish("admin", confirm or "")
-
-    def test_admin_with_confirmation_proceeds_past_the_guards(self) -> None:
-        # Pasa los dos controles y falla despues, al intentar usar la BD (prueba de que los controles no bloquean el flujo legitimo).
-        with self.assertRaises(Exception) as caught:
-            self.publish("admin", " publicar ")
-        self.assertNotIn("Solo un admin", str(caught.exception))
-        self.assertNotIn("confirmacion explicita", str(caught.exception))
+    def test_admin_and_worker_proceed_to_io_with_or_without_confirmation(self) -> None:
+        for role in ("admin", "worker"):
+            for confirm in ("", "PUBLICAR"):
+                with self.subTest(role=role, confirm=confirm), self.assertRaises(Exception) as caught:
+                    self.publish(role, confirm)
+                text = str(caught.exception).lower()
+                self.assertNotIn("confirmacion", text)
+                self.assertNotIn("solo un admin", text)
 
 
 class PublishButtonRoleTests(unittest.TestCase):

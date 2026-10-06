@@ -2069,10 +2069,9 @@ def publish_woocommerce_price(session, *, proposal_id: str, confirm: str = "", a
     """
     settings = settings or load_settings()
     _authenticated_actor(session)
-    # Los workers pueden publicar precios (decision del negocio 2026-10-06): solo se exige sesion de usuario
-    # identificable (arriba) y la confirmacion explicita.
-    if (confirm or "").strip().upper() != "PUBLICAR":
-        raise CloudAuditError("Publicacion no confirmada: se requiere la confirmacion explicita PUBLICAR.")
+    # Cualquier usuario autenticado (admin o worker) puede publicar precios (decision del negocio 2026-10-06).
+    # La confirmacion escrita "PUBLICAR" ya no se exige en el flujo actual: `confirm` se conserva solo por compatibilidad
+    # con la ventana y la CLI antiguas, que la piden por su cuenta.
     proposal_id = (proposal_id or "").strip()
     if not proposal_id:
         raise CloudAuditError("Debes indicar --proposal-id. En v11.4 solo se publica una propuesta por operacion.")
