@@ -11,14 +11,16 @@ from futonhub.cloud.audit import AuditEvent, OperationSnapshot, new_operation_id
 IVA_RECARGO_EQUIVALENCIA_FACTOR = 0.262
 IVA_RECARGO_EQUIVALENCIA_PERCENT = 26.2
 
+# Solo metadatos (unidad y descripcion). Los VALORES salen siempre de Supabase: si no se han
+# podido leer, el valor es None y la interfaz muestra «No disponible» (nunca un numero inventado).
 DEFAULT_BUSINESS_CONSTANTS: dict[str, dict[str, Any]] = {
-    "IMPORTE_DESCARGA_MT": {"value": 12.0, "unit": "EUR/m", "description": "Importe descarga por metro"},
-    "PC_GASTOS_MANIPULACION": {"value": 2.0, "unit": "%", "description": "Porcentaje manipulacion"},
-    "PC_GASTOS_FINANCIACION": {"value": 2.5, "unit": "%", "description": "Porcentaje financiacion"},
-    "IMPORTES_VARIOS": {"value": 1.0, "unit": "%", "description": "Importes varios"},
-    "COSTE_TOTAL_DESCARGA_FUTONES_IVA": {"value": 326.0, "unit": "EUR", "description": "Descarga futones con IVA"},
-    "COSTE_DIARIO_ALMACENAJE_M3": {"value": 0.15, "unit": "EUR/m3", "description": "Almacenaje diario por M3"},
-    "PRICE_DROP_BLOCK_PERCENT": {"value": 30.0, "unit": "%", "description": "Bajada maxima de precio antes de bloquear"},
+    "IMPORTE_DESCARGA_MT": {"value": None, "unit": "EUR/m", "description": "Importe descarga por metro"},
+    "PC_GASTOS_MANIPULACION": {"value": None, "unit": "%", "description": "Porcentaje manipulacion"},
+    "PC_GASTOS_FINANCIACION": {"value": None, "unit": "%", "description": "Porcentaje financiacion"},
+    "IMPORTES_VARIOS": {"value": None, "unit": "%", "description": "Importes varios"},
+    "COSTE_TOTAL_DESCARGA_FUTONES_IVA": {"value": None, "unit": "EUR", "description": "Descarga futones con IVA"},
+    "COSTE_DIARIO_ALMACENAJE_M3": {"value": None, "unit": "EUR/m3", "description": "Almacenaje diario por M3"},
+    "PRICE_DROP_BLOCK_PERCENT": {"value": None, "unit": "%", "description": "Bajada maxima de precio antes de bloquear"},
 }
 
 SUPPLIER_ORDER_GENERAL_REQUIRED_CONSTANTS: tuple[str, ...] = (

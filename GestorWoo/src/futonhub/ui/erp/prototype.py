@@ -9965,7 +9965,9 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         result: dict[str, float] = {}
         for key, meta in DEFAULT_BUSINESS_CONSTANTS.items():
             current = constants.get(key, meta) if isinstance(constants, dict) else meta
-            result[key] = self._money_float(current.get("value") if isinstance(current, dict) else None) or self._money_float(meta.get("value"))
+            # Sin fallback a valores locales: un 0 real de Supabase es un 0, y si no hay valor
+            # el calculo ya se ha detenido arriba (fail_on_refresh_error / required_keys).
+            result[key] = self._money_float(current.get("value") if isinstance(current, dict) else None)
         # IVA + recargo is a derived fiscal factor, not an editable business
         # constant. Legacy DB rows may still exist but are intentionally ignored.
         result["IVA_RECARGO_EQUIVALENCIA"] = IVA_RECARGO_EQUIVALENCIA_PERCENT
@@ -13805,7 +13807,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                 card,
                 key,
                 str(current.get("description") or meta.get("description") or key),
-                str(current.get("value", meta.get("value", ""))),
+                "" if current.get("value") is None else str(current.get("value")),
                 str(current.get("unit") or meta.get("unit") or ""),
             )
             row.pack(fill=tk.X, padx=18, pady=4)
@@ -13829,14 +13831,25 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             if self._cloud_session is None:
                 messagebox.showwarning("Configuracion", "Inicia sesion Supabase para guardar constantes.")
                 return
+            if not getattr(self, "_business_constants_cloud_loaded", False):
+                messagebox.showwarning(
+                    "Configuracion",
+                    "No se han podido leer las constantes reales de Supabase, asi que no se puede guardar.\n"
+                    "Pulsa Recargar; si sigue igual, revisa la conexion.",
+                )
+                return
             values: dict[str, float] = {}
             for key, entry in entries.items():
                 raw = str(entry.get() or "").strip()
-                try:
-                    values[key] = float(raw.replace(",", "."))
-                except Exception:
-                    messagebox.showwarning("Configuracion", f"Valor invalido para {key}: {raw}")
+                number = parse_amount(raw)
+                if number is None:
+                    messagebox.showwarning("Configuracion", f"Valor invalido para {key}: {raw or '(vacio)'}")
                     return
+                note = describe_amount_interpretation(raw)
+                if note:
+                    if not messagebox.askyesno("Configuracion", f"{key}: {note}\n\n¿Es correcto?"):
+                        return
+                values[key] = number
             if not messagebox.askyesno(
                 "Guardar constantes",
                 "Se guardaran las constantes de calculo en Supabase y se registrara log/snapshot.\n\nContinuar",
@@ -13874,7 +13887,8 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         ).pack(fill=tk.X, padx=16, pady=8)
         for key in DEFAULT_BUSINESS_CONSTANTS:
             meta = self._business_constants.get(key, DEFAULT_BUSINESS_CONSTANTS[key])
-            self._status_row(side, key, f"{meta.get('value')} {meta.get('unit', '')}", "Info").pack(fill=tk.X, padx=16, pady=4)
+            shown = "No disponible" if meta.get("value") is None else f"{meta.get('value')} {meta.get('unit', '')}"
+            self._status_row(side, key, shown, "Info" if meta.get("value") is not None else "Warning").pack(fill=tk.X, padx=16, pady=4)
 
     def _render_settings_security(self, parent: tk.Frame) -> None:
         body = tk.Frame(parent, bg=BG)

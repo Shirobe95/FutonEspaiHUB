@@ -271,6 +271,18 @@ def inventory_row(
     }
 
 
+# Valores de prueba (ya no existen valores por defecto en el codigo: mandan los de Supabase).
+TEST_CONSTANT_VALUES = {
+    "IMPORTE_DESCARGA_MT": 12.0,
+    "PC_GASTOS_MANIPULACION": 2.0,
+    "PC_GASTOS_FINANCIACION": 2.5,
+    "IMPORTES_VARIOS": 1.0,
+    "COSTE_TOTAL_DESCARGA_FUTONES_IVA": 326.0,
+    "COSTE_DIARIO_ALMACENAJE_M3": 0.15,
+    "PRICE_DROP_BLOCK_PERCENT": 30.0,
+}
+
+
 class SupplierOrderCostTests(unittest.TestCase):
     def setUp(self) -> None:
         # Hermético: estas pruebas describen el flujo con credenciales Woo presentes,
@@ -304,7 +316,7 @@ class SupplierOrderCostTests(unittest.TestCase):
         overrides = overrides or {}
         rows: list[dict[str, object]] = []
         for key in keys:
-            rows.append({"key": key, "value": overrides.get(key, DEFAULT_BUSINESS_CONSTANTS[key]["value"])})
+            rows.append({"key": key, "value": overrides.get(key, TEST_CONSTANT_VALUES[key])})
         return rows
 
     def general_constant_rows(self, **overrides: object) -> list[dict[str, object]]:
