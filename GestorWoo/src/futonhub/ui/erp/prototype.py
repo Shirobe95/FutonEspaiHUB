@@ -9849,7 +9849,10 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
                     ct_m3_prod = round(calc_inputs["ct_m3"] * m3_unit, 2)
                     ct_total_ref = round(qty * ct_m3_prod, 2)
                     cuenta_descarga = self._order_line_counts_for_download(item, source)
-                    cd_prod_linea = calc_inputs["cd_prod_iva"] if cuenta_descarga else 0
+                    # Regla del calculo original (CalculoCoste): "cuenta para descarga" solo decide que
+                    # unidades forman parte del divisor del reparto; TODAS las lineas pagan el coste de
+                    # descarga por unidad resultante (decision de negocio 2026-10-07).
+                    cd_prod_linea = calc_inputs["cd_prod_iva"]
                     cd_total_ref = round(qty * cd_prod_linea, 3)
                     iva_re = round(price_provider * constants["IVA_RECARGO_EQUIVALENCIA_FACTOR"], 2)
                     precio_con_iva = round(price_provider + iva_re, 2)
@@ -10152,7 +10155,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         """Return header metrics for the visible supplier order table.
 
         total_qty is the ordered unit count. excluded_qty is the ordered unit count
-        that will not receive the fixed descarga reparto. total_m3 comes from the
+        that is left out of the divisor of the descarga reparto (those lines still pay the per-unit descarga). total_m3 comes from the
         loaded/calculated line total when available, or from unit M3 x quantity.
         """
         total_qty = 0

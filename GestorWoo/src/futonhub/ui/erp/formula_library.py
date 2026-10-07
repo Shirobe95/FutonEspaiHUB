@@ -187,8 +187,8 @@ FORMULA_LIBRARY: tuple[FormulaRecord, ...] = (
         "Pedidos generales",
         PROTOTYPE_SOURCE,
         "_calculate_supplier_order_in_memory",
-        purpose="Reparte la descarga solo entre lineas marcadas para participar en ese reparto.",
-        notes="Se recalcula para cada pedido segun las unidades marcadas Cuenta para descarga. Las lineas excluidas reciben descarga_unidad = 0.",
+        purpose="Calcula la descarga por unidad dividiendo entre las unidades marcadas Cuenta para descarga.",
+        notes="Se recalcula para cada pedido segun las unidades marcadas Cuenta para descarga. Las lineas excluidas no entran en el divisor, pero pagan la misma descarga_unidad (regla del calculo original).",
         providers=("Ekomat", "Pascal"),
     ),
     _formula(

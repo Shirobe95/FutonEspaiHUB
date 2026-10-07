@@ -443,7 +443,7 @@ class SupplierOrderCostTests(unittest.TestCase):
         self.assertEqual(summary["download_qty"], 50)
         self.assertEqual(calculated[0].raw["source_row"]["calculation_inputs"]["cd_prod_iva"], 6.05)
 
-    def test_download_excluded_line_does_not_enter_denominator_or_receive_download_cost(self) -> None:
+    def test_download_excluded_line_does_not_enter_denominator_but_still_pays_download_cost(self) -> None:
         ui = app()
         ui._current_business_constant_values = lambda **_kwargs: self.download_constants(302.50)
         items = (
@@ -463,8 +463,8 @@ class SupplierOrderCostTests(unittest.TestCase):
         self.assertEqual(summary["download_qty"], 100)
         self.assertEqual(summary["excluded_download_qty"], 20)
         self.assertEqual(included["calculation_inputs"]["cd_prod_iva"], 3.03)
-        self.assertEqual(excluded["calculation_details"]["cd_prod_iva"], 0)
-        self.assertEqual(excluded["calculation_details"]["cd_total_ref"], 0)
+        self.assertEqual(excluded["calculation_details"]["cd_prod_iva"], 3.03)
+        self.assertEqual(excluded["calculation_details"]["cd_total_ref"], round(20 * 3.03, 3))
 
     def test_toggling_download_flag_recalculates_denominator_for_all_lines(self) -> None:
         ui = app()
@@ -486,7 +486,8 @@ class SupplierOrderCostTests(unittest.TestCase):
         self.assertEqual(first[0].raw["source_row"]["calculation_inputs"]["cd_prod_iva"], 2.02)
         self.assertEqual(second_summary["download_qty"], 100)
         self.assertEqual(second[0].raw["source_row"]["calculation_inputs"]["cd_prod_iva"], 3.03)
-        self.assertEqual(second[1].raw["source_row"]["calculation_details"]["cd_prod_iva"], 0)
+        # Regla original: la linea excluida no entra en el divisor, pero paga el mismo coste unitario.
+        self.assertEqual(second[1].raw["source_row"]["calculation_details"]["cd_prod_iva"], 3.03)
 
     def test_changing_download_quantity_recalculates_whole_order(self) -> None:
         ui = app()
