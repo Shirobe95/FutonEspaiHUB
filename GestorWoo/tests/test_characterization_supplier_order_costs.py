@@ -3974,13 +3974,13 @@ class SupplierOrderCostTests(unittest.TestCase):
 
         self.assertIn('"ID",\n                "Nombre",\n                "Coste Final",\n                "Ponderado",\n                "P.V.P.",\n                "Margen de Venta"', source)
 
-    def test_receive_flow_does_not_use_pvp_fields_for_costs(self) -> None:
-        receive_source = inspect.getsource(orders_service.receive_supplier_order)
-
+    def test_order_item_columns_keep_cost_separate_from_pvp_and_reception_was_removed(self) -> None:
         self.assertIn("unit_cost", orders_service.SUPPLIER_ORDER_ITEM_COLUMNS)
         self.assertIn("line_cost", orders_service.SUPPLIER_ORDER_ITEM_COLUMNS)
         self.assertNotIn("pvp", orders_service.SUPPLIER_ORDER_ITEM_COLUMNS.lower())
-        self.assertNotIn("pvp_", receive_source)
+        # Decision de negocio: el stock lo actualiza Futon Espai desde el modulo Actualizacion.
+        self.assertFalse(hasattr(orders_service, "receive_supplier_order"))
+        self.assertFalse(hasattr(orders_service, "preview_receive_supplier_order"))
 
 
 if __name__ == "__main__":

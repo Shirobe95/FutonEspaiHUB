@@ -52,7 +52,6 @@ def normalize_formula_category(value: str) -> str:
     text = str(value or "").strip()
     aliases = {
         "woo precios": "Cambio de Precios",
-        "recepcion": "Recepción",
     }
     return aliases.get(text.casefold(), text)
 
@@ -68,8 +67,6 @@ def _default_calculation_family(category: str, providers: tuple[str, ...]) -> st
         return "common"
     if normalized_category == "Inventario":
         return "inventory"
-    if normalized_category == "Recepción":
-        return "reception"
     if normalized_category == "Cambio de Precios":
         return "direct_price_change"
     if normalized_category == "Combinaciones Woo":
@@ -465,21 +462,6 @@ FORMULA_LIBRARY: tuple[FormulaRecord, ...] = (
         calculation_family="common",
     ),
     _formula(
-        "inventario_stock_recepcion",
-        "Recepción",
-        "Stock tras recepcion",
-        "stock_destino_despues = stock_destino_antes + cantidad_recibida",
-        ("stock_destino_antes", "cantidad_recibida"),
-        "unidades",
-        "Recepcion de pedidos",
-        ORDERS_SOURCE,
-        "preview_receive_supplier_order",
-        purpose="Previsualiza el stock de tienda o almacen despues de una recepcion.",
-        notes="Solo se incrementa el destino seleccionado; la biblioteca no ejecuta la recepcion.",
-        usage_areas=("Recepción", "Inventario"),
-        calculation_family="reception",
-    ),
-    _formula(
         "woo_delta_precio",
         "Cambio de Precios",
         "Diferencia de precio propuesta",
@@ -561,7 +543,6 @@ FORMULA_CATEGORIES = (
     "Inventario",
     "Cambio de Precios",
     "Combinaciones Woo",
-    "Recepción",
     "Otros",
 )
 

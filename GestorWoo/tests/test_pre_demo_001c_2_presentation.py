@@ -112,7 +112,7 @@ class PreDemo001C2PresentationTests(unittest.TestCase):
         )
 
         source = inspect.getsource(ErpFormulaLibraryMixin._build_formula_library)
-        self.assertEqual(len(FORMULA_LIBRARY), 31)
+        self.assertEqual(len(FORMULA_LIBRARY), 30)  # sin la formula de recepcion (descartada)
         self.assertNotIn("metrics =", source)
         self.assertNotIn("self._metric", source)
         self.assertIn("formula_sections", source)

@@ -63,8 +63,6 @@ from futonhub.cloud.services.orders import (
     list_cloud_supplier_order_items,
     list_cloud_supplier_orders,
     order_display_name as cloud_order_display_name,
-    preview_receive_supplier_order,
-    receive_supplier_order,
     summarize_order_items,
     update_supplier_order_draft,
     update_supplier_order_calculation,
@@ -7885,7 +7883,7 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
             return str(value)
 
     def _build_order_calc(self, parent: tk.Frame) -> None:
-        self._page_header(parent, "", "Pedidos", "Proveedores, pedidos en marcha, calculo, recepcion y exportacion.")
+        self._page_header(parent, "", "Pedidos", "Proveedores, pedidos en marcha, calculo y exportacion.")
         providers_card = self._card(parent)
         providers_card.pack(fill=tk.X, pady=(0, 14))
         providers_head = tk.Frame(providers_card, bg=CARD)
@@ -8503,7 +8501,6 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
         top_actions = tk.Frame(footer, bg=CARD)
         top_actions.pack(fill=tk.X, padx=12, pady=(12, 7))
         self._button(top_actions, "Modificar", command=lambda: self._open_order_calc_flow(order.provider, order=order)).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 6))
-        self._button(top_actions, "Recibido", primary=True, command=lambda: self._open_receive_modal(order)).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(6, 0))
         row = tk.Frame(footer, bg=CARD)
         row.pack(fill=tk.X, padx=12, pady=(0, 12))
         self._button(row, "Borrar pedido", command=lambda: self._cancel_supplier_order_from_ui(order)).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 6))
@@ -11412,259 +11409,6 @@ class FutonHubErpPrototype(ErpInventoryStockMixin, ErpInventoryCreateMixin, ErpI
 
         wb.save(path)
         messagebox.showinfo("Exportar pedido", f"Auditoria exportada correctamente:\n{path}")
-
-    def _open_receive_modal(self, order: SupplierOrder) -> None:
-        if self._cloud_session is None:
-            messagebox.showwarning("Pedidos", "Inicia sesion en Supabase para recibir pedidos.")
-            return
-        actual_order_id = self._supplier_order_actual_id(order) or str(order.order_id or "")
-        if not actual_order_id:
-            messagebox.showerror("Recepcion de pedido", "No se pudo determinar el ID real del pedido.")
-            return
-
-        win = tk.Toplevel(self)
-        win.title("Recepcion de pedido")
-        win.configure(bg=BG)
-        win.transient(self)
-        win.grab_set()
-        center_window(win, 980, 680)
-        win.columnconfigure(0, weight=1)
-        win.rowconfigure(1, weight=1)
-
-        header = tk.Frame(win, bg=CARD, highlightbackground=LINE, highlightthickness=1)
-        header.grid(row=0, column=0, sticky="ew", padx=18, pady=(18, 0))
-        header.columnconfigure(0, weight=1)
-        tk.Label(header, text="Recepcion de pedido", bg=CARD, fg=TEXT, font=("Segoe UI", 16, "bold")).grid(row=0, column=0, sticky="w", padx=18, pady=(16, 2))
-        tk.Label(header, text=f"{order.order_id} - {order.provider} - stock interno Supabase", bg=CARD, fg=MUTED).grid(row=1, column=0, sticky="w", padx=18, pady=(0, 16))
-        self._button(header, "Cerrar", command=win.destroy).grid(row=0, column=1, rowspan=2, padx=18, pady=16)
-
-        body = tk.Frame(win, bg=CARD, highlightbackground=LINE, highlightthickness=1)
-        body.grid(row=1, column=0, sticky="nsew", padx=18, pady=12)
-        body.rowconfigure(2, weight=1)
-        body.columnconfigure(0, weight=1)
-
-        notice = tk.Label(
-            body,
-            text="Preview obligatorio. No toca WooCommerce ni Hexa. Solo suma stock en inventory_items y marca cantidades recibidas.",
-            bg=INDIGO_SOFT,
-            fg="#3730A3",
-            justify=tk.LEFT,
-            anchor=tk.W,
-            padx=12,
-            pady=9,
-        )
-        notice.grid(row=0, column=0, sticky="ew", padx=16, pady=(16, 8))
-
-        controls = tk.Frame(body, bg=CARD)
-        controls.grid(row=1, column=0, sticky="ew", padx=16, pady=(0, 8))
-        controls.columnconfigure(5, weight=1)
-
-        tk.Label(controls, text="Destino", bg=CARD, fg=MUTED, font=("Segoe UI", 8, "bold")).grid(row=0, column=0, sticky="w")
-        dest_combo = ttk.Combobox(controls, values=["Almacen", "Tienda"], state="readonly", width=14)
-        dest_combo.set("Almacen")
-        dest_combo.grid(row=0, column=1, sticky="w", padx=(8, 18))
-
-        mode_var = tk.StringVar(value="Pendiente")
-        ttk.Radiobutton(controls, text="Recibir pendiente", variable=mode_var, value="Pendiente").grid(row=0, column=2, sticky="w", padx=(0, 12))
-        ttk.Radiobutton(controls, text="Recibir cero", variable=mode_var, value="Cero").grid(row=0, column=3, sticky="w", padx=(0, 12))
-
-        note_var = tk.StringVar()
-        tk.Label(controls, text="Nota", bg=CARD, fg=MUTED, font=("Segoe UI", 8, "bold")).grid(row=1, column=0, sticky="w", pady=(8, 0))
-        note_entry = tk.Entry(controls, textvariable=note_var, bg="white", fg=TEXT, relief=tk.FLAT, highlightbackground=LINE, highlightthickness=1)
-        note_entry.grid(row=1, column=1, columnspan=5, sticky="ew", padx=(8, 0), pady=(8, 0), ipady=6)
-
-        table_host = tk.Frame(body, bg=CARD)
-        table_host.grid(row=2, column=0, sticky="nsew", padx=16, pady=(0, 12))
-        table_host.rowconfigure(0, weight=1)
-        table_host.columnconfigure(0, weight=1)
-
-        columns = ["ID", "Nombre", "Pedida", "Recibida previa", "Recibir ahora", "Pendiente"]
-        tree = ttk.Treeview(table_host, columns=columns, show="headings", height=12)
-        widths = {"ID": 105, "Nombre": 330, "Pedida": 90, "Recibida previa": 125, "Recibir ahora": 120, "Pendiente": 95}
-        for column in columns:
-            tree.heading(column, text=column, anchor=tk.CENTER)
-            tree.column(column, width=widths[column], anchor=tk.CENTER if column != "Nombre" else tk.W)
-        yscroll = ttk.Scrollbar(table_host, orient=tk.VERTICAL, command=tree.yview)
-        tree.configure(yscrollcommand=yscroll.set)
-        tree.grid(row=0, column=0, sticky="nsew")
-        yscroll.grid(row=0, column=1, sticky="ns")
-
-        line_state: dict[str, dict[str, Any]] = {}
-        for item in order.items:
-            raw = item.raw if isinstance(item.raw, dict) else {}
-            qty_ordered = self._money_float(raw.get("quantity_ordered") or item.quantity, 0.0)
-            qty_prev = self._money_float(raw.get("quantity_received"), 0.0)
-            pending = max(0.0, qty_ordered - qty_prev)
-            iid = str(raw.get("id") or item.code)
-            receive_now = pending
-            line_state[iid] = {
-                "line_id": raw.get("id"),
-                "item_code": item.code,
-                "name": item.name,
-                "quantity_ordered": qty_ordered,
-                "quantity_received_before": qty_prev,
-                "quantity_received_now": receive_now,
-                "pending": pending,
-            }
-            tree.insert(
-                "",
-                tk.END,
-                iid=iid,
-                values=(
-                    item.code,
-                    item.name,
-                    self._format_optional_decimal(qty_ordered, default="0"),
-                    self._format_optional_decimal(qty_prev, default="0"),
-                    self._format_optional_decimal(receive_now, default="0"),
-                    self._format_optional_decimal(pending, default="0"),
-                ),
-            )
-
-        def repaint() -> None:
-            for iid, data in line_state.items():
-                if not tree.exists(iid):
-                    continue
-                tree.item(
-                    iid,
-                    values=(
-                        data["item_code"],
-                        data["name"],
-                        self._format_optional_decimal(data["quantity_ordered"], default="0"),
-                        self._format_optional_decimal(data["quantity_received_before"], default="0"),
-                        self._format_optional_decimal(data["quantity_received_now"], default="0"),
-                        self._format_optional_decimal(data["pending"], default="0"),
-                    ),
-                )
-
-        def apply_mode() -> None:
-            mode = mode_var.get()
-            for data in line_state.values():
-                data["quantity_received_now"] = data["pending"] if mode == "Pendiente" else 0.0
-            repaint()
-
-        mode_var.trace_add("write", lambda *_args: apply_mode())
-
-        def edit_selected_qty(_event: object | None = None) -> None:
-            selection = tree.selection()
-            if not selection:
-                return
-            iid = selection[0]
-            data = line_state.get(iid)
-            if not data:
-                return
-            dialog = tk.Toplevel(win)
-            dialog.title("Cantidad recibida")
-            dialog.configure(bg=BG)
-            dialog.transient(win)
-            dialog.grab_set()
-            center_window(dialog, 420, 220)
-            tk.Label(dialog, text=data["name"], bg=BG, fg=TEXT, font=("Segoe UI", 12, "bold"), wraplength=360, justify=tk.LEFT).pack(anchor=tk.W, padx=18, pady=(18, 6))
-            tk.Label(dialog, text=f"Pendiente: {data['pending']:g}", bg=BG, fg=MUTED).pack(anchor=tk.W, padx=18)
-            qty_var = tk.StringVar(value=str(data["quantity_received_now"]).replace(".", ","))
-            entry = tk.Entry(dialog, textvariable=qty_var, bg="white", fg=TEXT, relief=tk.FLAT, highlightbackground=LINE, highlightthickness=1)
-            entry.pack(fill=tk.X, padx=18, pady=14, ipady=8)
-            entry.focus_set()
-
-            def accept() -> None:
-                value = self._money_float(qty_var.get(), -1)
-                if value < 0:
-                    messagebox.showerror("Cantidad", "La cantidad recibida no puede ser negativa.")
-                    return
-                if value > data["pending"]:
-                    if not messagebox.askyesno("Cantidad superior", "La cantidad supera lo pendiente. Quieres continuar"):
-                        return
-                data["quantity_received_now"] = value
-                repaint()
-                dialog.destroy()
-
-            footer = tk.Frame(dialog, bg=BG)
-            footer.pack(fill=tk.X, padx=18, pady=(0, 18))
-            self._button(footer, "Cancelar", command=dialog.destroy).pack(side=tk.RIGHT)
-            self._button(footer, "Aceptar", primary=True, command=accept).pack(side=tk.RIGHT, padx=(0, 8))
-
-        tree.bind("<Double-1>", edit_selected_qty)
-
-        footer = tk.Frame(win, bg=BG)
-        footer.grid(row=2, column=0, sticky="ew", padx=18, pady=(0, 18))
-        footer.columnconfigure(0, weight=1)
-
-        status_var = tk.StringVar(value="Doble click sobre una linea para cambiar la cantidad recibida.")
-        tk.Label(footer, textvariable=status_var, bg=BG, fg=MUTED, anchor=tk.W).grid(row=0, column=0, sticky="ew")
-
-        def build_payload() -> list[dict[str, Any]]:
-            return [
-                {
-                    "line_id": data.get("line_id"),
-                    "item_code": data.get("item_code"),
-                    "quantity_received_now": data.get("quantity_received_now"),
-                }
-                for data in line_state.values()
-                if self._money_float(data.get("quantity_received_now"), 0.0) > 0
-            ]
-
-        def destination_key() -> str:
-            return "store" if dest_combo.get().lower().startswith("ti") else "warehouse"
-
-        def preview_action() -> dict[str, Any] | None:
-            try:
-                result = preview_receive_supplier_order(
-                    self._cloud_session,
-                    order_id=actual_order_id,
-                    received_lines=build_payload(),
-                    destination=destination_key(),
-                    notes=note_var.get().strip(),
-                )
-            except Exception as exc:
-                messagebox.showerror("Preview recepcion", str(exc))
-                return None
-            if result.get("errors"):
-                messagebox.showerror("Preview recepcion", "\n".join(str(e) for e in result.get("errors", [])))
-                return None
-            lines = result.get("lines") or []
-            msg = [
-                "PREVIEW RECEPCION",
-                "",
-                f"Destino: {dest_combo.get()}",
-                f"Lineas a recibir: {len(lines)}",
-                f"Unidades a recibir: {result.get('total_receive')}",
-                f"Nuevo estado: {result.get('new_status')}",
-                "",
-            ]
-            for line in lines[:12]:
-                msg.append(format_reception_line(line))
-            if len(lines) > 12:
-                msg.append(f"... y {len(lines) - 12} lineas mas")
-            messagebox.showinfo("Preview recepcion", "\n".join(msg))
-            return result
-
-        def confirm_action() -> None:
-            preview_result = preview_action()
-            if not preview_result:
-                return
-            if not messagebox.askyesno(
-                "Confirmar recepcion",
-                "Se actualizara stock interno en Supabase y el estado del pedido.\n\nNo toca WooCommerce ni Hexa.\nContinuar",
-            ):
-                return
-            try:
-                result = receive_supplier_order(
-                    self._cloud_session,
-                    order_id=actual_order_id,
-                    received_lines=build_payload(),
-                    destination=destination_key(),
-                    notes=note_var.get().strip(),
-                )
-            except Exception as exc:
-                messagebox.showerror("Recepcion de pedido", f"No se pudo aplicar la recepcion.\n\n{exc}")
-                return
-            messagebox.showinfo("Recepcion aplicada", f"Pedido recibido.\nOperation ID: {result.get('operation_id')}\nEstado: {result.get('order', {}).get('status')}")
-            win.destroy()
-            self._refresh_supplier_orders()
-
-        self._button(footer, "Cancelar", command=win.destroy).grid(row=0, column=1, padx=(8, 0), sticky="e")
-        self._button(footer, "Preview", command=preview_action).grid(row=0, column=2, padx=(8, 0), sticky="e")
-        self._button(footer, "Confirmar recepcion", primary=True, command=confirm_action).grid(row=0, column=3, padx=(8, 0), sticky="e")
-
 
     def _open_delete_order_confirmation(self, order: SupplierOrder) -> None:
         messagebox.showwarning(

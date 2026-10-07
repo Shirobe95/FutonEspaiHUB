@@ -32,11 +32,11 @@ class FormulaLibraryContractTests(unittest.TestCase):
 
         self.assertEqual(
             categories,
-            {"Pedidos", "Inventario", "Cambio de Precios", "Combinaciones Woo", "Recepción", "Otros"},
+            {"Pedidos", "Inventario", "Cambio de Precios", "Combinaciones Woo", "Otros"},
         )
         self.assertEqual(
             FORMULA_CATEGORIES,
-            ("Todas", "Pedidos", "Inventario", "Cambio de Precios", "Combinaciones Woo", "Recepción", "Otros"),
+            ("Todas", "Pedidos", "Inventario", "Cambio de Precios", "Combinaciones Woo", "Otros"),
         )
 
     def test_records_are_immutable_and_keys_are_unique(self) -> None:
@@ -110,18 +110,17 @@ class FormulaLibraryContractTests(unittest.TestCase):
     def test_usage_area_sections_are_separated_by_real_workflow(self) -> None:
         all_sections = dict(formula_sections("Todas"))
 
-        for expected in ("Pedidos", "Inventario", "Cambio de Precios", "Combinaciones Woo", "Recepción", "Otros"):
+        for expected in ("Pedidos", "Inventario", "Cambio de Precios", "Combinaciones Woo", "Otros"):
             with self.subTest(section=expected):
                 self.assertIn(expected, all_sections)
 
         direct_price = {record.key for record in formula_records("Cambio de Precios")}
         woo_combinations = {record.key for record in formula_records("Combinaciones Woo")}
-        reception = {record.key for record in formula_records("Recepción")}
 
         self.assertIn("woo_delta_precio", direct_price)
         self.assertNotIn("woo_combination_simulated_price", direct_price)
         self.assertIn("woo_combination_simulated_price", woo_combinations)
-        self.assertIn("inventario_stock_recepcion", reception)
+        self.assertNotIn("inventario_stock_recepcion", {record.key for record in FORMULA_LIBRARY})  # recepcion descartada
 
     def test_download_formula_is_dynamic_and_separate_from_iva_re(self) -> None:
         descarga = next(record for record in FORMULA_LIBRARY if record.key == "descarga_coste_producto")
